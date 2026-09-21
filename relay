@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+cd "$ROOT"
+RUNTIME="$ROOT/.runtime"
+mkdir -p "$RUNTIME"; chmod 700 "$RUNTIME"
+exec 9>"$RUNTIME/operations.lock"
+flock -n 9 || { echo 'Another Relay operation is running.' >&2; exit 1; }
+export GOMAXPROCS=${GOMAXPROCS:-2}
+export GOFLAGS=${GOFLAGS:--p=2}
+export RELAY_ADDR=${RELAY_ADDR:-127.0.0.1:18081}
+PGDIR="$RUNTIME/postgres"
+PGSOCKET="$RUNTIME/pgsocket"
+PGPORT=18432
+export DATABASE_URL=${DATABASE_URL:-"host=$PGSOCKET port=$PGPORT user=$(id -un) dbname=relay_hub sslmode=disable"}
+fail(){ echo "$*" >&2; exit 1; }
+prerequisites(){
+ for tool in go node npm curl flock setsid; do command -v "$tool" >/dev/null || fail "Missing $tool; install it and rerun ./relay install"; done
+ local gov nodev
+ gov=$(go env GOVERSION); [[ "$gov" =~ ^go1\.([0-9]+) ]] || fail 'Cannot determine Go version'
+ (( BASH_REMATCH[1] >= 26 )) || fail 'Go 1.26+ required'
+ nodev=$(node -p 'process.versions.node.split(".")[0]'); ((nodev == 22 || nodev == 24)) || fail 'Node.js 22 or 24 required'
+ echo "Go $gov; Node $(node --version); npm $(npm --version)"
+}
+start_db(){
+ # An explicit external URL means an externally managed PostgreSQL server.
+ [[ "$DATABASE_URL" == "host=$PGSOCKET "* ]] || return 0
+ for tool in initdb pg_ctl psql createdb; do command -v "$tool" >/dev/null || fail "Missing PostgreSQL server tool: $tool (install PostgreSQL 18)"; done
+ [[ "$(initdb --version)" =~ PostgreSQL\)\ 18\. ]] || fail 'PostgreSQL 18 server binaries required'
+ mkdir -p "$PGSOCKET"; chmod 700 "$PGSOCKET"
+ if [[ ! -f "$PGDIR/PG_VERSION" ]]; then
+  [[ ! -e "$PGDIR" ]] || fail 'Postgres directory exists without PG_VERSION; inspect it manually'
+  initdb -D "$PGDIR" --auth-local=peer --auth-host=reject --no-instructions >"$RUNTIME/initdb.log"
+ fi
+ [[ "$(cat "$PGDIR/PG_VERSION")" == 18 ]] || fail 'Existing data directory is not PostgreSQL 18; no automatic major upgrade'
+ if ! pg_ctl -D "$PGDIR" status >/dev/null 2>&1; then
+  pg_ctl -D "$PGDIR" -l "$RUNTIME/postgres.log" -o "-h '' -k '$PGSOCKET' -p $PGPORT -c shared_buffers=32MB -c max_connections=20" -w start 9>&-
+ fi
+ if [[ "$(psql -h "$PGSOCKET" -p "$PGPORT" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='relay_hub'")" != 1 ]]; then
+  createdb -h "$PGSOCKET" -p "$PGPORT" relay_hub
+ fi
+}
+build_ui(){ (cd frontend; npm ci --ignore-scripts --no-audit --no-fund; npm run build); }
+compile(){ mkdir -p "$RUNTIME/releases"; CANDIDATE="$RUNTIME/releases/relay-hub-$(date +%s%N)"; go build -o "$CANDIDATE" ./cmd/relay-hub; }
+owned_pid(){
+ [[ -f "$RUNTIME/hub.pid" ]] || return 1
+ read -r PID <"$RUNTIME/hub.pid"
+ [[ "$PID" =~ ^[0-9]+$ ]] || fail 'Invalid Hub PID file'
+ kill -0 "$PID" 2>/dev/null || return 1
+ EXE=$(readlink "/proc/$PID/exe")
+ [[ "$EXE" == "$RUNTIME/releases/relay-hub-"* ]] || fail 'PID belongs to another process; refusing to stop it'
+}
+stop_hub(){
+ if owned_pid; then
+  kill -TERM "$PID"
+  for ((i=0;i<100;i++)); do kill -0 "$PID" 2>/dev/null || break; sleep .1; done
+  if kill -0 "$PID" 2>/dev/null && [[ "$(ps -o stat= -p "$PID")" != Z* ]]; then fail 'Hub did not stop; leaving it for inspection'; fi
+ fi
+ rm -f "$RUNTIME/hub.pid"
+}
+launch(){
+ export RELAY_UI_DIR="${1}.ui"
+ export RELAY_INSTANCE="$(basename "$1")"
+ setsid nohup "$1" serve 9>&- >>"$RUNTIME/hub.log" 2>&1 </dev/null &
+ local launched=$!; echo "$launched" >"$RUNTIME/hub.pid"
+ for ((i=0;i<60;i++)); do
+  kill -0 "$launched" 2>/dev/null || return 1
+  if curl -fsS --max-time 2 "http://$RELAY_ADDR/readyz" 2>/dev/null | grep -Fq "\"instance\":\"$RELAY_INSTANCE\""; then return 0; fi
+  sleep .25
+ done
+ return 1
+}
+case "${1:-help}" in
+ install) prerequisites; go mod download; start_db; compile; "$CANDIDATE" doctor; "$CANDIDATE" migrate; build_ui; echo 'Installed. Start with ./relay restart.';;
+ build-ui) prerequisites; build_ui;;
+ migrate) prerequisites; start_db; compile; "$CANDIDATE" migrate;;
+ restart)
+  prerequisites; start_db; build_ui; compile; "$CANDIDATE" doctor
+  # Schema is checked before touching the running service.
+  go run ./cmd/relay-check
+  cp -R frontend/dist "${CANDIDATE}.ui"
+  OLD=''; if owned_pid; then OLD="$EXE"; fi
+  stop_hub
+  if ! launch "$CANDIDATE"; then
+   stop_hub
+   if [[ -n "$OLD" ]]; then launch "$OLD" || fail 'Restart and rollback failed; inspect .runtime/hub.log'; fi
+   fail 'New Hub failed readiness; previous binary restored when available'
+  fi
+  echo "Relay Hub ready: http://$RELAY_ADDR";;
+ status) if owned_pid; then echo "Hub running (PID $PID)"; curl -fsS --max-time 3 "http://$RELAY_ADDR/readyz"; else fail 'Hub is stopped'; fi;;
+ stop) stop_hub;;
+ doctor) prerequisites; compile; "$CANDIDATE" doctor;;
+ *) printf '%s\n' './relay install    Check dependencies, initialize isolated local DB, migrate, build UI' './relay build-ui   Build the frontend' './relay restart    Rebuild UI + Go and restart the Hub' './relay migrate    Apply pending database migrations' './relay doctor     Check tool versions and database connection' './relay status     Check running Hub and readiness' './relay stop       Stop only this repository Hub';;
+esac
