@@ -1,0 +1,22 @@
+{
+  "name": "relay-hub-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "frappe-ui": "0.1.261",
+    "vue": "^3.5.13",
+    "vue-router": "^4.2.2"
+  },
+  "devDependencies": {
+    "vite": "^5.4.21",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "tailwindcss": "^3.4.15",
+    "postcss": "^8.4.5",
+    "autoprefixer": "^10.4.14",
+    "unplugin-icons": "22.5.0"
+  }
+}
