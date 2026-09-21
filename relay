@@ -6,6 +6,20 @@ RUNTIME="$ROOT/.runtime"
 mkdir -p "$RUNTIME"; chmod 700 "$RUNTIME"
 exec 9>"$RUNTIME/operations.lock"
 flock -n 9 || { echo 'Another Relay operation is running.' >&2; exit 1; }
+command -v go >/dev/null || { echo "Go 1.26+ is required; install it before running Relay." >&2; exit 1; }
+# Parse through Go, never source/eval .env. The temporary stream is private.
+umask 077
+ENVFILE=$(mktemp "$RUNTIME/env.XXXXXX")
+trap 'rm -f "$ENVFILE"' EXIT
+if [[ "${1:-}" == install ]]; then
+ go run ./cmd/relay-env init >"$ENVFILE"
+else
+ go run ./cmd/relay-env >"$ENVFILE"
+fi
+while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+ export "$key=$value"
+done <"$ENVFILE"
+rm -f "$ENVFILE"
 export GOMAXPROCS=${GOMAXPROCS:-2}
 export GOFLAGS=${GOFLAGS:--p=2}
 export RELAY_ADDR=${RELAY_ADDR:-127.0.0.1:18081}

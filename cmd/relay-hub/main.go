@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/andrometiq/relay_hub/internal/database"
+	"github.com/andrometiq/relay_hub/internal/envconfig"
+	"github.com/andrometiq/relay_hub/internal/hubmcp"
 	"github.com/jackc/pgx/v5"
 	"log"
 	"net"
@@ -40,6 +42,9 @@ func check(ctx context.Context, ready bool) error {
 	return database.CheckVersion(ctx, conn)
 }
 func run() error {
+	if err := envconfig.Load(".env"); err != nil {
+		return err
+	}
 	if len(os.Args) != 2 {
 		return errors.New("usage: relay-hub doctor|migrate|serve")
 	}
@@ -85,7 +90,14 @@ func run() error {
 		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 			return errors.New("foundation server binds only to a loopback IP until authentication is implemented")
 		}
+		handler, err := hubmcp.New(os.Getenv("RELAY_MCP_TOKEN"), func(c context.Context) error { return check(c, true) })
+		if err != nil {
+			return err
+		}
 		mux := http.NewServeMux()
+		mux.Handle("POST /mcp", handler)
+		mux.Handle("GET /mcp", handler)
+		mux.Handle("DELETE /mcp", handler)
 		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "service": "relay_hub"})
