@@ -53,3 +53,14 @@ func TestEnvironmentTakesPrecedence(t *testing.T) {
 		t.Fatal("overrode environment")
 	}
 }
+
+func TestRejectInvalidPort(t *testing.T) {
+	for _, port := range []string{"0", "65536", "oops", "-1"} {
+		t.Setenv("RELAY_PG_PORT", port)
+		p := filepath.Join(t.TempDir(), ".env")
+		os.WriteFile(p, []byte("# empty"), 0600)
+		if Load(p) == nil {
+			t.Fatalf("accepted invalid port %s", port)
+		}
+	}
+}

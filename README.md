@@ -63,3 +63,21 @@ Configure `.env`, then run `./relay restart` to activate changes. The launcher l
 ## Administration UI
 
 Overview, account draft forms and channel views are now available. Account drafts are in-memory only. Delivery and Events show explicit unavailable states until worker/provider integration exists. See [UI progress](docs/ui-progress.md).
+
+### Project configuration
+
+`./relay install` creates a private, gitignored `.env` (mode 0600). Existing
+values and service tokens are preserved. Use `.env.example` as the documented
+shape; do not copy its placeholder token over an existing configuration.
+
+- `RELAY_ADDR`: local HTTP bind address and port.
+- `RELAY_PG_PORT`: isolated local PostgreSQL port (default 18432, validated).
+- `DATABASE_URL`: an external PostgreSQL 18 connection string; leave empty for
+  the checkout's local cluster. This can specify host, port, database and user.
+- `RELAY_MCP_TOKEN`: private Core-to-Hub service credential.
+
+`./relay config` displays the effective address, local database port and database
+mode without printing credentials. A running local PostgreSQL cluster retains
+its startup port; stop that cluster before changing its configured port.
+`./relay restart` rebuilds and reloads Go and UI; `./relay build-ui` only builds
+the UI; `./relay migrate` applies schema changes.

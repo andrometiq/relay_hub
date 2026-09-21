@@ -25,7 +25,7 @@ export GOFLAGS=${GOFLAGS:--p=2}
 export RELAY_ADDR=${RELAY_ADDR:-127.0.0.1:18081}
 PGDIR="$RUNTIME/postgres"
 PGSOCKET="$RUNTIME/pgsocket"
-PGPORT=18432
+PGPORT=${RELAY_PG_PORT:-18432}
 export DATABASE_URL=${DATABASE_URL:-"host=$PGSOCKET port=$PGPORT user=$(id -un) dbname=relay_hub sslmode=disable"}
 fail(){ echo "$*" >&2; exit 1; }
 prerequisites(){
@@ -101,6 +101,7 @@ case "${1:-help}" in
    fail 'New Hub failed readiness; previous binary restored when available'
   fi
   echo "Relay Hub ready: http://$RELAY_ADDR";;
+ config) printf "Configuration: %s/.env\nHTTP address: %s\nLocal PostgreSQL port: %s\nDatabase: %s\n" "$ROOT" "$RELAY_ADDR" "$PGPORT" "$(if [[ "$DATABASE_URL" == "host=$PGSOCKET "* ]]; then echo local; else echo external; fi)";;
  status) if owned_pid; then echo "Hub running (PID $PID)"; curl -fsS --max-time 3 "http://$RELAY_ADDR/readyz"; else fail 'Hub is stopped'; fi;;
  stop) stop_hub;;
  doctor) prerequisites; compile; "$CANDIDATE" doctor;;
