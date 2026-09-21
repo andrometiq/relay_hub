@@ -1,0 +1,17 @@
+@import 'frappe-ui/style.css';
+@layer base{body{@apply m-0 text-ink-gray-8 bg-surface-white}button:focus-visible{@apply outline outline-2 outline-offset-2 outline-gray-400}}
+@layer components{
+.hub-shell{@apply grid h-dvh overflow-hidden;grid-template-columns:220px minmax(0,1fr)}
+.hub-nav{@apply flex flex-col border-r border-outline-gray-1 bg-surface-gray-1 p-2}
+.hub-nav-item{@apply flex items-center gap-2 h-9 px-2 rounded text-base text-left hover:bg-surface-gray-2}
+.hub-nav-item.selected{@apply bg-surface-selected text-ink-gray-9 font-medium}
+.hub-header{@apply h-14 shrink-0 flex items-center gap-3 px-6 border-b border-outline-gray-1}
+.hub-page{@apply p-6 overflow-auto min-h-0}
+.metrics{@apply grid grid-cols-1 sm:grid-cols-3 gap-4}
+.metrics article{@apply rounded-lg border border-outline-gray-1 p-5 flex flex-col items-start gap-4 text-sm text-ink-gray-5}
+.metrics strong{@apply text-2xl text-ink-gray-9 font-medium}
+.hub-card{@apply border border-outline-gray-1 rounded-lg p-5 text-base}
+.table-wrap{@apply overflow-x-auto}.hub-table{@apply w-full text-left text-base whitespace-nowrap}.hub-table th{@apply h-10 px-3 text-sm text-ink-gray-5 font-normal border-b}.hub-table td{@apply h-14 px-3 border-b border-outline-gray-1}
+.empty-state{@apply flex flex-col items-center justify-center gap-4 py-20 text-ink-gray-5 text-base}.empty-state h2{@apply text-lg text-ink-gray-8 font-medium}
+}
+@media(max-width:760px){.hub-shell{grid-template-columns:52px minmax(0,1fr)}.nav-label{display:none}.hub-header{padding:12px;height:auto;min-height:56px;flex-wrap:wrap}.hub-page{padding:16px}.hub-nav-item{justify-content:center;padding:0}}

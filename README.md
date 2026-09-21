@@ -59,3 +59,7 @@ Dependencies: [PostgreSQL supported versions](https://www.postgresql.org/support
 The loopback-only `/mcp` endpoint uses the official Go MCP SDK with stateless JSON responses. It requires `Authorization: Bearer <RELAY_MCP_TOKEN>` and rejects browser Origin requests. The initial tool is read-only `health.get`. This is a development service credential, not production multi-tenant OAuth/authorization. Never put this token in frontend/Vite variables. Relay Core has a matching server-side `python3 -m relay_core check-hub` client.
 
 Configure `.env`, then run `./relay restart` to activate changes. The launcher loads `.env` before resolving local DB defaults; standalone Go commands additionally require a concrete DATABASE_URL if not launched through `./relay`.
+
+## Administration UI
+
+Overview, account draft forms and channel views are now available. Account drafts are in-memory only. Delivery and Events show explicit unavailable states until worker/provider integration exists. See [UI progress](docs/ui-progress.md).
