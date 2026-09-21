@@ -15,3 +15,5 @@
 .empty-state{@apply flex flex-col items-center justify-center gap-4 py-20 text-ink-gray-5 text-base}.empty-state h2{@apply text-lg text-ink-gray-8 font-medium}
 }
 @media(max-width:760px){.hub-shell{grid-template-columns:52px minmax(0,1fr)}.nav-label{display:none}.hub-header{padding:12px;height:auto;min-height:56px;flex-wrap:wrap}.hub-page{padding:16px}.hub-nav-item{justify-content:center;padding:0}}
+.hub-nav-item.selected{background:#edf4ff;color:#2459a6}.hub-nav>div:first-child{color:#3468a9}.metrics article{border-top:3px solid #8aaddb}.metrics article:nth-child(2){border-top-color:#92bfab}.metrics article:nth-child(3){border-top-color:#d7bd85}.hub-nav{min-height:0;overflow-y:auto}.hub-card{overflow-wrap:anywhere}
+@media(max-width:480px){.hub-page{padding:12px}.hub-header{gap:8px}.hub-header>div{flex-wrap:wrap}.hub-nav-item{min-height:42px}}

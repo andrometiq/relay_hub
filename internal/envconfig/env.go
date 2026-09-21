@@ -7,10 +7,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
-var Keys = []string{"DATABASE_URL", "RELAY_ADDR", "RELAY_MCP_TOKEN", "GOMAXPROCS", "GOFLAGS"}
+var Keys = []string{"RELAY_PG_PORT", "DATABASE_URL", "RELAY_ADDR", "RELAY_MCP_TOKEN", "GOMAXPROCS", "GOFLAGS"}
 
 func Parse(data string) (map[string]string, error) {
 	allowed := map[string]bool{}
@@ -66,6 +67,12 @@ func Load(path string) error {
 			os.Setenv(k, v)
 		}
 	}
+	if v := os.Getenv("RELAY_PG_PORT"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1024 || n > 65535 {
+			return fmt.Errorf("RELAY_PG_PORT must be between 1024 and 65535")
+		}
+	}
 	return nil
 }
 func Ensure(path string) error {
@@ -83,6 +90,6 @@ func Ensure(path string) error {
 		return err
 	}
 	defer file.Close()
-	_, err = fmt.Fprintf(file, "# Local Relay Hub configuration. Never commit this file.\n# Empty DATABASE_URL selects this checkout's private PostgreSQL cluster.\nDATABASE_URL=\nRELAY_ADDR=127.0.0.1:18081\nRELAY_MCP_TOKEN=%s\nGOMAXPROCS=2\nGOFLAGS=-p=2\n", hex.EncodeToString(token))
+	_, err = fmt.Fprintf(file, "# Local Relay Hub configuration. Never commit this file.\n# Empty DATABASE_URL selects this checkout's private PostgreSQL cluster.\nDATABASE_URL=\nRELAY_PG_PORT=18432\nRELAY_ADDR=127.0.0.1:18081\nRELAY_MCP_TOKEN=%s\nGOMAXPROCS=2\nGOFLAGS=-p=2\n", hex.EncodeToString(token))
 	return err
 }
