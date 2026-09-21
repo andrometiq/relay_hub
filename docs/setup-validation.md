@@ -14,3 +14,12 @@ Passed:
 - Browser opens the served UI and reports Service Ready / PostgreSQL 18 / Channels Not configured.
 
 Limitations: provider/MCP transport is not implemented in this foundation. Runtime crash after startup, automatic reboot recovery, production authentication, high availability and zero-downtime deployment are not claimed. Migration checks validate the applied file ledger, not every database catalog object. Failed-launch rollback is implemented but has not been fault-injected in this validation.
+
+## Default environment and first Core MCP integration
+
+- Project `.env` creation is exclusive and mode 0600; existing configuration is preserved.
+- Four config tests pass: literal values, malformed/duplicate keys, generation/preservation and environment precedence.
+- Three MCP tests pass: authentication/browser-origin rejection, structured readiness/provider-error isolation and short-token rejection.
+- Live Core client completed initialize + initialized + health.get against the Go Hub; incorrect token returned 401.
+- Both local `.env` files are excluded from Git. No secret values are in the frontend or committed configuration.
+- Actual failed-launch rollback was exercised when an MCP/UI route conflict was caught; previous process restored successfully. Method-specific route registration fixed the conflict and the next restart passed.
