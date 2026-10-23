@@ -15,6 +15,7 @@ const props = defineProps({
 });
 const emit = defineEmits(["update:config", "update:enabled", "update:secret"]);
 const copied = ref(false);
+const copyError = ref("");
 
 const privateField = (name, label, placeholder = "") => ({
   name,
@@ -36,7 +37,7 @@ const ready = computed(() =>
   /^v\d+\.0$/.test(String(props.config?.graph_version || "")),
 );
 const connected = computed(() => props.config?.connection_status === "connected");
-const status = computed(() => connected.value ? "Connected" : ready.value ? "Ready to verify" : props.enabled ? "Setup needed" : "Disabled");
+const status = computed(() => connected.value ? "Credentials verified" : ready.value ? "Ready to verify" : props.enabled ? "Setup needed" : "Disabled");
 const statusTheme = computed(() => connected.value ? "green" : props.enabled ? "orange" : "gray");
 
 const metaFields = computed(() => [
@@ -67,12 +68,14 @@ function updateConfig(patch) {
 }
 
 async function copyCallback() {
+  copyError.value = "";
   try {
     await navigator.clipboard.writeText(callbackURL.value);
     copied.value = true;
     window.setTimeout(() => (copied.value = false), 1800);
   } catch {
     copied.value = false;
+    copyError.value = "Copy failed. Select and copy the callback URL above.";
   }
 }
 </script>
@@ -118,15 +121,21 @@ async function copyCallback() {
           <Button :label="copied ? 'Copied' : 'Copy'" :icon-left="copied ? 'check' : 'copy'" @click="copyCallback" />
         </div>
         <ol class="webhook-steps">
-          <li><span>1</span><p>Paste the callback URL in <strong>Meta → WhatsApp → Configuration → Webhook</strong>.</p></li>
-          <li><span>2</span><p>Enter the same private value in Meta’s <strong>Verify token</strong> and below.</p></li>
-          <li><span>3</span><p>Verify the callback, then subscribe the WhatsApp Business Account to <strong>messages</strong>.</p></li>
+          <li><span>1</span><p>Enter credentials and webhook secrets, then <strong>Save account</strong> to activate the runtime. If activation fails, use Retry activation before configuring Meta.</p></li>
+          <li><span>2</span><p>Paste the callback URL in <strong>Meta → WhatsApp → Configuration → Webhook</strong>.</p></li>
+          <li><span>3</span><p>Enter the same private value in Meta’s <strong>Verify token</strong> and below.</p></li>
+          <li><span>4</span><p>Verify the callback, then subscribe the WhatsApp Business Account to <strong>messages</strong>.</p></li>
+          <li><span>5</span><p>Send a test message to the business number. Refresh Connections to confirm <strong>webhook received</strong> and <strong>Core delivery confirmed</strong>.</p></li>
         </ol>
+        <ErrorMessage :message="copyError" />
         <DocumentForm :model-value="config || {}" :fields="webhookFields" :errors="errors" @update:model-value="emit('update:config', $event)" />
       </template>
 
       <template v-else-if="section === 'features'">
         <div class="setup-pane-heading"><div><h4>WhatsApp business features</h4><p>Choose which Meta resources Relay should manage for this channel.</p></div></div>
+        <FormControl label="Messages per second" type="number" disabled :model-value="config?.messages_per_second ?? 0" @update:model-value="updateConfig({ messages_per_second: Number($event) })" />
+        <p class="text-sm text-ink-gray-6 my-2">The account send rate is read-only: this Hub build does not load saved pacing into its runtime. Runtime defaults and provider limits apply. One-to-one messages and approved templates are supported.</p>
+        <ErrorMessage :message="errors.messages_per_second" />
         <div class="feature-options">
           <div><span class="feature-options__icon"><FeatherIcon name="file-text" /></span><span><strong>Message templates</strong><small>Create, sync and use approved Meta templates.</small></span><FormControl type="checkbox" aria-label="Manage message templates" :model-value="!!config?.templates" @update:model-value="updateConfig({ templates: $event })" /></div>
           <div><span class="feature-options__icon"><FeatherIcon name="refresh-cw" /></span><span><strong>Hourly metadata sync</strong><small>Refresh the business profile and template status every hour.</small></span><FormControl type="checkbox" aria-label="Sync metadata hourly" :model-value="!!config?.sync_metadata" @update:model-value="updateConfig({ sync_metadata: $event })" /></div>
