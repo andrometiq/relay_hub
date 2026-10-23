@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"time"
 )
@@ -45,4 +46,12 @@ func (s Store) TelegramMediaKnown(ctx context.Context, account, fileID string) (
 	// The same bounded field paths cover new and edited messages and photo sizes.
 	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM relay_channel_events WHERE account=$1 AND channel='Telegram' AND direction='inbound' AND jsonb_path_exists(payload,'$.*.* ? (@.file_id == $file || @[*].file_id == $file)',jsonb_build_object('file',$2::text)))`, account, fileID).Scan(&known)
 	return known, err
+}
+
+// Acknowledge only the immutable identities in a durably accepted batch.
+func acknowledgeChannelEvents(ctx context.Context, c *pgx.Conn, account, channel string, ids []int64) error {
+	_, err := c.Exec(ctx, `UPDATE relay_channel_callback_delivery d SET acknowledged=true,failures=0,error='',updated_at=now()
+ FROM relay_channel_events e WHERE e.id=d.event_id AND e.account=$1 AND ($2='' OR e.channel=$2)
+ AND d.event_id=ANY($3) AND NOT d.acknowledged`, account, channel, ids)
+	return err
 }

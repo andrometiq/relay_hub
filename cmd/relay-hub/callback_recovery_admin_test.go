@@ -27,7 +27,7 @@ func TestCallbackRetryAuthorization(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			h := callbackRetryAdmin(func(_ context.Context, a, c string, id int64) error {
+			h := callbackRetryAdmin(func(_ context.Context, a, c string, id, actor int64, action, note string) error {
 				calls++
 				if a != "site" || c != "Telegram" {
 					t.Fatal("wrong scope")
@@ -176,5 +176,58 @@ func TestWhatsAppCallbackFailurePaginationKeepsLanesTogether(t *testing.T) {
 				t.Fatal("pagination hid a failed lane", seen)
 			}
 		})
+	}
+}
+
+func TestChannelCallbackRecoveryCarriesAuditIdentity(t *testing.T) {
+	calls := 0
+	h := callbackRetryAdmin(func(_ context.Context, account, lane string, id, actor int64, action, note string) error {
+		calls++
+		if account != "site" || lane != "Telegram" || id != 9 || actor != 42 || action != "quarantine" || note != "Verified malformed provider receipt" {
+			t.Fatal("lost recovery evidence")
+		}
+		return nil
+	}, func(*http.Request) (auth.User, error) { return auth.User{ID: 42, Role: "admin"}, nil }, "https://hub.test")
+	r := httptest.NewRequest("POST", "/api/callback-failures/retry", strings.NewReader(`{"account":"site","channel":"Telegram","id":"9","lane":"status","action":"quarantine","note":"Verified malformed provider receipt"}`))
+	r.AddCookie(&http.Cookie{Name: auth.Cookie, Value: "session"})
+	r.Header.Set("Origin", "https://hub.test")
+	r.Header.Set("X-Relay-CSRF", auth.CSRF("session"))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 204 || calls != 1 {
+		t.Fatal(w.Code, calls, w.Body.String())
+	}
+}
+
+func TestChannelFailureAdminIncludesBackoffAndQuarantine(t *testing.T) {
+	ctx, db := adminTestDatabase(t)
+	if _, err := db.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,payload,occurred_at)
+ VALUES('fixture','Telegram','inbound','tg','{}',now()),('fixture','Email','inbound','mail','{}',now()),('other','Telegram','inbound','private','{}',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE relay_channel_callback_delivery SET failures=3,error='Synthetic failure',next_attempt=now()+interval '5 minutes',quarantined=(event_id%2=0)`); err != nil {
+		t.Fatal(err)
+	}
+	h := callbackFailuresAdmin(db, func(*http.Request) (auth.User, error) { return auth.User{Role: "admin"}, nil })
+	for _, channel := range []string{"Telegram", "Email"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/api/callback-failures?account=fixture&channel="+channel, nil))
+		var page struct {
+			Items []struct {
+				ID           int64
+				Reason, Lane string
+				NextAttempt  string `json:"next_attempt"`
+				Failures     int
+				Quarantined  bool
+			}
+		}
+		// Keep the JSON field names from the external API contract.
+		var raw map[string]json.RawMessage
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &raw) != nil || json.Unmarshal(raw["items"], &page.Items) != nil || len(page.Items) != 1 {
+			t.Fatalf("invalid failure listing: %d %s", w.Code, w.Body.String())
+		}
+		if page.Items[0].Lane != channel || page.Items[0].Failures != 3 || page.Items[0].Reason != "Synthetic failure" || page.Items[0].NextAttempt == "" || page.Items[0].Quarantined != (channel == "Email") {
+			t.Fatal("lost recovery state", page.Items)
+		}
 	}
 }

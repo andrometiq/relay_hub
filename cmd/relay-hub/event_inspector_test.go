@@ -120,7 +120,7 @@ func TestEventInspectorDatabase(t *testing.T) {
 	if _, err = b.Detail(ctx, "fixture", "Email", page.Items[0].ID); err == nil {
 		t.Fatal("cross channel payload")
 	}
-	if _, err = db.Exec(ctx, `INSERT INTO relay_channel_callback_quarantine(event_id,account,channel,reason) VALUES($1,'fixture','Telegram','payload_too_large')`, page.Items[0].ID); err != nil {
+	if _, err = db.Exec(ctx, `UPDATE relay_channel_callback_delivery SET quarantined=true,error='payload_too_large' WHERE event_id=$1`, page.Items[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	page, err = b.List(ctx, "fixture", "Telegram", 0)

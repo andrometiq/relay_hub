@@ -588,70 +588,9 @@ func run() error {
 			json.NewEncoder(w).Encode(map[string]any{"telegram": status.Telegram, "email": status.Email, "whatsapp": len(wa.AccountsSnapshot())})
 		})))
 		mux.Handle("GET /api/event-inspector", browserAuth.Protect(eventInspector(postgresEventReader{db: authPool}, browserAuth.Session)))
-		mux.Handle("GET /api/channel-events", browserAuth.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			u, e := browserAuth.Session(r)
-			if e != nil {
-				http.Error(w, "unauthorized", 401)
-				return
-			}
-			if u.Role != "admin" {
-				http.Error(w, "forbidden", 403)
-				return
-			}
-			limit := 50
-			if raw := r.URL.Query().Get("limit"); raw != "" {
-				if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 100 {
-					limit = n
-				}
-			}
-			before := int64(0)
-			if raw := r.URL.Query().Get("before"); raw != "" {
-				before, e = strconv.ParseInt(raw, 10, 64)
-				if e != nil || before < 0 {
-					http.Error(w, "invalid cursor", 400)
-					return
-				}
-			}
-			account := strings.TrimSpace(r.URL.Query().Get("account"))
-			channel := strings.TrimSpace(r.URL.Query().Get("channel"))
-			if len(account) > 100 || (channel != "" && channel != "Telegram" && channel != "Email") {
-				http.Error(w, "invalid filter", 400)
-				return
-			}
-			rows, e := authPool.Query(r.Context(), `SELECT id,account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at::text,payload,COALESCE((SELECT reason FROM relay_channel_callback_quarantine q WHERE q.event_id=relay_channel_events.id AND q.resolved_at IS NULL),'') FROM relay_channel_events WHERE ($1::bigint=0 OR id<$1) AND ($2='' OR account=$2) AND ($3='' OR channel=$3) ORDER BY id DESC LIMIT $4`, before, account, channel, limit+1)
-			if e != nil {
-				http.Error(w, "unavailable", 503)
-				return
-			}
-			defer rows.Close()
-			type item struct {
-				ID                                                                                    int64 `json:"id"`
-				Account, Channel, Direction, ProviderID, Sender, Recipient, Subject, Body, OccurredAt string
-				Payload                                                                               json.RawMessage `json:"payload"`
-				CallbackError                                                                         string          `json:"callback_error,omitempty"`
-			}
-			list := []item{}
-			for rows.Next() {
-				var v item
-				if e = rows.Scan(&v.ID, &v.Account, &v.Channel, &v.Direction, &v.ProviderID, &v.Sender, &v.Recipient, &v.Subject, &v.Body, &v.OccurredAt, &v.Payload, &v.CallbackError); e != nil {
-					http.Error(w, "unavailable", 503)
-					return
-				}
-				list = append(list, v)
-			}
-			if e = rows.Err(); e != nil {
-				http.Error(w, "unavailable", 503)
-				return
-			}
-			more := len(list) > limit
-			if more {
-				list = list[:limit]
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"events": list, "more": more})
-		})))
+		mux.Handle("GET /api/channel-events", browserAuth.Protect(channelEventsAdmin(authPool, browserAuth.Session)))
 		mux.Handle("GET /api/callback-failures", browserAuth.Protect(callbackFailuresAdmin(authPool, browserAuth.Session)))
-		mux.Handle("POST /api/callback-failures/retry", browserAuth.Protect(callbackRetryAdmin(channelCallbacksDispatcher.RetryQuarantined, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), callbacks.RecoverCallback)))
+		mux.Handle("POST /api/callback-failures/retry", browserAuth.Protect(callbackRetryAdmin(channelCallbacksDispatcher.RecoverCallback, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), callbacks.RecoverCallback)))
 		deliveryUI := deliveryAdmin(hubDeliveryBackend{wa: wa.Outbox, channels: channels.Outbox{DB: authPool, Registry: channelRegistry}}, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"))
 		mux.Handle("GET /api/delivery-queue", browserAuth.Protect(deliveryUI))
 		mux.Handle("POST /api/delivery-queue", browserAuth.Protect(deliveryUI))

@@ -11,7 +11,7 @@ import (
 	"strconv"
 )
 
-func callbackRetryAdmin(retry func(context.Context, string, string, int64) error, session func(*http.Request) (auth.User, error), origin string, recoverWhatsApp ...func(context.Context, string, string, int64, int64, string, string) error) http.Handler {
+func callbackRetryAdmin(recoverChannels func(context.Context, string, string, int64, int64, string, string) error, session func(*http.Request) (auth.User, error), origin string, recoverWhatsApp ...func(context.Context, string, string, int64, int64, string, string) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := session(r)
 		if err != nil {
@@ -57,10 +57,10 @@ func callbackRetryAdmin(retry func(context.Context, string, string, int64) error
 			}
 			err = recoverWhatsApp[0](r.Context(), in.Account, in.Lane, id, u.ID, in.Action, in.Note)
 		} else {
-			err = retry(r.Context(), in.Account, in.Channel, id)
+			err = recoverChannels(r.Context(), in.Account, in.Channel, id, u.ID, in.Action, in.Note)
 		}
 		if err != nil {
-			http.Error(w, "Callback remains quarantined. Resolve the payload size or delivery failure before retrying.", 409)
+			http.Error(w, "Callback recovery failed. Refresh its state and check the recovery evidence.", 409)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -91,7 +91,7 @@ func callbackFailuresAdmin(db *pgxpool.Pool, session func(*http.Request) (auth.U
 				return
 			}
 		}
-		query := `SELECT event_id,reason,created_at::text,'' AS lane,-1 AS position,0 AS failures,'' AS next_attempt,true AS quarantined FROM relay_channel_callback_quarantine WHERE account=$1 AND channel=$2 AND resolved_at IS NULL AND ($3::bigint=0 OR event_id<$3) ORDER BY event_id DESC LIMIT 51`
+		query := `SELECT d.event_id,d.error,d.updated_at::text,e.channel,-1,d.failures,d.next_attempt::text,d.quarantined FROM relay_channel_callback_delivery d JOIN relay_channel_events e ON e.id=d.event_id WHERE e.account=$1 AND e.channel=$2 AND NOT d.acknowledged AND (d.failures>0 OR d.quarantined) AND ($3::bigint=0 OR event_id<$3) ORDER BY event_id DESC LIMIT 51`
 		if channel == "WhatsApp" {
 			query = `SELECT d.event_id,d.error,d.updated_at::text,d.lane,d.error_position,d.failures,d.next_attempt::text,d.quarantined
     FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id
