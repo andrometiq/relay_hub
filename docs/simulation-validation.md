@@ -1,137 +1,207 @@
-# Synthetic simulation validation — 2026-09-23
+# Connected WhatsApp simulation
 
-This pass uses synthetic records, loopback provider servers, and isolated
-PostgreSQL schemas. No live provider account or production deployment is used.
-The scope is simulation of the implemented paths, not certification of the full
-Relay feature list or a claim that live provider behavior is identical.
+The Hub-owned runner connects `cmd/relay-sim` to an **already running** local
+Relay Core, its real background workers and Frappe Socket.IO. Only Meta and
+injected callback failures are simulated. Hub authentication, MCP, PostgreSQL
+journals/outbox, callback signatures, Core HTTP authentication and worker
+projection remain real. This is local acceptance, not live Meta certification.
 
-## Latest combined result
+## Run
 
-All eleven runner checks passed on 2026-09-23. The Hub reported **425 successful
-test/subtest events, zero failures and zero skips**, including real PostgreSQL
-integration and race detection. Core reported **65 unit tests passed and 2
-configured-Hub smoke tests skipped**, plus **95 real Frappe/PostgreSQL scenarios**
-(10 automation, 44 multi-channel/API/ticket, 17 group and 24 typed-message scenarios).
-Hub's 2 frontend data tests and Core's 16 frontend data tests,
-static analysis and whitespace checks passed. The browser results below were
-run separately against built component fixtures. Core's exact final production
-frontend build also passed after the connected message controls were corrected.
-See the [full group coverage matrix](group-simulation-coverage.md).
-
-The 2,000-message admission test compared every stored payload with its input.
-Forty 50-message MCP chunks were persisted in **2.582 seconds** in this local run;
-maximum request size was 57,923 bytes. This measures local queue admission only,
-not delivery throughput or production capacity. No external provider calls were
-made. Synthetic Core records remain in the isolated fixture for inspection;
-temporary Hub schemas and owned test services were cleaned up.
-
-## Reproduce the combined run
-
-From `relay_hub`, with the isolated `relay-ai-test.local` Frappe fixture installed:
+From this checkout on `develop`:
 
 ```sh
-python3 scripts/simulate.py \
-  --frappe-python ../pilot/benches/version16-dev/env/bin/python
+cd /home/sakthi/development/services/relay_hub
+
+# No services, credentials, database connections or Core writes.
+python3 -B scripts/simulate_whatsapp_e2e.py --dry-run \
+  --report-dir .runtime/sim-report/dry-run
+
+# Uses packages already installed in this bench; installs nothing.
+PYTHONDONTWRITEBYTECODE=1 \
+/home/sakthi/development/pilot/benches/version_16/env/bin/python -B \
+  scripts/simulate_whatsapp_e2e.py \
+  --site yrp.site \
+  --sites /home/sakthi/development/pilot/benches/version_16/sites \
+  --core-origin http://127.0.0.1:8001 \
+  --socketio-origin http://127.0.0.1:9001
 ```
 
-The runner permits only the isolated loopback `relay_ai_test_20260922` database.
-It uses bounded Go test concurrency, enables database integration tests and the
-race detector, and saves per-check output to `.runtime/simulation-report.json`.
-Missing/skipped Go integration tests fail the run. Two older Core running-Hub
-smoke tests remain intentionally opt-in; the simulation suite replaces their
-need for a configured account with local MCP fixtures, and reports those skips.
-The runner starts isolated Redis only when needed and stops only its own process.
+Core HTTP must answer `/api/method/ping` using `Host: yrp.site`. Its canonical
+origin must be `http://yrp.site:8001`; the runner reads this from Frappe and does
+not change `site_config`. Both `short` (inbound) and `long` (receipts/templates)
+workers must run the installed Core code. The target must have developer mode,
+ERPNext's Customer/Contact configuration, Relay Core DocTypes and its roles.
+Socket.IO must authenticate that site and operator and reach the same Redis
+publication stream. The runner neither starts nor rewrites Core infrastructure.
 
-## Expected versus observed behavior
+The runner reads PostgreSQL credentials from the ignored Hub `.env`, without
+printing them, creates `relay_hub_sim` if absent, and applies **Hub migrations
+only**. It never migrates a Frappe site, exports fixtures, builds other apps,
+changes site configuration, deletes data or installs dependencies. Hub binaries,
+logs and reports stay under `.runtime`; Python bytecode is disabled and bench
+helper filesystem writes outside Hub and `/tmp` are rejected.
 
-| Simulation | Expected result | Evidence |
-| --- | --- | --- |
-| SMTP STARTTLS and implicit TLS | Authenticated send; verified certificates; To/Cc visible, Bcc envelope-only | `internal/email/tls_simulation_test.go` performs real loopback TLS/SMTP exchanges |
-| SMTP refusal/cancellation | Failed recipient prevents DATA; cancellation closes stalled connection; accepted DATA survives failed QUIT | Same suite plus `internal/email/simulation_test.go` |
-| Telegram send | Validate provider receipt, reject error/malformed/oversized responses, preserve Tamil/reply IDs, redact token in errors | `internal/telegram/simulation_test.go` |
-| Multi-channel callback recovery | Deduplicate events, isolate accounts, sign requests, leave cursor on 503, resume after restart | `internal/channels/callbacks_integration_test.go`: failed 50, retried 50, remaining 3 |
-| WhatsApp integrated round trip | Scoped authentication, persistent enqueue, simulated Graph send, signed webhook, monotonic status, signed Core delivery | `internal/hubmcp/roundtrip_simulation_test.go`: actual Hub services; provider and Core endpoints are local HTTP fixtures |
-| Core Telegram/email round trip | Signed callback → real DB projection → decision/ticket/outbox → real HubClient HTTP call | `tests/integration_channels_site.py` in Core; deterministic model and local MCP simulator |
-| Group workflows | WhatsApp lifecycle/media/templates/receipts and Telegram administration/topics/photos; strict group/DM/account isolation | [Group coverage matrix](group-simulation-coverage.md), including 17 real Core scenarios |
-| Typed messages | Exact sticker/reply/location/contact/reaction payloads, reaction removal, vCards, durable WhatsApp replay and private/group routing | Hub Telegram/WhatsApp typed suites and `internal/hubmcp/message_types_simulation_test.go` |
-| Account-bound sticker reads | Deny unknown/cross-account IDs before provider calls; bounded WebP/WebM/TGS bytes without token URLs; 2 MiB content fits the Core 3 MiB envelope | Hub media suites and `TestMediaEnvelopeDoesNotDuplicateLargePayload` |
-| Core typed projection/actions | Same-second update ordering, no new AI turn from edits/reactions, edited-source cancellation, AI-disabled receiving, revoked business/Contact/channel checks, known sticker reuse, uncertain-send deduplication | Core `tests/integration_message_types_site.py`: 24 scenarios and 30 loopback HTTP submissions |
-| Credential reload and webhook registration | Old captured MCP handlers use rotated credentials and reject disabled accounts; per-account ingress secrets reject other accounts; registration metadata is admin-only | Atomic registry race tests, actual MCP reload test and admin HTTP handler tests |
-| Bulk admission | 2,000 exact payloads in 40×50 chunks; replay/conflict/oversized batch/account isolation | Same Hub simulation suite; admission only, no provider sends |
-| Core authorization changes | Cancel queued delivery after endpoint/channel/business permission/link revocation or reassignment | Same real Frappe suite; configuration changes are actual synthetic DB writes |
-| Core history/tickets | Bounded forward/reverse paging, channel filters, multi-channel message links, ticket resolution, owner isolation | Core channel integration suite |
-| Core WhatsApp automation | One ticket/send under replay and concurrent workers; takeover/revocation block delivery; uncertain sends not replayed | `tests/integration_automation_site.py` in Core |
-| AI providers | Correct auth and Tamil JSON through real HTTP parsing; incomplete/oversized/error/redirect responses rejected | Core `tests/test_provider_simulation.py`, with network destination replaced by loopback |
-| Virtual table | Bounded page/cache/DOM usage with reverse loading at mobile/tablet/desktop sizes | Core `frontend/tests/browser/simulation.mjs` against built fixture |
+An actual run writes real local Core records: dedicated service/operator and
+unauthorized users, a Customer and linked Contact, a paused Relay Contact,
+verified endpoint `919999999999`, one enabled WhatsApp channel for `sim-v1`, and
+417 identifiable outgoing history rows. It sets **Relay Settings** to the
+simulation account and token. These records and settings remain for inspection;
+there is no destructive cleanup or automatic restoration. Previously issued
+simulation Hub tokens are revoked when provisioning a new run. Reruns use fresh
+message/request identities and reuse the paused simulation contact and linked
+Customer, preserving Core's durable conversation binding. An endpoint moved by
+an older runner is restored to that binding only after checking both contacts
+are simulation fixtures. Assertions select the current run's provider IDs so
+retained history cannot hide missing or duplicate rows.
+Email is muted during provisioning; active Notification rules on fixture
+DocTypes cause preflight failure. The synthetic contact's automation pause
+prevents AI/flow execution. No email, SMS, banking or payment channels are seeded.
+The runner stops only its own Hub process.
 
-Browser simulation: one million logical records are generated only in requested
-pages. At widths 1440, 768, 390 and 320, requests stayed at 50 rows; maximum DOM
-rows were 21, 24, 21 and 15 respectively. The viewport scroll extent never exceeded
-200 cached rows. All four sizes passed reverse paging and had no horizontal page
-overflow or uncaught JavaScript errors. Automatic forward/reverse scrolling was
-also exercised at 390px. This is not a million-row database benchmark.
+## What is asserted
 
-To reproduce the browser fixture, build Core frontend with
-`vite build --config tests/browser/vite.config.js`, serve
-`frappe_relay_core/.runtime/simulation-ui` on `127.0.0.1:18120`, and invoke the
-exported simulation function with a Playwright page. Browser evidence is saved
-separately at Core `.runtime/browser-simulation-report.json`.
+| Step | Connected assertion |
+| --- | --- |
+| 7 | Wrong HMAC and wrong phone are rejected; signed text is journaled. |
+| 8 | One Hub incoming/journal row and one projected Core Relay Message survive an identical webhook replay. The durable Core Hub Event is checked. |
+| 9 | Two real `relay_core.messaging.send` calls with one request key yield one Core action, one Hub intent and exactly one fake Meta POST. Recipient, text, quote context, tracking ID and resulting Core provider ID are checked. |
+| 10 | 417 historical messages receive sent/delivered/read receipts: successful signed Core callbacks contain 500, 500 and 251 receipts, each within 512 KiB. Final states are Read; replay and late Delivered cannot regress them. Five fresh inbounds are observed while receipts are held. |
+| 11 | Controlled 503 and wrong acknowledgement leave the durable receipt offset at zero. Restarting only relay-sim with `--resume` loads its stored account and resumes the original event, retaining the existing Hub token and Core settings. No new provider send is allowed. |
+| 12 | Core creates a PENDING template, lists two paginated templates, then projects a signed APPROVED notification into Relay WhatsApp Template and emits its realtime invalidation. |
+| Realtime | The authorized operator subscribes through authenticated Socket.IO over WebSocket; a `relay_changed` messages event arrives. An unauthorized operator must not receive that contact's message event. A successful run observes 31 idle seconds without application HTTP polling. |
 
-## Typed message browser checks
+Reports are `.runtime/sim-report/report.json` and `report.md`, including per-step
+pass/fail/not-run, journal identities, sanitized transport captures, batch sizes,
+and p50/p95 latency. Inbound latency uses the host's `CLOCK_MONOTONIC`, from the
+signed webhook send until a separate bench process observes the actual Core row
+(at a 20 ms database observation interval). It includes Hub delivery and Core
+projection; it is **not browser rendering latency**. Socket arrival latency is
+reported separately. Database observation and loopback control-state inspection
+are test instrumentation; message/status HTTP polling is never used for live
+updates. A failed projection is a failed check, never a synthetic replacement.
+Independent receipt/template checks continue after an inbound projection failure.
+Failures remain failures when later subchecks of the same step succeed; every
+subcheck error is retained in the report.
 
-The built connected Messages fixture passed seven synthetic submissions covering
-quoted text, reaction removal, zero-valued coordinates, contact cards, sticker
-reuse, rejected drafts and permission errors. Request keys were preserved on
-unconfirmed retries; the browser supplied no provider routing overrides. WhatsApp
-group controls excluded unsupported types. Widths 320, 390, 768 and 1440 passed
-without horizontal overflow or uncaught errors; requests stayed at 50 rows.
+This runner tests the actual Socket.IO protocol using the bench's existing
+`websockets` package. It does not drive the installed composer/template DOM,
+certify browser rendering, or test browser reconnect/catch-up behavior. The
+older `scripts/simulate.py` aggregates separate regression fixtures; it is not a
+substitute for this connected run. No p95 acceptance threshold is silently
+inferred from a small sample; the measured samples and failures are retained.
 
-The TGS fixture rendered changing canvas frames and passed explicit loading,
-pause/resume, offscreen pause, unmount cleanup, keyboard activation, reduced
-motion, 320px layout and missing-decompression fallback checks. No unexpected
-external requests occurred. Helper tests cover oversized gzip expansion,
-malformed data, external assets, expressions and excessive animation complexity.
+## Launcher and control API
 
-Core fixture entry points are `frontend/tests/browser/messagesSimulation.mjs`
-and `frontend/tests/browser/tgsSimulation.mjs`. Their Vite configs build isolated
-artifacts in `.runtime/messages-simulation-ui` and `.runtime/tgs-simulation-ui`.
-Serve only on loopback and run the exported functions with a Playwright page.
-The browser endpoints are synthetic; real Frappe permission/database checks are
-the separate integration scenarios above.
+`relay-sim` is a test-only Go command, separate from production `relay-hub`.
+Build it with `GOCACHE=/tmp/relay-sim-gocache go build -o .runtime/relay-sim
+./cmd/relay-sim`. With `DATABASE_URL` pointing to **relay_hub_sim**, a
+`RELAY_CREDENTIAL_KEY` and a random `RELAY_SIM_CONTROL_TOKEN` of at least 32
+characters in the environment, run:
 
-## Failures found and corrected during simulation
+```sh
+.runtime/relay-sim --migrate \
+  --addr 127.0.0.1:18091 --meta-addr 127.0.0.1:18094 \
+  --core-origin http://127.0.0.1:8001
+```
 
-- SMTP ignored cancellation while blocked on network and allowed subject header
-  injection. Transport now has a deadline/cancellation path and header validation.
-- SMTP enforces TLS; failed QUIT after accepted DATA is not reported as failed send.
-- Telegram trusted HTTP status without verifying an accepted message receipt and
-  exposed token-bearing URLs in transport errors. Both are now covered.
-- Core Telegram/email dispatch failed to recheck business/channel permissions
-  after inference. Disabled channels and revoked/reassigned business links now
-  cancel queued delivery before HTTP submission.
-- AI HTTP failure responses were not closed. Error responses are now closed while
-  preserving credential-safe error messages.
-- Group simulations corrected WhatsApp ownership pagination, unsupported API
-  operations and group/DM history mixing; Telegram replies now retain group/topic
-  provenance. Concurrent reloads reach existing MCP handlers and Telegram webhook
-  authentication uses per-account secrets. See the group report for details.
-- Incoming projection incorrectly stopped when AI was disabled. Basic receiving
-  and message updates now run independently; the automation service retains its
-  own enablement checks. Revoked business/Contact/channel permissions also block
-  typed history, media and sending. Native shared select components corrected
-  the connected UI's label association and browser interaction.
+The equivalent address environment variables are `RELAY_SIM_ADDR`,
+`RELAY_SIM_META_ADDR` and `RELAY_SIM_CORE_ORIGIN`. `.env` is loaded when present,
+without overriding existing environment values. Omitting `--migrate` requires
+an already migrated simulation database. A production database name, remote
+address, custom search path, remote fallback host or occupied listener is refused.
+Origins require explicit valid ports. Use `--resume` for an already provisioned
+simulation account: this reads its encrypted database configuration without
+rotating tokens or changing Core settings. Ordinary startup leaves accounts
+inactive until provisioning, so an earlier run's Core binding is not reused.
 
-## Explicit coverage boundaries
+Graph requests to exactly `https://graph.facebook.com` are rewritten to fake
+Meta. The canonical Core hostname is an account identity; callbacks are explicitly
+mapped to the configured literal loopback Core address, retaining the canonical
+Host header. The transport disables proxies and redirects and checks every dial
+for a literal loopback IP. Other destinations are refused. Fake Meta accepts only
+synthetic provider credentials. No real provider credential is needed.
 
-Core inbound simulations invoke its real handler with Werkzeug POST requests,
-real Frappe roles and PostgreSQL; they do not run a complete WSGI login server.
-Outgoing Core tests exercise real HTTP to a simulated MCP Hub; Hub tests exercise
-the real Hub against simulated Core callbacks. These connected segments are not
-a single deployed Core+Hub browser session. The virtual table fixture is a real
-component test, not full installed Core UI acceptance.
+The fake Meta listener also exposes bearer-protected orchestration controls:
 
-IMAP ingestion/threading/attachment workflows and other unimplemented product
-features cannot be certified by passing these tests. Provider template/group/call
-contract simulations do not establish live Meta eligibility, recording support,
-provider throughput, AI answer accuracy, or production autoscaling. These limits
-remain visible instead of treating credentials as a blocker to local simulation.
+| Endpoint | Method / body |
+| --- | --- |
+| `/_sim/provision` | POST `{site, api_key, api_secret, callback_secret}`: persist `sim-v1`, phone `110`, WABA `220`, and rotate a scoped real Hub token. |
+| `/_sim/state` | GET: sanitized request/response captures and fixed, read-only Hub journal/outbox/callback snapshots. |
+| `/_sim/emit` | POST `{payload, invalid_signature?: false}`: sign exact JSON bytes and submit any Meta envelope to Hub. Supports text and bulk receipts. |
+| `/_sim/faults` | POST `{target: "graph" or "status", faults: ["429", "503"], hold?: false}`. `wrong_ack` is available for status callbacks; `hold` keeps returning 503 for that lane. Realtime callbacks remain independent. |
+| `/_sim/template` | POST `{id, status: "APPROVED"}`: update fake template state and emit a signed template lifecycle webhook. PENDING and REJECTED are also supported. |
+
+Fake template pages intentionally contain one row so a two-template test exercises
+pagination. Provider IDs are unique per launcher lifetime. The fake provider and
+its captures live in memory; the orchestrator collects captures before/after
+restart. PostgreSQL event identities, outbox results and acknowledgement offsets
+survive restart. Control responses contain newly issued credentials only when
+needed for setup; report captures redact authentication, cookies and signatures.
+
+## Tests
+
+```sh
+GOCACHE=/tmp/relay-sim-gocache go test -race ./cmd/relay-sim
+PYTHONDONTWRITEBYTECODE=1 \
+/home/sakthi/development/pilot/benches/version_16/env/bin/python -B \
+  -m unittest discover -s scripts -p 'test_simulate_whatsapp_e2e.py' -v
+GOCACHE=/tmp/relay-sim-gocache go test ./...
+```
+
+The PostgreSQL launcher test is opt-in and uses only `relay_hub_sim`; it keeps
+identifiable simulation rows and does not drop schemas or delete data. It starts
+actual launcher child processes, real MCP/outbox workers and a signed local Core
+HTTP fixture, testing one provider send and 503/wrong-ack restart recovery into
+500/500/251 batches. This verifies the launcher, **not actual Core projection**.
+After the connected runner has created the simulation database, run it without
+printing credentials:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 \
+/home/sakthi/development/pilot/benches/version_16/env/bin/python -B - <<'PY'
+import os, subprocess, sys, urllib.parse
+sys.path.insert(0, 'scripts')
+from simulate_whatsapp_e2e import read_env
+config = read_env()
+url = urllib.parse.urlsplit(config['DATABASE_URL'])._replace(
+    path='/relay_hub_sim', query='', fragment='')
+env = {**os.environ, 'GOCACHE': '/tmp/relay-sim-gocache',
+       'RELAY_SIM_TEST_DATABASE_URL': urllib.parse.urlunsplit(url),
+       'RELAY_CREDENTIAL_KEY': config['RELAY_CREDENTIAL_KEY']}
+raise SystemExit(subprocess.call(
+    ['go', 'test', '-race', './cmd/relay-sim', '-run', 'TestLauncherPostgres', '-v', '-count=1'],
+    env=env))
+PY
+```
+
+The launcher test temporarily binds the simulation account to its own local Core
+fixture. Run the connected runner afterward to rebind it to the target Core site.
+
+## Observed validation — 2026-10-24
+
+The repository-wide Go unit suite, launcher race tests, PostgreSQL launcher
+restart test, 16 Python runner tests, `go vet` and dry-run passed. The default Go
+suite skips database tests unless their opt-in environment variables are set;
+the separate launcher PostgreSQL test was explicitly enabled and passed.
+
+The final connected `yrp.site` run passed steps 7–12 and the Socket.IO check:
+one inbound projection after replay, one provider POST for repeated Core sends,
+**500/500/251** acknowledged receipt batches and final Read states, independent
+inbound delivery during held receipts, 503/wrong-ack recovery across a Hub-only
+restart, and PENDING → APPROVED template projection with realtime invalidation.
+The operator connection remained alive through 31 idle seconds; the unauthorized
+observer received no message event. No HTTP message polling was used.
+
+Across six inbound samples, webhook-to-Core-row latency was **744.12 ms p50** and
+**1178.95 ms p95**. Initial message Socket.IO arrival was **1169.05 ms**. These
+measurements do not meet the design's proposed sub-second p95 target; the runner
+reports measurements without treating that unconfirmed target as a pass gate.
+Browser rendering and reconnect/catch-up remain outside this transport harness.
+No Core source or schema changes were made by this work.
+
+Connected reruns exposed and now cover two harness defects: a supplied WebSocket
+retained its 10-second TCP timeout, and replacing a contact invalidated Core's
+durable conversation binding. The socket now uses the protocol's own timeouts;
+fixture reruns preserve the original conversation contact. Reports retain every
+subcheck failure instead of allowing a later success to erase it.
