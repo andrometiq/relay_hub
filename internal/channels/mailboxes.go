@@ -193,3 +193,35 @@ func priorMailboxIdentity(ctx context.Context, tx pgx.Tx, account, key string, v
 	}
 	return prior, err
 }
+
+// MailboxHealth exposes scheduling and cursor evidence, never provider diagnostics.
+type MailboxHealth struct {
+	Mailbox      string `json:"mailbox"`
+	UIDValidity  int64  `json:"uid_validity"`
+	LastUID      int64  `json:"last_uid"`
+	ResetUIDNext int64  `json:"reset_uid_next"`
+	LastSync     string `json:"last_sync"`
+	Error        string `json:"error"`
+	Failures     int    `json:"failures"`
+	NextAttempt  string `json:"next_attempt"`
+	Backoff      bool   `json:"backoff"`
+}
+
+func MailboxStatus(ctx context.Context, db *pgxpool.Pool, account string) ([]MailboxHealth, error) {
+	rows, err := db.Query(ctx, `SELECT mailbox,uid_validity,last_uid,reset_uid_next,COALESCE(last_sync::text,''),
+ CASE WHEN last_error<>'' THEN 'Mailbox synchronization failed; check credentials, TLS and mailbox access' ELSE '' END,
+ failures,next_attempt::text,failures>0 AND next_attempt>now() FROM relay_mailbox_cursor WHERE account=$1 ORDER BY mailbox LIMIT 100`, account)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []MailboxHealth{}
+	for rows.Next() {
+		var row MailboxHealth
+		if err := rows.Scan(&row.Mailbox, &row.UIDValidity, &row.LastUID, &row.ResetUIDNext, &row.LastSync, &row.Error, &row.Failures, &row.NextAttempt, &row.Backoff); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
