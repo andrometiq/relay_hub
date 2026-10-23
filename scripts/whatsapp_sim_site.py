@@ -64,6 +64,13 @@ def finished_projection_timings(queue, site, event_ids, lane):
     return timings
 
 
+def require_worker_isolation(workers):
+    lanes = [{name.rsplit(':', 1)[-1] for name in worker.queue_names()} for worker in workers]
+    assert all(not ('default' in row and row & {'short', 'long'}) for row in lanes), (
+        'Automation default queue must have a separate worker from short/long projection')
+    assert {'default', 'short', 'long'} <= set().union(*lanes), 'Automation and both projection queues need workers'
+
+
 def fixture_contact(frappe, insert, channel, run):
     endpoint = frappe.db.get_value('Relay Contact Endpoint',
         {'channel': channel.name, 'endpoint': '919999999999'}, 'name')
@@ -167,15 +174,17 @@ def main():
         if action == 'preflight':
             assert frappe.conf.developer_mode, 'Target must be a development site'
             acceptance.preflight()
+            from frappe.utils.background_jobs import get_workers
+            require_worker_isolation(get_workers())
             assert 'relay_core' in frappe.get_installed_apps(), 'Relay Core is not installed'
             for name in ['Relay Settings', 'Relay Hub Event', 'Relay WhatsApp Template', 'Relay Business Routing', 'Customer']:
                 assert frappe.db.exists('DocType', name), f'Missing installed DocType: {name}'
             # A paused synthetic contact blocks AI/flows. No external channels are seeded.
             assert not frappe.get_all('Notification', filters={'enabled': 1, 'document_type': ['in',
-                ['Contact', 'Customer', 'Supplier', 'GL Entry', 'Sales Order', 'Item', 'User', 'Relay Message', 'Relay Contact']]}, limit_page_length=1), 'Disable external fixture notifications first'
+                ['Contact', 'Customer', 'Supplier', 'GL Entry', 'Sales Order', 'Item', 'Price List', 'User', 'Relay Message', 'Relay Contact']]}, limit_page_length=1), 'Disable external fixture notifications first'
             for doctype, field in [('Webhook', 'webhook_doctype'), ('YRP Notification Template', 'document_type')]:
                 if frappe.db.exists('DocType', doctype):
-                    assert not frappe.get_all(doctype, filters={'enabled': 1, field: ['in', ['Sales Order', 'Supplier', 'GL Entry', 'Item']]}, limit_page_length=1), 'Disable external fixture webhooks/notifications first'
+                    assert not frappe.get_all(doctype, filters={'enabled': 1, field: ['in', ['Sales Order', 'Supplier', 'GL Entry', 'Item', 'Price List']]}, limit_page_length=1), 'Disable external fixture webhooks/notifications first'
             return {'canonical_origin': frappe.utils.get_url().rstrip('/'), 'version': frappe.__version__,
                     'site': site, 'developer_mode': bool(frappe.conf.developer_mode)}
         if action == 'provision':

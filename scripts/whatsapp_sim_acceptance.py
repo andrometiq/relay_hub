@@ -114,16 +114,29 @@ class Acceptance:
         while time.monotonic() < deadline:
             state = self.ai_state(provider)
             if state['incoming']:
-                # Projection inserts the message and creates any automation run
-                # in the same transaction. A committed row is the barrier, not
-                # the Hub callback acknowledgement or provider request count.
                 assert len(state['incoming']) == 1, 'Duplicate paused message'
+                if not self.automation_checked(state['incoming'][0]['name']):
+                    time.sleep(.05)
+                    continue
+                state = self.ai_state(provider)
                 assert state['paused'], 'Conversation is no longer paused'
                 assert not state['runs'], 'Paused message created an automation run'
                 assert not state['actions'] and not state['outgoing'], 'Paused message created an action'
+                # The first stage now runs after commit. Its finished job is the
+                # barrier proving that this message was checked for automation.
                 return state
             time.sleep(.05)
         raise AssertionError('Paused message was not projected')
+
+    def automation_checked(self, message):
+        from frappe.utils.background_jobs import get_job
+        from relay_core.automation.queue import message_job_id
+        job = get_job(message_job_id(message))
+        if job:
+            status = job.get_status(refresh=True)
+            assert status != 'failed', 'Paused message automation check failed'
+            return status == 'finished'
+        return False
 
     def seed_event(self, run, template_id):
         f, fixture = self.f, self.fixture
@@ -133,21 +146,32 @@ class Acceptance:
         assert not f.get_all('Relay Business Event Rule', filters={'source_doctype': 'Sales Order', 'enabled': 1}, limit_page_length=1), 'Disable other Sales Order rules before simulation'
         item_group = f.db.get_value('Item Group', {'is_group': 0}, 'name')
         uom = f.db.get_value('UOM', {'enabled': 1}, 'name')
-        company = f.db.get_value('Company', {}, 'name')
+        company = f.db.get_single_value('Global Defaults', 'default_company')
         assert item_group and uom and company, 'Company, Item Group and UOM fixtures are required'
-        item = self.insert('Item', item_code=f'RELAY-SIM-SERVICE-{run}', item_name='Local Relay simulation service',
-            item_group=item_group, stock_uom=uom, is_stock_item=0, is_sales_item=1)
+        currency = f.db.get_value('Company', company, 'default_currency')
+        # India Compliance validates SAC even though the Custom Field is not reqd.
+        tax_fields = {}
+        if f.get_meta('Item').has_field('gst_hsn_code'):
+            assert f.db.exists('GST HSN Code', '998313'), 'IT consulting SAC 998313 is required'
+            tax_fields['gst_hsn_code'] = '998313'
+        item = self.insert('Item', item_code=f'RELAY-SIM-SERVICE-{run}', item_name='Local Relay simulation IT consulting service',
+            item_group=item_group, stock_uom=uom, is_stock_item=0, is_sales_item=1, **tax_fields)
+        price_list = self.insert('Price List', price_list_name=f'Local Relay simulation {run}',
+            enabled=1, selling=1, buying=0, currency=currency)
         rule = self.insert('Relay Business Event Rule', title=f'Local Relay simulation order {run}', enabled=1,
             source_doctype='Sales Order', event='on_submit', recipient_field='customer', business_doctype='Customer',
             channel=fixture['channel'], run_as_user=fixture['operator']['name'], template=template,
             parameter_mapping=json.dumps(['name']))
-        self.event = dict(rule=rule.name, item=item.name, company=company, uom=uom)
+        self.event = dict(rule=rule.name, item=item.name, company=company, uom=uom,
+            currency=currency, price_list=price_list.name)
         f.db.commit()
         return self.event
 
     def submit_event(self):
         f, fixture = self.f, self.fixture
         doc = f.get_doc(dict(doctype='Sales Order', customer=fixture['customer'], company=self.event['company'],
+            currency=self.event['currency'], conversion_rate=1, selling_price_list=self.event['price_list'],
+            price_list_currency=self.event['currency'], plc_conversion_rate=1,
             transaction_date=f.utils.today(), delivery_date=f.utils.add_days(f.utils.today(), 7),
             items=[dict(item_code=self.event['item'], qty=2, rate=125, uom=self.event['uom'])]))
         doc.insert(ignore_permissions=True)
