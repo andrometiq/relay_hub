@@ -31,41 +31,9 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, checkpo
 	if !c.MailboxConfigured() {
 		return cursor, fail
 	}
-	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-	defer cancel()
-	dial := c.dialContext
-	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
-	}
-	conn, err := dial(ctx, "tcp", net.JoinHostPort(c.cfg.IMAPHost, strconv.Itoa(c.cfg.IMAPPort)))
+	client, mailbox, closeConnection, err := c.connectMailbox(ctx)
+	defer closeConnection()
 	if err != nil {
-		return cursor, fail
-	}
-	defer conn.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	defer stop()
-	options := &imapclient.Options{TLSConfig: &tls.Config{ServerName: c.cfg.IMAPHost, MinVersion: tls.VersionTLS12, RootCAs: c.tlsRoots}}
-	var client *imapclient.Client
-	if c.cfg.IMAPPort == 143 {
-		client, err = imapclient.NewStartTLS(conn, options)
-	} else {
-		secure := tls.Client(conn, options.TLSConfig)
-		if err = secure.HandshakeContext(ctx); err == nil {
-			client = imapclient.New(secure, options)
-		}
-	}
-	if err != nil {
-		return cursor, fail
-	}
-	defer client.Close()
-	if err = client.Login(c.cfg.IMAPUsername, c.cfg.IMAPPassword).Wait(); err != nil {
-		return cursor, fail
-	}
-	mailbox, err := client.Select(c.cfg.IMAPFolder, &imap.SelectOptions{ReadOnly: true}).Wait()
-	if err != nil || mailbox.UIDValidity == 0 || mailbox.UIDNext == 0 {
 		return cursor, fail
 	}
 	if cursor.Validity != mailbox.UIDValidity {
@@ -121,7 +89,7 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, checkpo
 					if value.Literal != nil {
 						if value.Literal.Size() > MaxMessageBytes {
 							// Release the literal reader before waiting for the decoder.
-							conn.Close()
+							closeConnection()
 							_, _ = io.Copy(io.Discard, value.Literal)
 							client.Close()
 							if e := consume(cursor.Validity, uint32(uid), nil, "Message exceeds 6 MiB"); e != nil {
@@ -172,4 +140,57 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, checkpo
 func (c *Client) MailboxKey() string {
 	sum := sha256.Sum256([]byte(c.cfg.IMAPHost + ":" + strconv.Itoa(c.cfg.IMAPPort) + ":" + c.cfg.IMAPUsername + ":" + c.cfg.IMAPFolder))
 	return hex.EncodeToString(sum[:])
+}
+
+func (c *Client) connectMailbox(ctx context.Context) (*imapclient.Client, *imap.SelectData, func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+
+	cleanup := func() { cancel() }
+	dial := c.dialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	conn, err := dial(ctx, "tcp", net.JoinHostPort(c.cfg.IMAPHost, strconv.Itoa(c.cfg.IMAPPort)))
+	if err != nil {
+		return nil, nil, cleanup, errors.New("mailbox connection failed; check settings, TLS and credentials")
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	cleanup = func() { stop(); conn.Close(); cancel() }
+
+	options := &imapclient.Options{TLSConfig: &tls.Config{ServerName: c.cfg.IMAPHost, MinVersion: tls.VersionTLS12, RootCAs: c.tlsRoots}}
+	var client *imapclient.Client
+	if c.cfg.IMAPPort == 143 {
+		client, err = imapclient.NewStartTLS(conn, options)
+	} else {
+		secure := tls.Client(conn, options.TLSConfig)
+		if err = secure.HandshakeContext(ctx); err == nil {
+			client = imapclient.New(secure, options)
+		}
+	}
+	if err != nil {
+		return nil, nil, cleanup, errors.New("mailbox connection failed; check settings, TLS and credentials")
+	}
+
+	if err = client.Login(c.cfg.IMAPUsername, c.cfg.IMAPPassword).Wait(); err != nil {
+		return nil, nil, cleanup, errors.New("mailbox connection failed; check settings, TLS and credentials")
+	}
+	mailbox, err := client.Select(c.cfg.IMAPFolder, &imap.SelectOptions{ReadOnly: true}).Wait()
+	if err != nil || mailbox.UIDValidity == 0 || mailbox.UIDNext == 0 {
+		return nil, nil, cleanup, errors.New("mailbox connection failed; check settings, TLS and credentials")
+	}
+	return client, mailbox, cleanup, nil
+}
+
+// TestMailbox authenticates and opens the folder read-only without fetching mail.
+func (c *Client) TestMailbox(ctx context.Context) error {
+	if !c.MailboxConfigured() {
+		return errors.New("mailbox is not configured")
+	}
+	_, _, closeConnection, err := c.connectMailbox(ctx)
+	defer closeConnection()
+	return err
 }
