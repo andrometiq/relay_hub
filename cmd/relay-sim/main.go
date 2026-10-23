@@ -314,7 +314,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	coreOrigin := flag.String("core-origin", env("RELAY_SIM_CORE_ORIGIN", "http://127.0.0.1:8001"), "Core loopback origin")
 	smtpAddr := flag.String("smtp-addr", "127.0.0.1:18095", "fake SMTP loopback address")
 	imapAddr := flag.String("imap-addr", "127.0.0.1:18096", "fake IMAP loopback address")
-	stateDir := flag.String("state-dir", ".runtime/relay-sim", "private provider state directory; reuse on restart")
+	stateDir := flag.String("state-dir", ".runtime/relay-sim-state", "private provider state directory; reuse on restart")
 	migrate := flag.Bool("migrate", false, "apply Hub migrations to relay_hub_sim")
 	resume := flag.Bool("resume", false, "resume the stored simulation account without provisioning")
 	flag.Parse()

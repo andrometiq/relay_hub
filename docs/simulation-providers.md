@@ -6,7 +6,7 @@ The control API requires `Authorization: Bearer $RELAY_SIM_CONTROL_TOKEN`.
 Provisioning `/_sim/provision` enables all three channels on `sim-v1` and returns
 its scoped Hub token. Business logic and AI remain in Core.
 
-Provider state lives in `--state-dir` (default `.runtime/relay-sim`). Reuse the
+Provider state lives in `--state-dir` (default `.runtime/relay-sim-state`). Reuse the
 same directory with `--resume`. Acceptance, message/file identities, pending
 Telegram updates, email UID state and unconsumed faults are written atomically
 and synced before replies. Captures are per-process; provider snapshots survive
