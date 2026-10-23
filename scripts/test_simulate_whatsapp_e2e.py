@@ -16,6 +16,50 @@ import simulate_whatsapp_e2e as sim
 
 
 class RunnerTests(unittest.TestCase):
+    def test_projection_timings_ignore_expired_unrelated_and_other_site_jobs(self):
+        from rq.exceptions import NoSuchJobError
+        from whatsapp_sim_site import finished_projection_timings
+        queue = Mock()
+        queue.connection.zrange.return_value = [b'expired', b'other-site', b'other-event', b'ours']
+        def job(site, name):
+            return SimpleNamespace(kwargs={'site': site, 'kwargs': {'name': name}}, meta={'relay_timing': {'projection_ms': 4}})
+        with patch('rq.job.Job.fetch', side_effect=[NoSuchJobError(), job('other', 'event'), job('yrp.site', 'other'), job('yrp.site', 'event')]):
+            self.assertEqual(finished_projection_timings(queue, 'yrp.site', {'event': '9'}, 'long'),
+                             [{'projection_ms': 4, 'event': 'event', 'hub_event_id': '9', 'queue': 'long'}])
+
+    def test_waits_for_finished_rq_metadata_after_message_commit(self):
+        with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
+            runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
+            rows = [dict(event=str(i), hub_event_id='9', queue='long') for i in range(3)]
+            runner.site = Mock()
+            runner.site.call.side_effect = [{'projection_timings': rows[:2]}, {'projection_timings': rows}]
+            with patch.object(sim.time, 'sleep'):
+                self.assertEqual(runner.wait_projection_timings(9), rows)
+            self.assertEqual(runner.site.call.call_count, 2)
+
+    def test_breakdown_separates_dispatch_http_receive_and_projection(self):
+        sample = dict(provider='wamid.sample', phase='held', latency_ms=100)
+        records = [dict(kind='webhook', status=200, body={'id': 'wamid.sample'}, started_ns=0, finished_ns=10_000_000),
+                   dict(kind='callback', status=200, body={'id': 'wamid.sample'}, started_ns=30_000_000,
+                        finished_ns=80_000_000, headers={'X-Relay-Dispatch-Ms': ['5']},
+                        response={'message': {'timing': {'receive_ms': 40, 'inline_projection_ms': 30}}})]
+        values = sim.inbound_breakdown(records, sample)
+        self.assertEqual([values[k] for k in ('ingress_ms', 'hub_schedule_ms', 'hub_dispatch_ms',
+                         'callback_http_ms', 'receive_ms', 'inline_projection_ms', 'post_callback_ms')],
+                         [10, 15, 5, 50, 40, 30, 20])
+
+    def test_storm_gate_requires_real_processing_overlap_and_strict_target(self):
+        spans = [dict(hub_event_id='9', queue='long', started_ns=1_000_000_000, finished_ns=2_000_000_000)]
+        samples = [dict(phase='processing', started_ns=1_100_000_000, observed_ns=1_300_000_000, latency_ms=200)] * 5
+        result = sim.storm_latency(samples, spans, 9)
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['receipts_per_second'], 1251)
+        self.assertFalse(sim.storm_latency(samples[:4], spans, 9)['passed'])
+        self.assertFalse(sim.storm_latency(samples, [], 9)['passed'])
+        self.assertFalse(sim.storm_latency([dict(s, phase='held') for s in samples], spans, 9)['passed'])
+        self.assertFalse(sim.storm_latency([dict(s, latency_ms=500) for s in samples], spans, 9)['passed'])
+        self.assertFalse(sim.storm_latency(samples, spans, 10)['passed'])
+
     def test_rejects_remote_or_ambiguous_destinations(self):
         for origin in ['http://localhost:8001', 'https://127.0.0.1:8001', 'http://192.0.2.1:80',
                        'http://0.0.0.0:80', 'http://user:secret@127.0.0.1:80', 'http://127.0.0.1:80/a',

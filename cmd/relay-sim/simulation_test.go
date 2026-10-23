@@ -152,11 +152,17 @@ func TestTransportRewritesAndRejectsRedirects(t *testing.T) {
 		}
 	}
 	// The independent realtime lane reaches actual Core while receipts are held.
-	res, err = client.Post("http://yrp.site:8001/api/method/relay_core.inbound.receive", "application/json", strings.NewReader(`{"events":[{}]}`))
+	req, _ = http.NewRequest("POST", "http://yrp.site:8001/api/method/relay_core.inbound.receive", strings.NewReader(`{"events":[{}]}`))
+	req.Header.Set("X-Relay-Dispatch-Ms", "3.125")
+	res, err = client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
+	rows := records.snapshot()
+	if rows[len(rows)-1].Headers.Get("X-Relay-Dispatch-Ms") != "3.125" {
+		t.Fatal("dispatcher timing missing from capture")
+	}
 	if res.StatusCode != 200 {
 		t.Fatal(res.StatusCode)
 	}

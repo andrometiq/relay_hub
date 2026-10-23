@@ -83,7 +83,7 @@ func safeJSON(b []byte) json.RawMessage {
 }
 func (s *recorder) record(r *http.Request, kind string, body []byte, status int, reply []byte, started time.Time, fault string) {
 	headers := http.Header{}
-	for _, k := range []string{"Content-Type", "Accept", "X-Relay-Timestamp", "Retry-After"} {
+	for _, k := range []string{"Content-Type", "Accept", "X-Relay-Timestamp", "X-Relay-Dispatch-Ms", "Retry-After"} {
 		if v := r.Header.Get(k); v != "" {
 			headers.Set(k, v)
 		}

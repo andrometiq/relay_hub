@@ -49,6 +49,21 @@ def expected_rows(kind, identity, data, historical):
     raise ValueError('Unknown observation')
 
 
+def finished_projection_timings(queue, site, event_ids, lane):
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job
+    timings = []
+    for identifier in queue.connection.zrange(queue.finished_job_registry.key, -2000, -1):
+        try:
+            job = Job.fetch(identifier.decode() if isinstance(identifier, bytes) else identifier, connection=queue.connection)
+        except NoSuchJobError:
+            continue
+        name = (job.kwargs.get('kwargs') or {}).get('name')
+        if job.kwargs.get('site') == site and name in event_ids and job.meta.get('relay_timing'):
+            timings.append(dict(job.meta['relay_timing'], event=name, hub_event_id=event_ids[name], queue=lane))
+    return timings
+
+
 def fixture_contact(frappe, insert, channel, run):
     endpoint = frappe.db.get_value('Relay Contact Endpoint',
         {'channel': channel.name, 'endpoint': '919999999999'}, 'name')
@@ -179,7 +194,8 @@ def main():
             from rq.job import Job
             events = frappe.get_all('Relay Hub Event', filters={'account': 'sim-v1'},
                         fields=['name', 'hub_event_id', 'projection_status'], limit_page_length=5000)
-            failed, workers = [], {}
+            failed, workers, timings = [], {}, []
+            event_ids = {event.name: event.hub_event_id for event in events}
             for lane in ('short', 'long'):
                 queue = get_queue(lane)
                 workers[lane] = len(get_workers(queue))
@@ -190,7 +206,9 @@ def main():
                     if job.kwargs.get('site') == site and name in {event.name for event in events}:
                         failed.append({'event': name, 'method': job.kwargs.get('method'),
                                        'error': (job.exc_info or '').replace(str(frappe.conf.db_name) + '.', '').splitlines()[-1:]})
+                timings.extend(finished_projection_timings(queue, site, event_ids, lane))
             return {'events': events, 'failed_jobs': failed,
+                    'projection_timings': timings,
                     'routing_decisions_column': frappe.db.has_column('Relay Hub Event', 'routing_decisions'),
                     'workers': workers}
         if action == 'snapshot':

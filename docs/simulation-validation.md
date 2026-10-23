@@ -66,7 +66,7 @@ The runner stops only its own Hub process.
 | 7 | Wrong HMAC and wrong phone are rejected; signed text is journaled. |
 | 8 | One Hub incoming/journal row and one projected Core Relay Message survive an identical webhook replay. The durable Core Hub Event is checked. |
 | 9 | Two real `relay_core.messaging.send` calls with one request key yield one Core action, one Hub intent and exactly one fake Meta POST. Recipient, text, quote context, tracking ID and resulting Core provider ID are checked. |
-| 10 | 417 historical messages receive sent/delivered/read receipts: successful signed Core callbacks contain 500, 500 and 251 receipts, each within 512 KiB. Final states are Read; replay and late Delivered cannot regress them. Five fresh inbounds are observed while receipts are held. |
+| 10 | 417 historical messages receive sent/delivered/read receipts: successful signed Core callbacks contain 500, 500 and 251 receipts, each within 512 KiB. Final states are Read; replay and late Delivered cannot regress them. Five fresh inbounds are observed while receipts are held; 30 more are sent after successful receipt delivery starts. At least five must overlap actual receipt projection, with p95 < 500 ms. |
 | 11 | Controlled 503 and wrong acknowledgement leave the durable receipt offset at zero. Restarting only relay-sim with `--resume` loads its stored account and resumes the original event, retaining the existing Hub token and Core settings. No new provider send is allowed. |
 | 12 | Core creates a PENDING template, lists two paginated templates, then projects a signed APPROVED notification into Relay WhatsApp Template and emits its realtime invalidation. |
 | Realtime | The authorized operator subscribes through authenticated Socket.IO over WebSocket; a `relay_changed` messages event arrives. An unauthorized operator must not receive that contact's message event. A successful run observes 31 idle seconds without application HTTP polling. |
@@ -88,8 +88,10 @@ This runner tests the actual Socket.IO protocol using the bench's existing
 `websockets` package. It does not drive the installed composer/template DOM,
 certify browser rendering, or test browser reconnect/catch-up behavior. The
 older `scripts/simulate.py` aggregates separate regression fixtures; it is not a
-substitute for this connected run. No p95 acceptance threshold is silently
-inferred from a small sample; the measured samples and failures are retained.
+substitute for this connected run. The storm gate explicitly requires p95 < 500 ms
+and at least five samples whose webhook-to-row intervals overlap a receipt
+worker's projection interval. Held 503 samples and the initial cold sample do
+not qualify. The measured samples and failures are retained.
 
 ## Launcher and control API
 
@@ -205,3 +207,87 @@ retained its 10-second TCP timeout, and replacing a contact invalidated Core's
 durable conversation binding. The socket now uses the protocol's own timeouts;
 fixture reruns preserve the original conversation contact. Reports retain every
 subcheck failure instead of allowing a later success to erase it.
+
+## Inbound latency work — awaiting connected validation
+
+The saved baseline captures permit this breakdown for the five warm inbounds
+sent while receipts were held at 503 (milliseconds):
+
+| Segment | p50 | p95 |
+| --- | ---: | ---: |
+| Signed webhook HTTP, including journal commit | 10.50 | 10.55 |
+| Webhook response to callback start, including Hub scheduling/database work | 152.14 | 203.33 |
+| Callback HTTP | 44.22 | 46.16 |
+| Callback completion to observed Core row | 542.70 | 554.07 |
+
+The initial cold message spent 1,044.65 ms after callback completion. The old
+report cannot separate receive, RQ enqueue, worker pickup/setup and projection;
+these numbers must not be described as measured worker execution times. Also,
+the held-receipt samples do not demonstrate latency during receipt processing.
+
+The pending change wakes the realtime dispatcher after successful webhook
+persistence. Signals coalesce and remain pending while an account or worker
+slot is busy. The 250 ms ticker still recovers missed signals, remote commits
+and retries; status delivery retains its separate one-second schedule and
+worker capacity. Database advisory locks and durable acknowledgements remain
+in force. This is an in-process wake, not a cross-replica notification.
+
+Core already used `short` for inbound and `long` for statuses. Now a callback
+containing one small WhatsApp text envelope (at most 16 KiB) projects within
+the receive transaction. Event/message writes commit together, failures abort
+the request for Hub retry, and replay keeps the existing event identity. Bulk
+inbound, media, other channels and malformed events retain background
+projection; statuses/templates remain on `long`. Automation, provider work and
+realtime publication retain their existing after-commit/background paths.
+
+New report evidence:
+
+- `inbound_breakdown`: ingress, estimated scheduling, Hub database/batch
+  preparation, callback HTTP, Core receive and inline projection durations.
+  Scheduling uses webhook response time as a commit proxy, so it is approximate
+  and clamped at zero when an immediate callback overlaps that response.
+- `core_diagnostics.projection_timings`: completed RQ job metadata for receive
+  through enqueue submission, enqueue preparation, queue wait, worker setup and
+  projection through commit. RQ enqueue/start timestamps use UTC wall time;
+  projection spans and inbound overlap use this host's monotonic clock.
+  `enqueue_ms` ends at RQ's enqueue timestamp, not Redis round-trip completion.
+- `storm_latency_ms`: p50/p95 only for inbounds overlapping actual receipt
+  projection, sample count, and receipt throughput over the first-to-last
+  projection span (including gaps between batches). It excludes initial queue
+  wait. Compare that span and successful callback batch timing on subsequent runs
+  before claiming status throughput is preserved.
+
+Timing samples are diagnostic, not additive: inline projection is included in
+receive and HTTP; queued projection can start before callback HTTP completes.
+RQ metadata expires with the normal finished-job retention. Its bounded registry
+reads and database observations are test instrumentation, never UI polling.
+
+**RESTART NEEDED.** The sandbox cannot inspect the user systemd bus or verify
+worker reload. Core backend changes and the new worker entry point have not been
+activated or tested through `yrp.site`. No service restart, migration, fixture
+export or connected rerun was performed. The original report is preserved;
+sub-500 ms storm latency and status throughput remain unverified.
+
+Orchestrator commands after reviewing the uncommitted changes:
+
+```sh
+systemctl --user restart v16-web v16-worker
+cd /home/sakthi/development/services/relay_hub
+PYTHONDONTWRITEBYTECODE=1 \
+/home/sakthi/development/pilot/benches/version_16/env/bin/python -B \
+  scripts/simulate_whatsapp_e2e.py \
+  --site yrp.site \
+  --sites /home/sakthi/development/pilot/benches/version_16/sites \
+  --core-origin http://127.0.0.1:8001 \
+  --socketio-origin http://127.0.0.1:9001 \
+  --report-dir .runtime/sim-report/latency
+```
+
+No DocType or hooks changes require migration. The connected runner still
+provisions the documented local fixtures and simulation settings.
+
+Local checks for this change: `go test -race ./...`, `go vet ./...`, the Hub
+binary build, 20 runner tests, eight new Core projection tests and runner dry-run
+passed. The full Core suite ran 180 tests before the final two test additions:
+175 passed, three skipped, and two existing audio tests errored because this
+sandbox has no `ffprobe`. Opt-in database/provider tests were not enabled.
