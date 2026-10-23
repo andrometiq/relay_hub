@@ -224,7 +224,7 @@ func (s *Store) Authenticate(ctx context.Context, token string) (Principal, erro
 	if !strings.HasPrefix(token, "relay_") || len(token) != 70 {
 		return p, ErrDenied
 	}
-	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.account_id,t.scopes FROM relay_api_tokens t JOIN relay_users u ON u.id=t.user_id JOIN relay_user_accounts g ON g.user_id=u.id AND g.account_id=t.account_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled`, Hash(token)).Scan(&p.UserID, &p.Account, &p.Scopes)
+	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.account_id,t.scopes FROM relay_api_tokens t JOIN relay_accounts a ON a.account_id=t.account_id AND a.enabled JOIN relay_users u ON u.id=t.user_id JOIN relay_user_accounts g ON g.user_id=u.id AND g.account_id=t.account_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled`, Hash(token)).Scan(&p.UserID, &p.Account, &p.Scopes)
 	if e != nil {
 		return p, ErrDenied
 	}

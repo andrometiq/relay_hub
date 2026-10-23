@@ -157,7 +157,7 @@ func (s *Store) Page(ctx context.Context, query, after string, limit int) ([]Acc
 	if limit < 1 || limit > 100 || len(query) > 80 || (after != "" && !idRE.MatchString(after)) {
 		return nil, "", errors.New("invalid account page")
 	}
-	pattern := "%" + strings.NewReplacer(``, `\`, "%", `\%`, "_", `\_`).Replace(strings.TrimSpace(query)) + "%"
+	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(strings.TrimSpace(query)) + "%"
 	rows, err := s.DB.Query(ctx, `WITH page AS (
  SELECT account_id,site,enabled FROM relay_accounts
  WHERE ($1='' OR account_id ILIKE $2 OR site ILIKE $2) AND ($3='' OR account_id>$3)
@@ -186,7 +186,7 @@ func (s *Store) PageBefore(ctx context.Context, query, before string, limit int)
 	if limit < 1 || limit > 100 || len(query) > 80 || !idRE.MatchString(before) {
 		return nil, false, errors.New("invalid account page")
 	}
-	pattern := "%" + strings.NewReplacer(`\\`, `\\\\`, "%", `\\%`, "_", `\\_`).Replace(strings.TrimSpace(query)) + "%"
+	pattern := "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(strings.TrimSpace(query)) + "%"
 	rows, err := s.DB.Query(ctx, `WITH preceding AS (
  SELECT account_id,site,enabled FROM relay_accounts
  WHERE ($1='' OR account_id ILIKE $2 OR site ILIKE $2) AND account_id<$3
@@ -227,14 +227,12 @@ func (s *Store) save(ctx context.Context, a Account, secrets map[string]string, 
 	if e := validate(a.ID, a.Site); e != nil {
 		return e
 	}
-	selected := []string{}
 	seen := map[string]bool{}
 	for _, c := range a.Channels {
 		if seen[c.Channel] {
 			return errors.New("duplicate channel")
 		}
 		seen[c.Channel] = true
-		selected = append(selected, c.Channel)
 		if !channels[c.Channel] {
 			return errors.New("unsupported channel")
 		}
@@ -316,9 +314,6 @@ func (s *Store) save(ctx context.Context, a Account, secrets map[string]string, 
 		if e != nil {
 			return e
 		}
-	}
-	if _, e = tx.Exec(ctx, `UPDATE relay_channel_credentials SET enabled=false,updated_at=now() WHERE account_id=$1 AND NOT(channel=ANY($2::text[]))`, a.ID, selected); e != nil {
-		return e
 	}
 	return tx.Commit(ctx)
 }

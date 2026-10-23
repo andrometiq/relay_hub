@@ -94,6 +94,9 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	if _, e = s.Issue(ctx, member, "unauthorized", "site-a", []string{"messages:send"}, 30); e == nil {
 		t.Fatal("ungranted token")
 	}
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES('site-a','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
 	if e = s.Grant(ctx, admin, id, "site-a", true); e != nil {
 		t.Fatal(e)
 	}
@@ -104,6 +107,16 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	p, e := s.Authenticate(ctx, token)
 	if e != nil || p.Account != "site-a" || !p.Allows("messages:send") || p.Allows("templates:write") {
 		t.Fatal("scope isolation", e)
+	}
+
+	for _, enabled := range []bool{false, true} {
+		if _, err := s.DB.Exec(ctx, "UPDATE relay_accounts SET enabled=$1 WHERE account_id='site-a'", enabled); err != nil {
+			t.Fatal(err)
+		}
+		restarted := &Store{DB: s.DB}
+		if _, err := restarted.Authenticate(ctx, token); (err == nil) != enabled {
+			t.Fatal("account enablement ignored", enabled, err)
+		}
 	}
 	if _, e = s.Authenticate(ctx, at); e == nil {
 		t.Fatal("session accepted as API token")

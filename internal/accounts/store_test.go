@@ -109,6 +109,34 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 		t.Fatal("account listing", err)
 	}
 
+	t.Run("partial channel save", func(t *testing.T) {
+		defer pool.Exec(ctx, `DELETE FROM relay_accounts WHERE account_id='partial-save'`)
+		a := Account{ID: "partial-save", Site: "https://fixture.invalid", Enabled: true, Channels: []Channel{
+			{Channel: "WhatsApp", Enabled: true, Config: map[string]any{"groups": true, "calls": true}},
+			{Channel: "Telegram", Enabled: true, Config: map[string]any{}},
+		}}
+		if err := store.Save(ctx, a, map[string]string{"Telegram": "synthetic-secret"}); err != nil {
+			t.Fatal(err)
+		}
+		a.Channels = a.Channels[:1]
+		if err := store.Save(ctx, a, nil); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := store.Runtime(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, row := range rows {
+			if row.AccountID == a.ID && row.Channel == "Telegram" {
+				found = row.Secret == "synthetic-secret"
+			}
+		}
+		if !found {
+			t.Fatal("partial WhatsApp save disabled hidden Telegram credentials")
+		}
+	})
+
 	t.Run("bounded searchable keyset pages", func(t *testing.T) {
 		for i := 0; i < 65; i++ {
 			row := Account{ID: fmt.Sprintf("page_%03d", i), Site: "https://page.example.test", Enabled: true, Channels: []Channel{{Channel: "Telegram", Enabled: true}, {Channel: "Email", Enabled: true}}}
@@ -208,9 +236,28 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err = store.Runtime(ctx)
-	if err != nil || len(runtime) != 0 {
-		t.Fatal("removed channel still active", err)
+	if err != nil || len(runtime) != 1 {
+		t.Fatal("omitted channel was disabled", err)
 	}
+	a.Enabled = false
+	if err = store.Save(ctx, a, nil); err != nil {
+		t.Fatal(err)
+	}
+	restarted, _ := New(pool, "test-only-encryption-key")
+	runtime, err = restarted.Runtime(ctx)
+	if err != nil || len(runtime) != 0 {
+		t.Fatal("disabled account reactivated after restart", err)
+	}
+	a.Enabled = true
+	a.Channels = []Channel{{Channel: "WhatsApp", Enabled: false}}
+	if err = store.Save(ctx, a, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err = restarted.Runtime(ctx)
+	if err != nil || len(runtime) != 0 {
+		t.Fatal("explicit channel disable ignored", err)
+	}
+
 	var count int
 	if err = pool.QueryRow(ctx, "SELECT count(*) FROM relay_channel_credentials").Scan(&count); err != nil || count != 1 {
 		t.Fatal("removed credentials were deleted", err)

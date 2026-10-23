@@ -2,6 +2,7 @@ import { ref, toRaw } from "vue";
 import { validateFields } from "../components/formValidation";
 import { hubApi } from "../services/hubApi";
 import {
+  accountSavePayload,
   activeChannels,
   whatsappReady,
   validateWhatsAppDraft,
@@ -90,23 +91,7 @@ export function useAccountEditor(accounts, saved) {
     saving.value = true;
     notice.value = "";
     try {
-      const config = {
-        ...(draft.value.channelConfig[WHATSAPP] || {}),
-        groups: false,
-        calls: false,
-      };
-      const account = {
-        id: draft.value.id.trim(),
-        site: new URL(draft.value.site).origin,
-        enabled: !!draft.value.enabled,
-        channels: [
-          {
-            channel: WHATSAPP,
-            enabled: !!draft.value.channelEnabled[WHATSAPP],
-            config,
-          },
-        ],
-      };
+      const account = accountSavePayload(draft.value);
       await hubApi("accounts", {
         account,
         secrets: { [WHATSAPP]: secrets.value[WHATSAPP] },
