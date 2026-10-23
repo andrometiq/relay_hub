@@ -1,0 +1,387 @@
+package whatsapp
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"github.com/jackc/pgx/v5"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+type Event struct {
+	ID      int64           `json:"id"`
+	Payload json.RawMessage `json:"payload"`
+}
+type EventStore interface {
+	Save(context.Context, string, []byte) error
+	List(context.Context, string, int64) ([]Event, error)
+}
+type PostgresEvents struct{ URL string }
+
+func (p PostgresEvents) Save(ctx context.Context, account string, body []byte) error {
+	c, e := pgx.Connect(ctx, p.URL)
+	if e != nil {
+		return e
+	}
+	defer c.Close(context.Background())
+	digest := sha256.Sum256(body)
+	tx, e := c.Begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback(context.Background())
+	_, e = tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane) VALUES($1,$2,$3,$4) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), eventLane(body))
+	if e != nil {
+		return e
+	}
+	for _, status := range extractStatuses(body) {
+		_, e = tx.Exec(ctx, `INSERT INTO relay_whatsapp_status(account,provider_id,status,status_rank,provider_timestamp) VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(account,provider_id) DO UPDATE SET status=excluded.status,status_rank=excluded.status_rank,provider_timestamp=excluded.provider_timestamp,updated_at=now()
+      WHERE excluded.status_rank>relay_whatsapp_status.status_rank OR (excluded.status_rank=relay_whatsapp_status.status_rank AND excluded.provider_timestamp>relay_whatsapp_status.provider_timestamp)`, account, status.ID, status.Status, status.Rank, status.Timestamp)
+		if e != nil {
+			return e
+		}
+	}
+	for _, status := range extractStatuses(body) {
+		if status.TrackingID > 0 {
+			_, e = tx.Exec(ctx, `UPDATE relay_outbox SET state='submitted',result=jsonb_build_object('messages',jsonb_build_array(jsonb_build_object('id',$3::text))),error='',updated_at=now() WHERE account=$1 AND id=$2 AND state IN ('submitting','uncertain')`, account, status.TrackingID, status.ID)
+			if e != nil {
+				return e
+			}
+		}
+	}
+	for _, message := range extractIncoming(body) {
+		raw, _ := json.Marshal(message)
+		_, e = tx.Exec(ctx, "INSERT INTO relay_whatsapp_incoming(account,provider_id,sender,payload) VALUES($1,$2,$3,$4) ON CONFLICT(account,provider_id) DO NOTHING", account, message["id"], message["from"], string(raw))
+		if e != nil {
+			return e
+		}
+	}
+	return tx.Commit(ctx)
+}
+func (p PostgresEvents) List(ctx context.Context, account string, after int64) ([]Event, error) {
+	c, e := pgx.Connect(ctx, p.URL)
+	if e != nil {
+		return nil, e
+	}
+	defer c.Close(context.Background())
+	rows, e := c.Query(ctx, "WITH page AS (SELECT id,payload FROM relay_whatsapp_events WHERE account=$1 AND id>$2 ORDER BY id LIMIT 50), sized AS (SELECT id,payload,sum(octet_length(payload::text)) OVER (ORDER BY id) AS bytes,row_number() OVER (ORDER BY id) AS position FROM page) SELECT id,payload FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id", account, after)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	events := []Event{}
+	for rows.Next() {
+		var event Event
+		if e = rows.Scan(&event.ID, &event.Payload); e != nil {
+			return nil, e
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("account")
+	accounts := s.AccountsSnapshot()
+	findByID := func() (Account, bool) {
+		for _, account := range accounts {
+			if account.ID == id {
+				return account, true
+			}
+		}
+		return Account{}, false
+	}
+	legacyAccount, legacyFound := findByID()
+	if id != "" && !legacyFound {
+		http.Error(w, "webhook unauthorized", http.StatusForbidden)
+		return
+	}
+	if r.Method == "GET" {
+		var a Account
+		found := false
+		if id != "" {
+			a, found = legacyAccount, legacyFound
+		} else {
+			token := r.URL.Query().Get("hub.verify_token")
+			for _, account := range accounts {
+				if account.VerifyToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(account.VerifyToken)) == 1 {
+					if found {
+						found = false
+						break
+					}
+					a, found = account, true
+				}
+			}
+		}
+		if !found || a.VerifyToken == "" || r.URL.Query().Get("hub.mode") != "subscribe" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("hub.verify_token")), []byte(a.VerifyToken)) != 1 {
+			http.Error(w, "invalid verification", 403)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(r.URL.Query().Get("hub.challenge")))
+		return
+	}
+	if r.Method != "POST" {
+		w.WriteHeader(405)
+		return
+	}
+	select {
+	case s.webhookSlots <- struct{}{}:
+		defer func() { <-s.webhookSlots }()
+	default:
+		http.Error(w, "webhook capacity reached; retry", http.StatusServiceUnavailable)
+		return
+	}
+	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if e != nil {
+		http.Error(w, "invalid body", 413)
+		return
+	}
+	var payload struct {
+		Object string `json:"object"`
+		Entry  []struct {
+			ID      string `json:"id"`
+			Changes []struct {
+				Value struct {
+					Metadata struct {
+						PhoneID string `json:"phone_number_id"`
+					} `json:"metadata"`
+				} `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if json.Unmarshal(raw, &payload) != nil || payload.Object != "whatsapp_business_account" || len(payload.Entry) == 0 {
+		http.Error(w, "invalid event", 400)
+		return
+	}
+	var a Account
+	found := false
+	if id != "" {
+		a, found = legacyAccount, legacyFound
+	} else {
+		for _, account := range accounts {
+			matches := true
+			for _, entry := range payload.Entry {
+				if entry.ID != account.WABAID {
+					matches = false
+					break
+				}
+				for _, change := range entry.Changes {
+					if change.Value.Metadata.PhoneID != "" && change.Value.Metadata.PhoneID != account.PhoneID {
+						matches = false
+						break
+					}
+				}
+			}
+			if matches {
+				if found {
+					found = false
+					break
+				}
+				a, found = account, true
+			}
+		}
+	}
+	if !found {
+		http.Error(w, "webhook unauthorized", http.StatusForbidden)
+		return
+	}
+	mac := hmac.New(sha256.New, []byte(a.AppSecret))
+	mac.Write(raw)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	if a.AppSecret == "" || !hmac.Equal([]byte(expected), []byte(r.Header.Get("X-Hub-Signature-256"))) {
+		http.Error(w, "invalid signature", 403)
+		return
+	}
+	for _, entry := range payload.Entry {
+		if entry.ID != a.WABAID {
+			http.Error(w, "account mismatch", 403)
+			return
+		}
+		for _, change := range entry.Changes {
+			if change.Value.Metadata.PhoneID != "" && change.Value.Metadata.PhoneID != a.PhoneID {
+				http.Error(w, "phone mismatch", 403)
+				return
+			}
+		}
+	}
+	if s.Events == nil {
+		http.Error(w, "event store unavailable", 503)
+		return
+	}
+	if e = s.Events.Save(r.Context(), a.ID, raw); e != nil {
+		http.Error(w, "event persistence failed", 503)
+		return
+	}
+	w.WriteHeader(200)
+}
+func (s *Service) events(ctx context.Context, a Account, after string) (map[string]any, error) {
+	cursor := int64(0)
+	var e error
+	if after != "" {
+		cursor, e = strconv.ParseInt(after, 10, 64)
+		if e != nil || cursor < 0 {
+			return nil, errors.New("invalid event cursor")
+		}
+	}
+	if s.Events == nil {
+		return nil, errors.New("event store unavailable")
+	}
+	events, e := s.Events.List(ctx, a.ID, cursor)
+	if e != nil {
+		return nil, errors.New("cannot read events")
+	}
+	next := cursor
+	if len(events) > 0 {
+		next = events[len(events)-1].ID
+	}
+	return map[string]any{"events": events, "next": strconv.FormatInt(next, 10)}, nil
+}
+
+// The raw event stays immutable; this projection tolerates duplicate and
+// out-of-order callbacks without moving a read message back to sent.
+type deliveryStatus struct {
+	TrackingID int64
+	ID, Status string
+	Rank       int
+	Timestamp  int64
+}
+
+func extractStatuses(raw []byte) []deliveryStatus {
+	var event struct {
+		Entry []struct {
+			Changes []struct {
+				Value struct {
+					Statuses []struct {
+						ID        string `json:"id"`
+						Status    string `json:"status"`
+						Timestamp string `json:"timestamp"`
+						Tracking  string `json:"biz_opaque_callback_data"`
+					} `json:"statuses"`
+				} `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		return nil
+	}
+	out := []deliveryStatus{}
+	ranks := map[string]int{"sent": 1, "failed": 2, "delivered": 3, "read": 4}
+	for _, entry := range event.Entry {
+		for _, change := range entry.Changes {
+			for _, s := range change.Value.Statuses {
+				timestamp, err := strconv.ParseInt(s.Timestamp, 10, 64)
+				rank := ranks[s.Status]
+				if rank == 0 || !callIdentifier.MatchString(s.ID) || err != nil || timestamp < 0 {
+					continue
+				}
+				trackingID := int64(0)
+				if strings.HasPrefix(s.Tracking, "relay-outbox:") {
+					trackingID, _ = strconv.ParseInt(strings.TrimPrefix(s.Tracking, "relay-outbox:"), 10, 64)
+				}
+				out = append(out, deliveryStatus{ID: s.ID, Status: s.Status, Rank: rank, Timestamp: timestamp, TrackingID: trackingID})
+			}
+		}
+	}
+	return out
+}
+
+func eventLane(body []byte) string {
+	var event struct {
+		Entry []struct {
+			Changes []struct {
+				Value map[string]json.RawMessage `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if json.Unmarshal(body, &event) != nil {
+		return "realtime"
+	}
+	for _, entry := range event.Entry {
+		for _, change := range entry.Changes {
+			for key := range change.Value {
+				if key == "messages" || key == "calls" || strings.HasPrefix(key, "group") {
+					return "realtime"
+				}
+			}
+		}
+	}
+	if len(extractStatuses(body)) > 0 {
+		return "status"
+	}
+	return "realtime"
+}
+
+func (p PostgresEvents) Latest(ctx context.Context, account string) ([]Event, error) {
+	c, err := pgx.Connect(ctx, p.URL)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close(context.Background())
+	rows, err := c.Query(ctx, `WITH page AS (SELECT id,payload FROM relay_whatsapp_events WHERE account=$1 ORDER BY id DESC LIMIT 50), sized AS (SELECT *,sum(octet_length(payload::text)) OVER(ORDER BY id DESC) bytes,row_number() OVER(ORDER BY id DESC) position FROM page) SELECT id,payload FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id`, account)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := []Event{}
+	for rows.Next() {
+		var event Event
+		if err = rows.Scan(&event.ID, &event.Payload); err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	return events, rows.Err()
+}
+func (s *Service) latestEvents(ctx context.Context, a Account) (map[string]any, error) {
+	store, ok := s.Events.(interface {
+		Latest(context.Context, string) ([]Event, error)
+	})
+	if !ok {
+		return nil, errors.New("latest events unavailable")
+	}
+	events, err := store.Latest(ctx, a.ID)
+	if err != nil {
+		return nil, errors.New("cannot read latest events")
+	}
+	cursor := "0"
+	if len(events) > 0 {
+		cursor = strconv.FormatInt(events[len(events)-1].ID, 10)
+	}
+	return map[string]any{"events": events, "next": cursor}, nil
+}
+
+func extractIncoming(body []byte) []map[string]any {
+	var event struct {
+		Entry []struct {
+			Changes []struct {
+				Value struct {
+					Messages []map[string]any `json:"messages"`
+				} `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if json.Unmarshal(body, &event) != nil {
+		return nil
+	}
+	out := []map[string]any{}
+	for _, entry := range event.Entry {
+		for _, change := range entry.Changes {
+			for _, message := range change.Value.Messages {
+				id, _ := message["id"].(string)
+				sender, _ := message["from"].(string)
+				if callIdentifier.MatchString(id) && digits.MatchString(sender) {
+					out = append(out, message)
+				}
+			}
+		}
+	}
+	return out
+}

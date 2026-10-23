@@ -1,30 +1,79 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { Button, Badge, FeatherIcon, FormControl, ErrorMessage } from 'frappe-ui'
-import DocumentForm from './components/DocumentForm.vue'
-import { validateFields } from './components/formValidation'
-const view=ref('Overview'), status=ref('Checking'), busy=ref(false), search=ref(''), editing=ref(false), errors=ref({}), notice=ref('')
-const accounts=ref([]), draft=ref({name:'',site:'',channels:[],enabled:true}), editingID=ref(null)
-const nav=[['Overview','grid'],['Accounts','users'],['Channels','message-circle'],['Delivery','send'],['Events','activity']]
-const fields=[{name:'name',label:'Account name',type:'Data',required:true},{name:'site',label:'Site URL',type:'Data',required:true,url:true,placeholder:'https://erp.example.com'},{name:'channels',label:'Channels',type:'MultiSelect',options:['WhatsApp','Telegram','Email'],required:true,wide:true},{name:'enabled',label:'Enabled',type:'Check'}]
-const visible=computed(()=>accounts.value.filter(a=>(a.name+' '+a.site).toLowerCase().includes(search.value.toLowerCase())))
-const channelRows=computed(()=>accounts.value.flatMap(a=>a.channels.map(channel=>({account:a.name,channel,site:a.site}))))
-async function refresh(){busy.value=true;try{const r=await fetch('/readyz');status.value=r.ok?'Ready':'Unavailable'}catch{status.value='Unavailable'}finally{busy.value=false}}
-function navigate(next){view.value=next;editing.value=false;errors.value={};notice.value='';search.value=''}
-function edit(account){editingID.value=account?.id||null;draft.value=account?{...account,channels:[...account.channels]}:{name:'',site:'',channels:[],enabled:true};errors.value={};editing.value=true;notice.value=''}
-function save(){errors.value=validateFields(fields,draft.value);if(accounts.value.some(a=>a.name.toLowerCase()===draft.value.name.trim().toLowerCase()&&a.id!==editingID.value))errors.value.name='An account with this name already exists.';if(Object.keys(errors.value).length)return;const row={...draft.value,name:draft.value.name.trim(),site:new URL(draft.value.site).origin,id:editingID.value||crypto.randomUUID(),channels:[...draft.value.channels]};const i=accounts.value.findIndex(a=>a.id===editingID.value);if(i>=0)accounts.value[i]=row;else accounts.value.push(row);editing.value=false;notice.value='Draft saved for this session.'}
-onMounted(refresh)
+import ThemeSwitcher from "./components/ThemeSwitcher.vue";
+import { onMounted, ref } from "vue";
+import { Button, Badge, FeatherIcon, ErrorMessage } from "@relay/ui";
+import { useViewRoute } from "./useViewRoute";
+import { useHubData } from "./composables/useHubData";
+import AccountsView from "./views/AccountsView.vue";
+const nav = [["Accounts", "briefcase"]];
+const view = useViewRoute(
+    nav.map(([name]) => name),
+    "Accounts",
+  ),
+  mobile = ref(false);
+const {
+  accounts,
+  status,
+  busy,
+  error,
+  refresh,
+  accountPage,
+  searchAccounts,
+  changePage,
+} = useHubData();
+function navigate(name) {
+  view.value = name;
+  mobile.value = false;
+}
+onMounted(refresh);
 </script>
 <template>
-<div class="hub-shell">
- <aside class="hub-nav"><div class="flex items-center gap-2 px-2 py-5 mb-5"><FeatherIcon name="radio" class="w-5 h-5"/><strong class="nav-label">Relay Hub</strong></div><button v-for="[name,icon] in nav" :key="name" class="hub-nav-item" :class="{selected:view===name}" :aria-label="name" @click="navigate(name)"><FeatherIcon :name="icon" class="h-4 w-4"/><span class="nav-label">{{name}}</span></button><div class="mt-auto px-2 py-4 text-xs text-ink-gray-5 nav-label">Local development</div></aside>
- <main class="min-w-0 flex flex-col min-h-0"><header class="hub-header"><h1 class="text-base font-medium">{{view}}<span v-if="editing" class="text-ink-gray-4"> / {{editingID?'Edit account':'New account'}}</span></h1><Badge label="Development"/><div class="ml-auto flex gap-2"><Button v-if="view==='Overview'" label="Refresh" :loading="busy" @click="refresh"/><template v-if="view==='Accounts'"><template v-if="editing"><Button label="Cancel" @click="editing=false"/><Button label="Save draft" variant="solid" @click="save"/></template><Button v-else label="New account" variant="solid" icon-left="plus" @click="edit(null)"/></template></div></header>
- <div class="hub-page"><p v-if="notice" role="status" class="text-sm text-ink-gray-6 mb-4">{{notice}}</p>
-  <template v-if="view==='Overview'"><h2 class="text-xl font-semibold mb-6">Overview</h2><div class="metrics"><article><span>Service</span><Badge :label="status" :theme="status==='Ready'?'green':'red'"/></article><article><span>Account drafts</span><strong>{{accounts.length}}</strong></article><article><span>Connected channels</span><strong>0</strong></article></div><section class="hub-card mt-6"><h3 class="font-medium mb-5">Infrastructure</h3><div class="flex justify-between py-3 border-b"><span>Database</span><span>PostgreSQL 18</span></div><div class="flex justify-between py-3"><span>Provider connections</span><span class="text-ink-gray-5">Not configured</span></div></section></template>
-  <template v-else-if="view==='Accounts'"><div v-if="editing" class="max-w-3xl mx-auto"><h2 class="text-xl font-semibold mb-2">{{editingID?'Edit account':'New account'}}</h2><p class="text-sm text-ink-gray-5 mb-7">Draft only. Connection setup is not available yet.</p><DocumentForm v-model="draft" :fields="fields" :errors="errors"/></div><template v-else><div class="max-w-xs mb-5"><FormControl v-model="search" placeholder="Search accounts" aria-label="Search accounts"/></div><div class="table-wrap"><table class="hub-table"><thead><tr><th>Account</th><th>Site</th><th>Channels</th><th>Status</th><th></th></tr></thead><tbody><tr v-for="a in visible" :key="a.id"><td>{{a.name}}</td><td>{{a.site}}</td><td><Badge v-for="c in a.channels" :key="c" :label="c" class="mr-1"/></td><td><Badge :label="a.enabled?'Draft':'Disabled draft'"/></td><td><Button :label="'Edit '+a.name" @click="edit(a)"/></td></tr></tbody></table></div><div v-if="!visible.length" class="empty-state"><h2>{{accounts.length?'No matching accounts':'No accounts yet'}}</h2><Button v-if="!accounts.length" label="New account" @click="edit(null)"/></div></template></template>
-  <template v-else-if="view==='Channels'"><div class="table-wrap"><table class="hub-table"><thead><tr><th>Channel</th><th>Account</th><th>Site</th><th>Status</th></tr></thead><tbody><tr v-for="(c,i) in channelRows" :key="i"><td>{{c.channel}}</td><td>{{c.account}}</td><td>{{c.site}}</td><td><Badge label="Not connected"/></td></tr></tbody></table></div><div v-if="!channelRows.length" class="empty-state"><h2>No channels configured</h2><Button label="Accounts" @click="navigate('Accounts')"/></div></template>
-  <template v-else-if="view==='Delivery'"><div class="metrics"><article><span>Pending</span><strong>—</strong></article><article><span>Delivered</span><strong>—</strong></article><article><span>Failed</span><strong>—</strong></article></div><div class="empty-state"><h2>No delivery data</h2><p>Delivery workers are not connected yet.</p></div></template>
-  <template v-else><div class="empty-state"><h2>No events available</h2><p>Provider event ingestion is not connected yet.</p></div></template>
- </div></main>
-</div>
+  <div class="hub-shell" @keydown.esc="mobile=false"><button v-if="mobile" class="hub-nav-backdrop" aria-label="Close navigation" @click="mobile=false"/>
+    <aside
+      class="hub-nav"
+      :class="{ 'mobile-nav-open': mobile }"
+      aria-label="Main navigation"
+    >
+      <a href="#/accounts" class="hub-brand"><span class="hub-brand-mark"><FeatherIcon name="radio" class="h-4 w-4"/></span><strong class="nav-label">Relay Hub</strong></a><div class="hub-nav-caption nav-label">Administration</div>
+      <button
+        v-for="[name, icon] in nav"
+        :key="name"
+        class="hub-nav-item"
+        :class="{ selected: view === name }"
+        :aria-label="name"
+        :title="name"
+        :aria-current="view === name ? 'page' : undefined"
+        @click="navigate(name)"
+      >
+        <FeatherIcon :name="icon" class="h-4 w-4" /><span class="nav-label">{{
+          name
+        }}</span>
+      </button>
+      <div class="hub-nav-footer"><a href="./auth/users" class="hub-nav-item" title="Users"><FeatherIcon name="users" class="h-4 w-4"/><span class="nav-label">Users</span></a><a href="./auth/tokens" class="hub-nav-item" title="Auth keys"><FeatherIcon name="key" class="h-4 w-4"/><span class="nav-label">Auth keys</span></a></div>
+    </aside>
+    <main class="min-w-0 flex flex-col min-h-0">
+      <header class="hub-header">
+        <ThemeSwitcher />
+        <button class="hub-mobile-menu" aria-label="Toggle navigation" :aria-expanded="mobile" @click="mobile=!mobile"><FeatherIcon name="menu" class="h-4 w-4"/></button><span class="hub-breadcrumb">Relay Hub</span><span class="hub-breadcrumb text-ink-gray-3">/</span><h1 class="text-base font-medium">{{ view }}</h1>
+        <Badge
+          :label="status"
+          :theme="status === 'Ready' ? 'green' : 'orange'"
+        />
+        <div class="ml-auto flex gap-2">
+          <Button label="Refresh" :loading="busy" @click="refresh" />
+        </div>
+      </header>
+      <div class="hub-page">
+        <ErrorMessage :message="error" />
+        <AccountsView
+          v-if="view === 'Accounts'"
+          :accounts="accounts"
+          :refresh="refresh"
+          :page="accountPage"
+          @search="searchAccounts"
+          @page="changePage"
+        />
+      </div>
+    </main>
+  </div>
 </template>

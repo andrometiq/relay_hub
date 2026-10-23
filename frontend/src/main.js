@@ -1,4 +1,6 @@
+import './services/theme'
 import { createApp } from 'vue'
-import App from './App.vue'
+import PrimeVue from 'primevue/config'
+import App from './Root.vue'
 import './style.css'
-createApp(App).mount('#app')
+createApp(App).use(PrimeVue, { unstyled: true }).mount('#app')

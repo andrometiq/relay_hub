@@ -1,0 +1,20 @@
+[
+  {
+    "id": "relay-account-1",
+    "site": "https://core.example.com",
+    "core_token": "replace-with-a-unique-random-account-token-at-least-32-characters",
+    "access_token": "replace-with-meta-system-user-token",
+    "graph_version": "v25.0",
+    "phone_id": "123456789",
+    "waba_id": "987654321",
+    "app_secret": "replace-with-meta-app-secret",
+    "verify_token": "replace-with-a-random-webhook-verification-token",
+    "templates": true,
+    "groups": false,
+    "calls": false,
+    "messages_per_second": 50,
+    "core_api_key": "",
+    "core_api_secret": "",
+    "callback_secret": ""
+  }
+]

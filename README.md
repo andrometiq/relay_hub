@@ -1,83 +1,30 @@
 # Relay Hub
 
-Go-based transport foundation for Relay Core. This repository now provides dependency checks, a local PostgreSQL setup, versioned migrations, a Go HTTP server and a Frappe UI-based status page. A token-protected MCP `health.get` tool is implemented. Channel delivery, business MCP operations and account administration are not implemented yet.
+Relay Hub is the Go transport service for [Relay Core](https://github.com/andrometiq/frappe_relay_core), a Frappe app. One Hub serves multiple accounts; each account links one Core site to its WhatsApp, Telegram and email connections.
 
-## Install and start
+The Hub provides a Frappe-style administration UI, PostgreSQL-backed users and sessions, account-scoped MCP tools, provider adapters, event journals and Core callbacks. Core owns contacts, business permissions, conversations and AI automation.
+
+**Start with the [quickstart](docs/quickstart.md).** It covers PostgreSQL 18, private configuration, the first administrator, HTTPS browser access and a readiness check. Installation alone does not provision provider accounts or prove live delivery.
+
+| Task | Documentation |
+| --- | --- |
+| Understand the system | [Architecture](docs/architecture.md) |
+| Install and configure | [Quickstart](docs/quickstart.md), [configuration](docs/configuration.md) |
+| Manage users and tokens | [Authentication](docs/authentication.md) |
+| Integrate an application | [MCP and message reference](docs/api-reference.md) |
+| Check channel support | [Provider support matrix](docs/provider-support.md) |
+| Build, restart or migrate | [Operations](docs/operations.md) |
+| Run local simulations | [Testing](docs/testing.md) |
+| Browse everything | [Documentation index](docs/README.md) |
+
+After setup, the daily commands are:
 
 ```sh
-./relay install
+./relay build-ui
+./relay migrate
 ./relay restart
 ```
 
-Open http://127.0.0.1:18081. Installation checks Go **1.26+**, Node.js **22 or 24**, npm, curl, flock and setsid. The local database option requires PostgreSQL **18.x** server tools (`initdb`, `pg_ctl`, `psql`, `createdb`). Missing tools produce an actionable error; the installer does not run sudo or replace system packages. Use your OS package manager to install the required major versions, then rerun. Keep supported patch releases current.
+Local simulations exercise synthetic provider responses, authentication and isolated databases. They do not establish live-provider eligibility, recipient display or production capacity; see [validation results](docs/simulation-validation.md).
 
-Installation creates the default local `.env` when absent, downloads locked Go/npm dependencies, starts a private PostgreSQL cluster under `.runtime/postgres`, creates the empty Hub database, applies migrations and builds the UI. PostgreSQL uses a private Unix socket and peer authentication, with TCP disabled. It does not touch the system PostgreSQL service or existing Frappe databases. Run as a regular user, not root. This local setup is for development.
-
-## Three daily operations
-
-| Command | Behavior |
-|---|---|
-| `./relay build-ui` | Install locked frontend dependencies and build the UI. Changes are activated by restart. |
-| `./relay restart` | Build UI and Go before stopping the running Hub; check database/schema; gracefully stop only this checkout's process; launch a release with its own UI snapshot; verify readiness. Restore the old release if the new process fails. |
-| `./relay migrate` | Compile the migration runner and apply pending SQL changes transactionally. Repeated runs are safe. Does not infer changes from Go structs or modify business records automatically. |
-
-Equivalent commands: `make build-ui`, `make restart`, `make migrate`.
-
-Additional commands: `./relay doctor`, `./relay status`, `./relay stop`. Stop leaves the local database running. To stop this checkout's database explicitly: `pg_ctl -D "$PWD/.runtime/postgres" -m fast -w stop`. No automatic deletion or database major-version upgrades.
-
-## Database migrations
-
-Add a new sequential SQL file in `internal/database/migrations/`. Never edit an already-applied migration. The runner uses a PostgreSQL advisory transaction lock and a checksum ledger. An unknown migration, changed checksum or wrong PostgreSQL major fails. All pending changes in one run commit together; failure rolls back the transaction. No down/reset command is provided. Use additive migrations and a separately reviewed data transition for incompatible production changes.
-
-`restart` does not run migrations implicitly: pending schema changes require `./relay migrate`. The first install applies the initial schema. `/healthz` checks the process; `/readyz` verifies database access and expected migration checksums. This is version/checksum validation, not a full catalog drift detector.
-
-For an existing managed PostgreSQL 18 server, export `DATABASE_URL` before commands. Relay will check it but will not initialize or start an external database. Provision a dedicated Hub database/role first; migrations require DDL rights. Avoid placing credentials in shell history or source control. Project `.env` is loaded automatically by the launcher and Go server. `./relay install` creates it with mode 0600 and a random service token when missing, and preserves an existing file. Environment variables override file values. The parser accepts literal KEY=value lines and optional surrounding quotes; no shell execution, interpolation or multiline values. Unknown/duplicate keys fail. `.env.example` documents supported keys. External deployments should use TLS, dedicated runtime/migration roles and a service manager.
-
-## Testing
-
-```sh
-go test ./...
-# Against the isolated local Hub database (creates and removes only test schemas):
-RELAY_TEST_DATABASE_URL="host=$PWD/.runtime/pgsocket port=18432 user=$(id -un) dbname=relay_hub sslmode=disable" go test ./... -v
-go vet ./...
-```
-
-Integration tests cover migration reruns/readiness, edited checksums, newer schemas and rollback after failure. The test URL must refer to a development database, never production.
-
-`.runtime/` contains local databases, release binaries/UI snapshots, PID and logs, and is ignored by Git. Release snapshots are retained for rollback; retention cleanup is not yet automatic. Restart has a brief interruption and is not a zero-downtime deployment mechanism. The shell launcher is Linux-specific (`/proc`, `flock`).
-
-The status page is intentionally loopback-only until authentication is implemented. The database is checked at startup; no automatic provider connections or messages are sent.
-
-## Development workflow
-
-Work only on `develop`. The user merges into production `main`. See [architecture](docs/architecture.md).
-
-Dependencies: [PostgreSQL supported versions](https://www.postgresql.org/support/versioning/), [pgx Go driver](https://github.com/jackc/pgx), [Frappe UI](https://github.com/frappe/frappe-ui).
-
-## First Core integration
-
-The loopback-only `/mcp` endpoint uses the official Go MCP SDK with stateless JSON responses. It requires `Authorization: Bearer <RELAY_MCP_TOKEN>` and rejects browser Origin requests. The initial tool is read-only `health.get`. This is a development service credential, not production multi-tenant OAuth/authorization. Never put this token in frontend/Vite variables. Relay Core has a matching server-side `python3 -m relay_core check-hub` client.
-
-Configure `.env`, then run `./relay restart` to activate changes. The launcher loads `.env` before resolving local DB defaults; standalone Go commands additionally require a concrete DATABASE_URL if not launched through `./relay`.
-
-## Administration UI
-
-Overview, account draft forms and channel views are now available. Account drafts are in-memory only. Delivery and Events show explicit unavailable states until worker/provider integration exists. See [UI progress](docs/ui-progress.md).
-
-### Project configuration
-
-`./relay install` creates a private, gitignored `.env` (mode 0600). Existing
-values and service tokens are preserved. Use `.env.example` as the documented
-shape; do not copy its placeholder token over an existing configuration.
-
-- `RELAY_ADDR`: local HTTP bind address and port.
-- `RELAY_PG_PORT`: isolated local PostgreSQL port (default 18432, validated).
-- `DATABASE_URL`: an external PostgreSQL 18 connection string; leave empty for
-  the checkout's local cluster. This can specify host, port, database and user.
-- `RELAY_MCP_TOKEN`: private Core-to-Hub service credential.
-
-`./relay config` displays the effective address, local database port and database
-mode without printing credentials. A running local PostgreSQL cluster retains
-its startup port; stop that cluster before changing its configured port.
-`./relay restart` rebuilds and reloads Go and UI; `./relay build-ui` only builds
-the UI; `./relay migrate` applies schema changes.
+These documents describe the current local working tree, including changes that may not yet be pushed to GitHub. Development takes place on `develop`. The repository owner merges production changes into `main`. Follow [AGENTS.md](AGENTS.md) and keep credentials, local databases and generated reports out of Git.
