@@ -23,6 +23,7 @@ type deliveryChange struct {
 	Outcome    string `json:"outcome"`
 	Note       string `json:"note"`
 	ProviderID string `json:"provider_id"`
+	ChatID     int64  `json:"chat_id"`
 }
 type deliveryPage struct {
 	Rows any  `json:"deliveries"`
@@ -69,7 +70,7 @@ func (b hubDeliveryBackend) Change(ctx context.Context, in deliveryChange) error
 	if in.Action == "cancel" {
 		return b.channels.Cancel(ctx, in.Account, id)
 	}
-	return b.channels.Resolve(ctx, in.Account, id, in.Outcome, in.Note)
+	return b.channels.Resolve(ctx, in.Account, id, in.Outcome, in.Note, channels.Resolution{ProviderID: in.ProviderID, ChatID: in.ChatID})
 }
 
 var deliveryAccount = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
