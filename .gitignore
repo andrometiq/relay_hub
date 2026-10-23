@@ -11,3 +11,4 @@ coverage.out
 node_modules/
 frontend/dist/
 frontend/.vite/
+whatsapp.accounts.json

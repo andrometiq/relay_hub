@@ -1,5 +1,7 @@
 # Setup validation — 21 September 2026
 
+> Historical checkpoint. Claims and test results below describe that stage of development. Use the [current support matrix](provider-support.md), [API reference](api-reference.md) and [testing guide](testing.md) for current behavior.
+
 Test environment: Linux, Go 1.27.0, Node 24.20.0, npm 11.19.0, PostgreSQL 18.6. PostgreSQL cluster belongs only to this checkout and listens on its private Unix socket; shared databases and apps were not modified.
 
 Passed:

@@ -52,8 +52,12 @@ func TestMigrationRepeatAndReady(t *testing.T) {
 	}
 	var count int
 	c.QueryRow(ctx, "SELECT count(*) FROM relay_schema_migrations").Scan(&count)
-	if count != 1 {
-		t.Fatalf("expected one applied migration, got %d", count)
+	entries, err := Files.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != len(entries) {
+		t.Fatalf("expected %d applied migrations, got %d", len(entries), count)
 	}
 }
 func TestChecksumDriftRejected(t *testing.T) {

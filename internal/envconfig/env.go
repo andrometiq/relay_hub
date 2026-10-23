@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-var Keys = []string{"RELAY_PG_PORT", "DATABASE_URL", "RELAY_ADDR", "RELAY_MCP_TOKEN", "GOMAXPROCS", "GOFLAGS"}
+var Keys = []string{"RELAY_REVIEW_CORE_SOCKET", "RELAY_REVIEW_CORE_UPSTREAM", "RELAY_REVIEW_CORE_SITE", "RELAY_PUBLIC_ORIGIN", "RELAY_PUBLIC_PREFIX", "RELAY_REVIEW_ORIGIN", "RELAY_REVIEW_USER", "RELAY_REVIEW_SALT", "RELAY_REVIEW_PASSWORD_HASH", "RELAY_OUTBOX_WORKERS", "RELAY_DATABASE_MODE", "POSTGRES_PASSWORD", "CHANNEL_DB_PASSWORD", "RELAY_DB_PORT", "RELAY_WHATSAPP_CONFIG", "RELAY_PG_PORT", "DATABASE_URL", "RELAY_ADDR", "RELAY_MCP_TOKEN", "GOMAXPROCS", "GOFLAGS", "RELAY_CREDENTIAL_KEY", "RELAY_TELEGRAM_WEBHOOK_SECRET", "RELAY_EMAIL_WEBHOOK_SECRET"}
 
 func Parse(data string) (map[string]string, error) {
 	allowed := map[string]bool{}
@@ -81,7 +81,7 @@ func Ensure(path string) error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("cannot inspect .env")
 	}
-	token := make([]byte, 32)
+	token := make([]byte, 128)
 	if _, err := rand.Read(token); err != nil {
 		return err
 	}
@@ -90,6 +90,6 @@ func Ensure(path string) error {
 		return err
 	}
 	defer file.Close()
-	_, err = fmt.Fprintf(file, "# Local Relay Hub configuration. Never commit this file.\n# Empty DATABASE_URL selects this checkout's private PostgreSQL cluster.\nDATABASE_URL=\nRELAY_PG_PORT=18432\nRELAY_ADDR=127.0.0.1:18081\nRELAY_MCP_TOKEN=%s\nGOMAXPROCS=2\nGOFLAGS=-p=2\n", hex.EncodeToString(token))
+	_, err = fmt.Fprintf(file, "# Local Relay Hub configuration. Never commit this file.\n# Empty DATABASE_URL selects this checkout's private PostgreSQL cluster.\nDATABASE_URL=\nRELAY_PG_PORT=18432\nRELAY_ADDR=127.0.0.1:18081\nRELAY_MCP_TOKEN=%s\nRELAY_CREDENTIAL_KEY=%s\nRELAY_TELEGRAM_WEBHOOK_SECRET=%s\nRELAY_EMAIL_WEBHOOK_SECRET=%s\nGOMAXPROCS=2\nGOFLAGS=-p=2\n", hex.EncodeToString(token[:32]), hex.EncodeToString(token[32:64]), hex.EncodeToString(token[64:96]), hex.EncodeToString(token[96:]))
 	return err
 }

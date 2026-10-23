@@ -38,6 +38,13 @@ func TestEnsurePreservesConfig(t *testing.T) {
 		t.Fatal("unsafe mode")
 	}
 	values, e := Parse(string(first))
+	seen := map[string]bool{}
+	for _, key := range []string{"RELAY_MCP_TOKEN", "RELAY_CREDENTIAL_KEY", "RELAY_TELEGRAM_WEBHOOK_SECRET", "RELAY_EMAIL_WEBHOOK_SECRET"} {
+		if len(values[key]) != 64 || seen[values[key]] {
+			t.Fatal("missing or reused generated secret", key)
+		}
+		seen[values[key]] = true
+	}
 	if e != nil || len(values["RELAY_MCP_TOKEN"]) != 64 {
 		t.Fatal("missing generated token")
 	}

@@ -1,51 +1,127 @@
-# Proposed architecture
+# Relay Hub architecture
+
+Relay Hub is the Go transport boundary. Relay Core is a Frappe app installed alongside business apps and uses Frappe authentication. Hub's separate administrator login manages transport accounts, users and tokens; it is not a replacement Core login.
 
 ```mermaid
-flowchart TD
-    Core[Relay Core sites - Frappe] -->|Scoped MCP commands| API[Relay Hub - Go]
-    API --> DB[(PostgreSQL durable inbox and outbox)]
-    DB --> Workers[Bounded workers and account rate limits]
-    Workers --> Channels[WhatsApp / Telegram / Email]
-    Channels -->|Verified inbound events| API
-    DB --> Callbacks[Durable site callbacks]
-    Callbacks -->|Immediate replies and reactions| Core
-    Callbacks -->|Batched delivery statuses| Core
-    API --> Media[Private media storage]
+flowchart LR
+    UI[Hub administration UI] -->|Secure session and CSRF| Hub[Go Relay Hub]
+    Core[Relay Core on each Frappe site] -->|Account-scoped MCP token| Hub
+    Hub --> Auth[(PostgreSQL accounts, users, sessions, audit)]
+    Hub -->|WhatsApp delivery intents| Queue[(Durable WhatsApp outbox)]
+    Queue --> Workers[Bounded workers and account pacing]
+    Workers --> WA[Meta WhatsApp]
+    Hub -->|Direct submission| TG[Telegram Bot API]
+    Hub -->|TLS SMTP| Mail[Email server]
+    WA -->|Verified webhook| Events[(Durable event journals)]
+    TG -->|Per-account verified webhook| Events
+    Ingress[Normalized email ingress] -->|Verified JSON| Events
+    Events --> Callbacks[Durable callback cursors]
+    Callbacks -->|Signed events and status batches| Core
 ```
 
-## Ownership
+## Ownership and identity
 
-Each Hub account maps to exactly one Core site and enables selected channel connections. Every tenant-owned row and reference is account-scoped. Core owns business permissions and AI; Hub owns provider transport and credential isolation. The Hub administration UI will use Frappe-style frontend components without requiring Frappe as its runtime.
+A Hub account links one Core site and can enable several channels. Provider credentials stay in Hub; tokens authorize an account and explicit tool scopes. Core resolves Contacts, business records, teams, user permissions, conversation bindings and AI actions. An account-level Hub permission does not replace a business-record check in Core.
 
-## Durability
+PostgreSQL stores sequential numeric identities for high-volume journals and queue rows. Provider message IDs, Telegram chat/topic IDs and caller request keys are separate fields. Group conversations remain separate from participant DMs; quoted replies retain the original provider message ID. See the [database model](database-authentication-model.md) and [API reference](api-reference.md).
 
-Commit incoming submissions and callback events before acknowledging acceptance. Use stable caller message IDs and provider event IDs for deduplication. Claim queued work with short PostgreSQL transactions, leases and fencing tokens; release database locks before network calls.
+## Send and receive guarantees
 
-Delivery is not assumed exactly once. A timeout after provider submission can be indeterminate; do not blindly resend when provider idempotency or reconciliation cannot establish the outcome.
+WhatsApp's durable outbox admits bounded batches of up to 50 intents with stable-key deduplication. Workers claim work through PostgreSQL and obey account pacing. A queued result means accepted locally, while submitted means the provider returned an accepted result; neither proves delivery or reading.
 
-## Throughput
+A lost provider response can leave an intent uncertain. The Hub does not blindly replay that mutation. Stored status events can reconcile receipts without resending. Direct WhatsApp execution, Telegram message operations and SMTP sending do not inherit the WhatsApp queue's admission/deduplication guarantees.
 
-Core submits bounded chunks, initially 50 messages. Separate interactive work from campaigns; use per-account quotas, provider-aware rate limits, retry backoff and bounded callback concurrency. Batch statuses by count or short timer while preserving a priority lane for inbound replies, reactions and call events. One offline site must not block other accounts.
+Verified inbound payloads are journaled before acknowledgement. Callback cursors advance after Core acknowledges durable processing. WhatsApp separates realtime and batched-status lanes; Telegram/email use the channel-event callback path. Raw payloads remain available for provenance and typed projection. Reactions, edited messages and membership events are not equivalent to new conversational text.
 
-## Interfaces
+## Bounded resources
 
-Use versioned typed MCP commands for submissions, batch status, templates, channel configuration and call operations. Provider webhooks and Core callbacks use authenticated HTTP. Share authorization and application services across transport handlers. Never return stored credentials from tools.
+The launcher defaults to limited Go/build concurrency. WhatsApp adapts worker count between one and the configured ceiling, up to eight; this is process worker scaling, not automatic deployment scaling. PostgreSQL coordinates account send pacing across workers.
 
-Event envelopes carry schema version, event ID, account/channel connection, entity ID, event kind, occurred/ingested times and correlation ID. Core acknowledges only after durable deduplication and projection updates. Preserve raw provider events alongside normalized states.
+Queries, batches, provider bodies, photo dimensions and sticker downloads have explicit bounds. Frontend lists use [bounded rendering](frappe-virtualization.md) and server pagination. Capacity depends on provider latency, database limits and workload; simulations do not promise a production throughput figure.
 
-## Channels and media
+## Credentials and media
 
-WhatsApp template/provider states remain authoritative; combine webhook updates with hourly reconciliation. Telegram preserves originating bot, chat and topic identifiers. Email preserves MIME and reply-thread headers and prevents automated forwarding/reply loops.
+Runtime registry replacement publishes validated snapshots so later requests see rotated or disabled channel credentials. An already in-flight request can complete against the older snapshot. Browser sessions and Hub API tokens are PostgreSQL-backed and revocable.
 
-Calls and recording are capability-gated pending provider verification. Recording needs bounded uploads, durable segments and explicit completion states. Media stays private and outside relational rows; shared durable storage is needed before horizontally scaling media workers.
+The main channel secret is encrypted. Some generic configuration fields that contain secrets are not; the [configuration reference](configuration.md#current-administration-limits) records that production gap and the current grant-list limitation.
 
-## Milestones
+Sticker retrieval requires an account-owned inbound record and uses bounded, constrained provider downloads. Hub returns bytes and MIME metadata to Core, which checks message visibility before serving the browser. This is not a general private media store, attachment archive or call-recording service.
 
-1. Account-scoped persistence and typed command/event contracts.
-2. Durable queues, callback recovery and fake-provider crash tests.
-3. WhatsApp and Telegram adapters, followed by email send/receive.
-4. Template reconciliation and operational administration UI.
-5. Calls and recordings after capability verification.
-6. Load testing, migration dry runs and a separately reviewed cutover.
+## Current boundaries
 
-Acceptance includes tenant isolation, replay safety, bounded memory, restart recovery, non-regressing delivery projections and priority replies during bulk load. These are planned release gates, not claims of completed functionality.
+See the [provider support matrix](provider-support.md) for the exact implemented surface. General Telegram media/edit/delete APIs, full email mailbox/MIME handling, hourly provider reconciliation, server call recording and replica autoscaling are not supplied by this implementation. Live account eligibility and provider delivery remain a separate acceptance step after [local simulation](testing.md).
+
+### Bounded channel callback replay
+
+Telegram/email production callbacks and explicit replay now share one encoder
+and acknowledgement path. The source query selects at most 50 rows and applies
+an aggregate source-byte bound; final JSON encoding still enforces the callback
+body limit (2 MiB minus 4 KiB headroom). The first source row is always returned
+so an oversized event produces an explicit failure rather than disappearing
+behind a size filter. Failed callbacks retain their cursor. This does not yet
+provide poison-event quarantine or separate compact status lanes for these
+channels.
+
+Validation: isolated PostgreSQL with Go race checks for `internal/channels` and
+`internal/hubmcp` passed. Coverage includes recovery/account isolation, two
+800 kB events followed by a one-event batch, and an oversized first event that
+is neither transmitted nor skipped. Provider calls use local simulators. This
+change is local and has not yet replaced the running Hub binary.
+
+### Channel callback quarantine (local, not deployed)
+
+Migration 0027 records an oversized Telegram/email callback by original event
+ID, account, channel and reason. Production dispatch commits that record and
+cursor movement in one transaction. It does not alter or delete the journaled
+payload. A malformed, unauthenticated or unavailable Core response still
+retries without advancing; only a locally proven oversized event qualifies.
+Explicit replay returns the size failure and does not itself skip events.
+
+The admin-only `/api/callback-failures` endpoint lists 50 failures per page with
+account/channel filters and keyset pagination. Hub Channels exposes this list
+for Telegram and email. Original event inspection also includes the quarantine
+reason. The isolated PostgreSQL/race test proves original-data retention and
+later-event delivery after quarantine. Operator recovery/replay controls and
+installed browser/API authorization acceptance remain unfinished; this change
+must remain local until those checks are complete.
+
+Callback recovery now implemented locally: an admin-only CSRF/origin-protected
+POST retries exactly the selected quarantined event under the channel advisory
+lock. Runtime account credentials are resolved server-side. Successful Core
+acknowledgement sets `resolved_at`; failure keeps quarantine active. Production
+cursors do not rewind. Failure history and original payload remain retained.
+The Channels failure list exposes Retry callback with an explicit underlying
+issue warning; retries do not magically reduce an oversized payload.
+
+Isolated database/race checks pass for successful single-event retry, rejected
+oversized retry, cross-channel rejection, failed acknowledgement retaining
+quarantine, and already-resolved rejection. HTTP unit tests cover non-admin,
+origin, CSRF, unexpected fields, channel validation and failure responses.
+Installed deployment/browser acceptance remains outstanding.
+
+Callback recovery deployed locally: migration 0027 applied successfully;
+`relay-hub-callback-recovery` PID 2931375 passed readiness. The deployed UI files
+were exercised through a temporary loopback static server with explicit API
+fixtures (server stopped afterwards). Browser validation caught and fixed a
+failed-retry row being hidden by its error; the rerun proves the row remains,
+the retry uses the selected account/channel/event, and successful recovery
+refreshes the list. No real callback was replayed. The live unauthenticated
+failure-list request redirects to login (303). An existing 18126 browser tab
+was a separate test preview, not an authenticated session on this runtime;
+live authenticated admin API/browser acceptance remains unproven.
+
+## Message event inspection (24 September 2026)
+
+The Events screen defaults to provider messages; system authentication activity
+is a separate tab. The admin-only `/api/event-inspector` endpoint requires an
+account and channel, lists 50 summaries per keyset page, and loads payloads only
+on selection. SQL limits summaries to 240 characters and payload previews to
+65,536 characters. The complete source remains in the database. Forwarded
+means Core acknowledged receipt, not that a customer read a message.
+
+The local event-inspector release is deployed and `/readyz` passed. Isolated
+PostgreSQL tests cover account/channel isolation, bounded reads, cursor paging,
+quarantine visibility and partially forwarded WhatsApp batches. Browser fixture
+checks cover payload escaping, pagination, scope reset and desktop/mobile
+layouts in light/dark themes. Live authenticated Hub browser acceptance remains
+separate from these fixture checks.
