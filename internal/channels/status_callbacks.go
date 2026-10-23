@@ -96,7 +96,7 @@ func postStatusBatch(ctx context.Context, a RuntimeCallback, batch []StatusRecei
 	req.Header.Set("Authorization", "token "+a.APIKey+":"+a.APISecret)
 	req.Header.Set("X-Relay-Timestamp", ts)
 	req.Header.Set("X-Relay-Signature", hex.EncodeToString(mac.Sum(nil)))
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := a.client().Do(req)
 	if err != nil {
 		return err
 	}

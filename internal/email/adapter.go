@@ -63,6 +63,21 @@ func New(cfg Config) (*Client, error) {
 	}
 	return &Client{cfg: cfg}, nil
 }
+
+// NewWithTransport supplies private CA roots and a mandatory restricted dialer
+// for isolated protocol simulations. Certificate verification remains enabled.
+func NewWithTransport(cfg Config, roots *x509.CertPool, dial func(context.Context, string, string) (net.Conn, error)) (*Client, error) {
+	if roots == nil || dial == nil {
+		return nil, errors.New("private roots and restricted dialer are required")
+	}
+	c, err := New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	c.tlsRoots, c.dialContext = roots.Clone(), dial
+	return c, nil
+}
+
 func (c *Client) Send(ctx context.Context, to []string, subject, body string, cc, bcc []string) error {
 	return c.SendMessage(ctx, Message{To: to, Cc: cc, Bcc: bcc, Subject: subject, Body: body})
 }
