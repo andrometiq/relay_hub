@@ -25,6 +25,8 @@ STEPS = {'7': 'Signed ingress', '8': 'Journal, Core projection and deduplication
          '9': 'Core send idempotency', '10': '1,251 receipt batch check',
          '10b': 'inbound latency under a sustained receipt storm',
          '11': '503, wrong acknowledgement and restart recovery', '12': 'Template lifecycle',
+         '13': 'Supplier AI, scoped ledger and human handoff',
+         '14': 'Business event delivery and Hub outage isolation',
          'realtime': 'Authenticated Socket.IO message event without HTTP polling'}
 
 
@@ -71,9 +73,31 @@ def envelope(value, field='messages'):
     return {'object': 'whatsapp_business_account', 'entry': [{'id': '220', 'changes': [{'field': field, 'value': value}]}]}
 
 
-def inbound(provider, sender='919999999999'):
+def inbound(provider, sender='919999999999', text='Simulation inbound'):
     return envelope({'metadata': {'phone_number_id': '110'}, 'messages': [{'id': provider,
-        'from': sender, 'timestamp': str(int(time.time())), 'type': 'text', 'text': {'body': 'Simulation inbound'}}]})
+        'from': sender, 'timestamp': str(int(time.time())), 'type': 'text', 'text': {'body': text}}]})
+
+
+def provider_posts(state, endpoint):
+    return [row for row in state['records'] if row['kind'] == 'graph' and row['method'] == 'POST'
+            and row['path'].endswith('/messages') and row['body'].get('to') == endpoint]
+
+
+def assert_ledger_reply(text):
+    for expected in ('SIM-OWN-DEBIT', 'SIM-OWN-CREDIT', 'Debit: 100.1', 'Credit: 40.05', 'Net debit: 60.05'):
+        assert expected in text, 'Missing code-computed ledger rows/totals'
+    for excluded in ('SIM-OTHER-SUPPLIER-SECRET', 'SIM-OUTSIDE-RANGE', 'SIM-CANCELLED', '999999', '88000', '77000'):
+        assert excluded not in text, 'Unscoped or model-invented ledger data leaked'
+
+
+def assert_handoff(state, fixture):
+    assert state['paused'] and len(state['tickets']) == 1, 'Expected one ticket and paused automation'
+    ticket = state['tickets'][0]
+    assert ticket['assigned_to'] == fixture['handoff_owner']
+    assert ticket['business_doctype'] == 'Supplier' and ticket['business_name'] == fixture['supplier']
+    assert len(state['runs']) == 1 and ticket['source_run'] == state['runs'][0]['name']
+    assert state['runs'][0]['status'] == 'Handoff'
+    assert not state['actions'] and not state['outgoing'], 'Handoff must not send an automatic reply'
 
 
 def receipt_storm(ids, count=None):
@@ -403,6 +427,92 @@ class Runner:
             time.sleep(.05)
         raise TimeoutError(f'Missing timings for {batches} committed receipt projection jobs')
 
+    def check_ai_reply(self, provider, fixture, expected_posts):
+        state = self.site.call('acceptance_wait_ai', provider=provider, status='Completed')
+        assert len(state['incoming']) == len(state['runs']) == len(state['actions']) == len(state['outgoing']) == 1
+        assert state['incoming'][0]['business_name'] == fixture['supplier']
+        assert state['actions'][0]['status'] == 'Submitted'
+        message = state['outgoing'][0]
+        assert message['business_doctype'] == 'Supplier' and message['business_name'] == fixture['supplier']
+        hub = self.control('state')
+        posts = provider_posts(hub, fixture['endpoint'])
+        assert len(posts) == expected_posts and all(post['status'] == 200 for post in posts), 'Duplicate or failed fake Meta POST'
+        assert posts[-1]['body']['text']['body'] == message['content']
+        assert posts[-1]['response']['messages'][0]['id'] == message['provider_id']
+        deliveries = [row for row in hub['deliveries'] if row['request_key'] == state['actions'][0]['request_key']]
+        assert len(deliveries) == 1 and deliveries[0]['state'] == 'submitted', 'Missing durable Hub intent'
+        for status in ('sent', 'delivered', 'read'):
+            self.emit(envelope({'metadata': {'phone_number_id': '110'}, 'statuses': [{'id': message['provider_id'],
+                'recipient_id': fixture['endpoint'], 'status': status, 'timestamp': str(int(time.time()))}]}))
+            self.site.call('acceptance_wait_ai', provider=provider, status='Completed', receipt=status.title())
+        return state
+
+    def ai_acceptance(self):
+        fixture = self.site.call('acceptance_seed_ai', run=self.run_id, origin=self.meta)
+        first = f'wamid.sim.ai.offer.{self.run_id}'
+        self.emit(inbound(first, fixture['endpoint'], 'I have a doubt in my ledger'))
+        offered = self.check_ai_reply(first, fixture, 1)
+        offer = offered['outgoing'][0]['content']
+        assert '2026-10-01' in offer and '2026-10-31' in offer and 'confirm' in offer.lower()
+        assert json.loads(offered['runs'][0]['decision'])['reads'] == [], 'Ledger read before confirmation'
+        confirmed = f'wamid.sim.ai.confirm.{self.run_id}'
+        payload = inbound(confirmed, fixture['endpoint'], 'yes')
+        self.emit(payload)
+        result = self.check_ai_reply(confirmed, fixture, 2)
+        assert_ledger_reply(result['outgoing'][0]['content'])
+        assert len(json.loads(result['runs'][0]['decision'])['reads']) == 1, 'Expected scoped tool evidence'
+        self.emit(payload)
+        self.wait_control(lambda state: all(row['acknowledged'] for row in state['callbacks'] if row['lane'] == 'realtime'))
+        assert len(provider_posts(self.control('state'), fixture['endpoint'])) == 2, 'Replay resent AI reply'
+        person = f'wamid.sim.ai.person.{self.run_id}'
+        payload = inbound(person, fixture['endpoint'], 'please connect me to a person')
+        self.emit(payload)
+        result = self.site.call('acceptance_wait_ai', provider=person, status='Handoff')
+        self.emit(payload)
+        paused = f'wamid.sim.ai.paused.{self.run_id}'
+        self.emit(inbound(paused, fixture['endpoint'], 'please connect me to a person'))
+        self.wait_control(lambda state: all(row['acknowledged'] for row in state['callbacks'] if row['lane'] == 'realtime'))
+        self.site.call('acceptance_wait_paused', provider=paused)
+        result = self.site.call('acceptance_ai_state', provider=person)
+        assert_handoff(result, fixture)
+        state = self.control('state')
+        assert len(provider_posts(state, fixture['endpoint'])) == 2, 'Handoff or paused conversation sent an AI reply'
+        ai_calls = [row for row in state['records'] if row['kind'] == 'ai']
+        assert len(ai_calls) == 4 and all(row['status'] == 200 for row in ai_calls), 'Expected offer, tool request, tool result and handoff through fake AI'
+        assert all(marker not in json.dumps(ai_calls) for marker in ('SIM-OTHER-SUPPLIER-SECRET', 'SIM-OUTSIDE-RANGE', 'SIM-CANCELLED'))
+        return dict(supplier=fixture['supplier'], accepted_provider_posts=2, fake_ai_calls=len(ai_calls),
+                    ticket=result['tickets'][0]['name'], statuses=['Sent', 'Delivered', 'Read'], automation_paused=True)
+
+    def business_event_acceptance(self):
+        template = self.report['steps']['12'].get('template_id')
+        assert template, 'Step 12 must provide an approved template'
+        self.site.call('acceptance_seed_event', run=self.run_id, template_id=template)
+        before = len(provider_posts(self.control('state'), '919999999999'))
+        submitted = self.site.call('acceptance_submit_event')
+        state = self.site.call('acceptance_wait_event', source=submitted['source'])
+        assert len(state['deliveries']) == len(state['actions']) == len(state['messages']) == 1
+        assert state['actions'][0]['status'] == 'Submitted'
+        assert state['deliveries'][0]['business_name'] == self.fixture['customer'] and state['docstatus'] == 1
+        message = state['messages'][0]
+        hub = self.control('state')
+        posts = provider_posts(hub, '919999999999')
+        assert len(posts) == before + 1 and posts[-1]['status'] == 200
+        assert posts[-1]['body']['type'] == 'template'
+        assert posts[-1]['body']['template']['name'] == json.loads(state['deliveries'][0]['payload'])['name']
+        assert posts[-1]['body']['template']['components'][0]['parameters'] == [{'type': 'text', 'text': submitted['source']}]
+        assert posts[-1]['response']['messages'][0]['id'] == message['provider_id']
+        timeline = self.core('relay_core.api.messages?' + urllib.parse.urlencode({'contact': self.fixture['contact'], 'channel': self.fixture['channel']}))
+        assert sum(row['name'] == message['name'] for row in timeline['items']) == 1, 'Missing customer timeline entry'
+        # Retain captures before stopping only our own launcher. Core is untouched.
+        self.captures.extend(hub.pop('records'))
+        self.report['hub_state'] = hub
+        self.stop_hub()
+        offline = self.site.call('acceptance_submit_event')
+        offline_state = self.site.call('acceptance_event_state', source=offline['source'])
+        assert offline_state['docstatus'] == 1 and len(offline_state['deliveries']) == 1, 'Hub outage interrupted submit or lost the intent'
+        return dict(source=submitted['source'], accepted_provider_posts=1, timeline_message=message['name'],
+                    offline_source=offline['source'], offline_docstatus=offline_state['docstatus'])
+
     def execute(self):
         if self.args.dry_run:
             self.report['plan'] = {'hub': self.hub, 'fake_meta': self.meta, 'core': self.args.core_origin,
@@ -561,7 +671,7 @@ class Runner:
             assert self.report['storm_latency_ms']['passed'], 'Storm p95 must be < 500 ms with at least five samples overlapping actual receipt projection'
         with self.step('12', continue_on_error=True) as evidence:
             template = {'name': 'sim_v1_update_' + self.run_id, 'language': 'en_US', 'category': 'UTILITY',
-                        'components': [{'type': 'BODY', 'text': 'Local simulation update'}]}
+                        'components': [{'type': 'BODY', 'text': 'Local simulation order {{1}}'}]}
             result = self.core('relay_core.whatsapp.execute', {'operation': 'templates.create', 'arguments': template})
             assert result['status'] == 'PENDING'
             other = dict(template, name=template['name'] + '_page')
@@ -576,6 +686,10 @@ class Runner:
             assert self.realtime, 'Authenticated Socket.IO connection unavailable'
             self.realtime.wait('templates', before)
             evidence.update(template_id=result['id'], status='APPROVED', pages=2, realtime=True)
+        with self.step('13', continue_on_error=True) as evidence:
+            evidence.update(self.ai_acceptance())
+        with self.step('14', continue_on_error=True) as evidence:
+            evidence.update(self.business_event_acceptance())
         # A transport-only idle observation makes no periodic HTTP message/status reads.
         if self.realtime and self.report['steps']['realtime']['status'] == 'pass':
             with self.step('realtime', continue_on_error=True):
@@ -601,6 +715,11 @@ class Runner:
             self.denied.close()
         self.stop_hub()
         if self.site:
+            try:
+                self.site.call('acceptance_disable')
+            except Exception as exc:
+                self.report['cleanup_error'] = str(exc)
+                self.report['error'] = 'Simulation automation could not be disabled'
             try:
                 self.report['core_diagnostics'] = self.site.call('diagnostics')
             except Exception:

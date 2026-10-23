@@ -9,13 +9,70 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import simulate_whatsapp_e2e as sim
 
 
 class RunnerTests(unittest.TestCase):
+    def test_ai_preflight_requires_explicit_automation_activation_before_fixtures(self):
+        from whatsapp_sim_acceptance import Acceptance
+        for conf in ({}, {'relay_automation_enabled': 0}, {'relay_automation_enabled': False}):
+            insert = Mock()
+            acceptance = Acceptance(SimpleNamespace(conf=conf), {}, insert)
+            with self.assertRaisesRegex(AssertionError, 'activation needs separate approval'):
+                acceptance.preflight()
+            with self.assertRaisesRegex(AssertionError, 'activation needs separate approval'):
+                acceptance.seed_ai('run', 'http://127.0.0.1:18094')
+            insert.assert_not_called()
+        Acceptance(SimpleNamespace(conf={'relay_automation_enabled': 1}), {}, Mock()).preflight()
+
+    def test_paused_message_waits_for_its_committed_projection(self):
+        from whatsapp_sim_acceptance import Acceptance
+        acceptance = Acceptance(Mock(), {}, Mock())
+        state = dict(incoming=[{'name': 'PAUSED-MESSAGE'}], paused=1, runs=[], actions=[], outgoing=[])
+        acceptance.ai_state = Mock(side_effect=[dict(state, incoming=[]), state])
+        with patch('whatsapp_sim_acceptance.time.sleep'):
+            self.assertEqual(acceptance.wait_paused('wamid.paused'), state)
+        self.assertEqual(acceptance.ai_state.call_args_list, [call('wamid.paused'), call('wamid.paused')])
+        for change in (dict(runs=[{'status': 'Pending'}]), dict(actions=[{'status': 'Pending'}]),
+                       dict(outgoing=[{}]), dict(paused=0), dict(incoming=[{}, {}])):
+            acceptance.ai_state = Mock(return_value=dict(state, **change))
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                acceptance.wait_paused('wamid.paused')
+        acceptance.ai_state = Mock(return_value=dict(state, incoming=[]))
+        with patch('whatsapp_sim_acceptance.time.monotonic', side_effect=[0, 0, 36]), \
+                patch('whatsapp_sim_acceptance.time.sleep'):
+            with self.assertRaisesRegex(AssertionError, 'not projected'):
+                acceptance.wait_paused('wamid.paused')
+
+    def test_ai_step_checks_new_paused_message_even_when_callbacks_are_acknowledged(self):
+        from whatsapp_sim_acceptance import Acceptance
+        with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
+            runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
+            acceptance = Acceptance(Mock(), {}, Mock())
+            acceptance.ai_state = Mock(return_value=dict(incoming=[{'name': 'PAUSED-MESSAGE'}],
+                paused=1, runs=[{'status': 'Pending'}], actions=[], outgoing=[]))
+            def site_call(action, **values):
+                if action == 'acceptance_seed_ai': return {'endpoint': '919800000001'}
+                if action == 'acceptance_wait_ai': return {}
+                if action == 'acceptance_wait_paused': return acceptance.wait_paused(values['provider'])
+                self.fail('Inspected old handoff before checking the new paused message')
+            runner.site = Mock()
+            runner.site.call.side_effect = site_call
+            runner.emit = Mock()
+            runner.wait_control = Mock(return_value={'callbacks': [{'acknowledged': True}]})
+            runner.control = Mock(return_value={})
+            runner.check_ai_reply = Mock(side_effect=[
+                dict(outgoing=[{'content': 'Confirm 2026-10-01 to 2026-10-31'}], runs=[{'decision': '{"reads":[]}'}]),
+                dict(outgoing=[{'content': 'SIM-OWN-DEBIT SIM-OWN-CREDIT Debit: 100.10 Credit: 40.05 Net debit: 60.05'}],
+                     runs=[{'decision': '{"reads":[{}]}'}])])
+            with patch.object(sim, 'provider_posts', return_value=[{}, {}]), \
+                    self.assertRaisesRegex(AssertionError, 'Paused message created an automation run'):
+                runner.ai_acceptance()
+            acceptance.ai_state.assert_called_once_with(f'wamid.sim.ai.paused.{runner.run_id}')
+
     def test_projection_timings_ignore_expired_unrelated_and_other_site_jobs(self):
         from rq.exceptions import NoSuchJobError
         from whatsapp_sim_site import finished_projection_timings
@@ -229,6 +286,32 @@ class RunnerTests(unittest.TestCase):
         contact.display_name = 'Non-simulation contact'
         with self.assertRaisesRegex(AssertionError, 'paused simulation fixture'):
             fixture_contact(frappe, insert, SimpleNamespace(name='channel'), 'rerun-3')
+
+    def test_ai_assertions_reject_cross_supplier_data_model_arithmetic_and_duplicate_handoffs(self):
+        good = 'SIM-OWN-DEBIT SIM-OWN-CREDIT Debit: 100.10 Credit: 40.05 Net debit: 60.05'
+        sim.assert_ledger_reply(good)
+        for bad in (good + ' SIM-OTHER-SUPPLIER-SECRET', good + ' MODEL INVENTED TOTAL 999999',
+                    good.replace('60.05', '60.06'), good + ' SIM-OUTSIDE-RANGE', good + ' SIM-CANCELLED'):
+            with self.assertRaises(AssertionError): sim.assert_ledger_reply(bad)
+        fixture = dict(supplier='SUP-A', handoff_owner='owner')
+        ticket = dict(assigned_to='owner', business_doctype='Supplier', business_name='SUP-A', source_run='RUN-1')
+        state = dict(paused=1, tickets=[ticket], runs=[dict(name='RUN-1', status='Handoff')], actions=[], outgoing=[])
+        sim.assert_handoff(state, fixture)
+        for change in (dict(paused=0), dict(actions=[{}]), dict(runs=[dict(name='RUN-1', status='Completed')]), dict(tickets=[ticket, ticket]),
+                       dict(tickets=[dict(ticket, business_name='SUP-B')]),
+                       dict(tickets=[dict(ticket, assigned_to='wrong')])):
+            with self.assertRaises(AssertionError): sim.assert_handoff(dict(state, **change), fixture)
+
+    def test_ai_inbound_uses_real_sender_and_preserves_confirmation_text(self):
+        value = sim.inbound('wamid.ai', '919800000001', 'yes')['entry'][0]['changes'][0]['value']
+        self.assertEqual(value['messages'][0]['from'], '919800000001')
+        self.assertEqual(value['messages'][0]['text']['body'], 'yes')
+        self.assertIn('13', sim.STEPS)
+        self.assertIn('14', sim.STEPS)
+        from whatsapp_sim_acceptance import fixture_origin
+        self.assertEqual(fixture_origin('http://127.0.0.1:18094'), 'http://127.0.0.1:18094')
+        for value in ('https://openrouter.ai', 'http://localhost:18094', 'http://127.0.0.1:18094/ai'):
+            with self.assertRaises(ValueError): fixture_origin(value)
 
     def test_dry_run_never_starts_processes_or_network_or_reads_secrets(self):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:

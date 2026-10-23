@@ -392,6 +392,7 @@ func run() error {
 	}
 	mm := http.NewServeMux()
 	mm.HandleFunc("/_sim/", sim.control)
+	mm.Handle("/ai/chat/completions", &fakeAI{records: records})
 	mm.Handle("/", fake)
 	servers := []*http.Server{{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}, {Addr: *metaAddr, Handler: mm, ReadHeaderTimeout: 5 * time.Second}}
 	listeners := []net.Listener{}
