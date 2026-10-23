@@ -23,6 +23,10 @@ import (
 )
 
 func channelTestDB(t *testing.T) (*pgxpool.Pool, string) {
+	return channelTestDBWithMigration(t, database.Migrate)
+}
+
+func channelTestDBWithMigration(t *testing.T, migrate func(context.Context, *pgx.Conn) error) (*pgxpool.Pool, string) {
 	t.Helper()
 	dsn := os.Getenv("RELAY_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -63,7 +67,7 @@ func channelTestDB(t *testing.T) (*pgxpool.Pool, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = database.Migrate(ctx, conn.Conn())
+	err = migrate(ctx, conn.Conn())
 	conn.Release()
 	if err != nil {
 		t.Fatal(err)

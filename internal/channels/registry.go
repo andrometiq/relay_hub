@@ -13,7 +13,9 @@ import (
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"maps"
+	"net/mail"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,7 +90,7 @@ func Load(rows []accounts.RuntimeCredential) (*Registry, error) {
 			} else {
 				imapPort, _ = strconv.Atoi(text("imap_port"))
 			}
-			c, e := relayemail.New(relayemail.Config{AccountID: v.AccountID, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")})
+			c, e := relayemail.New(relayemail.Config{AccountID: v.AccountID, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")})
 			if e != nil {
 				return nil, e
 			}
@@ -164,25 +166,61 @@ func (r *Registry) TelegramWebhook(ctx context.Context, store Store, account, ma
 	}
 	return store.Save(ctx, Event{Account: account, Channel: "Telegram", Direction: "inbound", ProviderID: strconv.FormatInt(message.UpdateID, 10), Sender: strconv.FormatInt(message.ChatID, 10), Body: message.Text, OccurredAt: message.Date, Payload: body})
 }
-func (r *Registry) EmailWebhook(ctx context.Context, store Store, account, token string, supplied []byte, body []byte) error {
-	if r.snapshot().email[account] == nil || token == "" || subtle.ConstantTimeCompare([]byte(token), supplied) != 1 {
+
+// EmailWebhookSecret is scoped to the configured account and never exposes the master.
+func (r *Registry) EmailWebhookSecret(account, master string) (string, error) {
+	return emailWebhookSecret(r.snapshot().email[account], account, master)
+}
+func emailWebhookSecret(client *relayemail.Client, account, master string) (string, error) {
+	if client == nil || len(master) < 32 {
+		return "", errors.New("email webhook is not configured")
+	}
+	mac := hmac.New(sha256.New, []byte(master))
+	mac.Write([]byte("relay/email/webhook/v1/" + account))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+func (r *Registry) EmailWebhook(ctx context.Context, store Store, account, master string, supplied []byte, body []byte) error {
+	client := r.snapshot().email[account]
+	token, err := emailWebhookSecret(client, account, master)
+	if err != nil || subtle.ConstantTimeCompare([]byte(token), supplied) != 1 {
 		return errors.New("invalid email webhook")
 	}
 	var in struct {
 		ID, Sender, Recipient, Subject, Body string
-		OccurredAt                           time.Time       `json:"occurred_at"`
+		Raw                                  string          `json:"raw"`
 		Payload                              json.RawMessage `json:"payload"`
+		OccurredAt                           time.Time       `json:"occurred_at"`
 	}
-	if json.Unmarshal(body, &in) != nil || in.ID == "" || in.Sender == "" || in.Body == "" {
+	if json.Unmarshal(body, &in) != nil || in.ID == "" || len(in.ID) > 512 {
 		return errors.New("invalid email event")
+	}
+	received := relayemail.Received{Authentication: relayemail.Authentication{Status: "unverified"}}
+	if in.Raw != "" {
+		received, err = client.ParseIngress([]byte(in.Raw))
+		if err != nil {
+			return err
+		}
+		in.Sender, in.Recipient, in.Subject, in.Body = received.From, strings.Join(received.To, ","), received.Subject, received.Body
+	} else {
+		received, err = unverifiedEmailPayload(in.Payload)
+		if err != nil {
+			return err
+		}
+		sender, parseErr := mail.ParseAddress(in.Sender)
+		if parseErr != nil || in.Body == "" || len(in.Body) > 100000 || len(in.Subject) > 998 {
+			return errors.New("invalid email event")
+		}
+		in.Sender = strings.ToLower(sender.Address)
+		received.From, received.Subject, received.Body = in.Sender, in.Subject, in.Body
 	}
 	if in.OccurredAt.IsZero() {
 		in.OccurredAt = time.Now().UTC()
 	}
-	if len(in.Payload) == 0 {
-		in.Payload = body
+	payload, err := json.Marshal(received)
+	if err != nil {
+		return err
 	}
-	return store.Save(ctx, Event{Account: account, Channel: "Email", Direction: "inbound", ProviderID: in.ID, Sender: in.Sender, Recipient: in.Recipient, Subject: in.Subject, Body: in.Body, OccurredAt: in.OccurredAt, Payload: in.Payload})
+	return store.SaveEmail(ctx, Event{Account: account, Channel: "Email", Direction: "inbound", ProviderID: in.ID, Sender: in.Sender, Recipient: in.Recipient, Subject: in.Subject, Body: in.Body, OccurredAt: in.OccurredAt, Payload: payload}, received.DeliveryStatuses, received.Attachments)
 }
 
 func (r *Registry) TelegramMedia(ctx context.Context, account, fileID string) (telegram.StickerFile, error) {

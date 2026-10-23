@@ -32,6 +32,10 @@ import (
 // Registration metadata is available only to the Hub administrator; browser
 // session validation is supplied by the same auth service as other admin APIs.
 func telegramWebhookSettings(registry *channels.Registry, master string, session func(*http.Request) (auth.User, error)) http.Handler {
+	return channelWebhookSettings("telegram", registry.TelegramWebhookSecret, master, session)
+}
+
+func channelWebhookSettings(channel string, credential func(string, string) (string, error), master string, session func(*http.Request) (auth.User, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := session(r)
 		if err != nil {
@@ -43,14 +47,14 @@ func telegramWebhookSettings(registry *channels.Registry, master string, session
 			return
 		}
 		account := r.PathValue("account")
-		secret, err := registry.TelegramWebhookSecret(account, master)
+		secret, err := credential(account, master)
 		if err != nil {
-			http.Error(w, "Telegram webhook unavailable", http.StatusServiceUnavailable)
+			http.Error(w, "Webhook unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"path": "/webhooks/telegram/" + account, "secret_token": secret})
+		json.NewEncoder(w).Encode(map[string]any{"path": "/webhooks/" + channel + "/" + account, "secret_token": secret})
 	})
 }
 
@@ -639,9 +643,10 @@ func run() error {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		})
+		mux.Handle("GET /api/accounts/{account}/email/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
 		mux.HandleFunc("POST /webhooks/email/{account}", func(w http.ResponseWriter, r *http.Request) {
 			account := r.PathValue("account")
-			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 12<<20))
 			if readErr != nil {
 				http.Error(w, "invalid body", 413)
 				return
@@ -676,13 +681,18 @@ func run() error {
 		})
 		mux.Handle("GET /", browserAuth.Protect(http.FileServer(http.Dir(ui))))
 		server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+		mailboxPool, err := channels.NewMailboxPool(context.Background(), authPool.Config())
+		if err != nil {
+			return err
+		}
+		defer mailboxPool.Close()
 		shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		wa.Metadata = &whatsapp.MetadataSync{DB: authPool, Service: wa}
 		wa.Metadata.Run(shutdown)
 		wa.Outbox.Run(shutdown)
 		channels.Outbox{DB: authPool, Registry: channelRegistry}.Run(shutdown)
-		channels.MailboxPoller{DB: authPool, Registry: channelRegistry}.Run(shutdown)
+		channels.MailboxPoller{DB: mailboxPool, Registry: channelRegistry}.Run(shutdown)
 		callbacks.Run(shutdown)
 		channelCallbacksDispatcher.Run(shutdown, channelCallbacks)
 		go func() {
