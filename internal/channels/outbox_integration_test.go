@@ -140,13 +140,13 @@ func TestDurableChannelOutbox(t *testing.T) {
 	if err = queue.Cancel(ctx, "other-account", id); err == nil {
 		t.Fatal("cross-account cancellation")
 	}
-	if err = queue.Resolve(ctx, "other-account", id, "submitted", "Verified in provider console"); err == nil {
+	if err = queue.Resolve(ctx, "other-account", id, "submitted", "Verified in provider console", Resolution{ProviderID: "99", ChatID: 123}); err == nil {
 		t.Fatal("cross-account resolution")
 	}
 	if err = queue.Resolve(ctx, "fixture", id, "queued", "Retry this message again"); err == nil {
 		t.Fatal("resolution permitted replay")
 	}
-	if err = queue.Resolve(ctx, "fixture", id, "submitted", "Verified in provider console"); err != nil {
+	if err = queue.Resolve(ctx, "fixture", id, "submitted", "Verified in provider console", Resolution{ProviderID: "99", ChatID: 123}); err != nil {
 		t.Fatal(err)
 	}
 	if err = queue.Resolve(ctx, "fixture", id, "rejected", "Conflicting second resolution"); err == nil {

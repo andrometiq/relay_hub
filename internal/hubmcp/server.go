@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
+	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -456,7 +457,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				result, err = registry.SendEmailMessage(ctx, p.Account, in)
 			}
 			if err != nil {
-				return nil, nil, err
+				return emailFailure(err)
 			}
 			return nil, result, nil
 		})
@@ -588,4 +589,14 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		r.Body = http.MaxBytesReader(w, r.Body, 7<<20)
 		transport.ServeHTTP(w, r)
 	}), nil
+}
+
+func emailFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
+	var provider *relayemail.SendError
+	if !errors.As(err, &provider) {
+		return nil, nil, err
+	}
+	result := &mcp.CallToolResult{}
+	result.SetError(provider)
+	return result, map[string]any{"provider": "Email", "error": provider}, nil
 }
