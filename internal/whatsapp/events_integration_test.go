@@ -28,7 +28,7 @@ func TestDurableEventDeduplicationAndAccountIsolation(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer c.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
-	_, e = c.Exec(ctx, "CREATE TABLE "+schema+".relay_whatsapp_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,account text,digest text,payload jsonb,lane text NOT NULL DEFAULT 'realtime',UNIQUE(account,digest))")
+	_, e = c.Exec(ctx, "CREATE TABLE "+schema+".relay_whatsapp_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,account text,digest text,payload jsonb,raw_payload jsonb,lane text NOT NULL DEFAULT 'realtime',UNIQUE(account,digest))")
 	if e != nil {
 		t.Fatal(e)
 	}

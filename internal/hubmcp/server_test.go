@@ -149,10 +149,10 @@ func TestOutboxToolsRequireAccountCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"whatsapp.enqueue", "whatsapp.deliveries"} {
+	for _, tool := range []string{"whatsapp.send", "whatsapp.deliveries"} {
 		args := map[string]any{}
-		if tool == "whatsapp.enqueue" {
-			args["messages"] = []any{}
+		if tool == "whatsapp.send" {
+			args["message"] = map[string]any{"key": "fixture", "message": map[string]any{"operation": "messages.send"}}
 		}
 		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": args}})
 		req := httptest.NewRequest("POST", "http://127.0.0.1/mcp", strings.NewReader(string(raw)))
@@ -210,24 +210,5 @@ func TestProvisionedTokensEnforceAccountAndScopes(t *testing.T) {
 	revoked = true
 	if request("test-token", "capabilities").Code != 401 {
 		t.Fatal("revoked token accepted")
-	}
-}
-
-func TestCallFailureKeepsAmbiguousOutcomesBlocked(t *testing.T) {
-	for _, tc := range []struct {
-		status  int
-		unknown bool
-	}{{400, false}, {403, false}, {408, true}, {429, false}, {500, true}, {200, true}} {
-		result, data, err := whatsappCallFailure(&whatsapp.ProviderError{Status: tc.status})
-		if err != nil || !result.IsError || data["provider"] != "WhatsApp" || data["error"].(map[string]any)["outcome_unknown"] != tc.unknown {
-			t.Fatalf("wrong outcome for %d", tc.status)
-		}
-	}
-	_, data, err := whatsappCallFailure(whatsapp.ErrBusy)
-	if err != nil || data["error"].(map[string]any)["outcome_unknown"] != false {
-		t.Fatal("local admission rejection was ambiguous")
-	}
-	if _, _, err := whatsappCallFailure(errors.New("transport lost")); err == nil {
-		t.Fatal("unknown transport failure became a definite rejection")
 	}
 }

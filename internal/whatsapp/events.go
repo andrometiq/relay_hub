@@ -26,6 +26,9 @@ type EventStore interface {
 type PostgresEvents struct{ URL string }
 
 func (p PostgresEvents) Save(ctx context.Context, account string, body []byte) error {
+	return p.SaveEnvelope(ctx, account, body, body)
+}
+func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, original []byte) error {
 	c, e := pgx.Connect(ctx, p.URL)
 	if e != nil {
 		return e
@@ -37,7 +40,7 @@ func (p PostgresEvents) Save(ctx context.Context, account string, body []byte) e
 		return e
 	}
 	defer tx.Rollback(context.Background())
-	_, e = tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane) VALUES($1,$2,$3,$4) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), eventLane(body))
+	_, e = tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane,raw_payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), eventLane(body), string(original))
 	if e != nil {
 		return e
 	}
@@ -112,11 +115,8 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 			token := r.URL.Query().Get("hub.verify_token")
 			for _, account := range accounts {
 				if account.VerifyToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(account.VerifyToken)) == 1 {
-					if found {
-						found = false
-						break
-					}
 					a, found = account, true
+					break
 				}
 			}
 		}
@@ -144,81 +144,46 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body", 413)
 		return
 	}
-	var payload struct {
-		Object string `json:"object"`
-		Entry  []struct {
-			ID      string `json:"id"`
-			Changes []struct {
-				Value struct {
-					Metadata struct {
-						PhoneID string `json:"phone_number_id"`
-					} `json:"metadata"`
-				} `json:"value"`
-			} `json:"changes"`
-		} `json:"entry"`
-	}
+	var payload webhookEnvelope
 	if json.Unmarshal(raw, &payload) != nil || payload.Object != "whatsapp_business_account" || len(payload.Entry) == 0 {
 		http.Error(w, "invalid event", 400)
 		return
 	}
-	var a Account
-	found := false
 	if id != "" {
-		a, found = legacyAccount, legacyFound
-	} else {
-		for _, account := range accounts {
-			matches := true
-			for _, entry := range payload.Entry {
-				if entry.ID != account.WABAID {
-					matches = false
-					break
-				}
-				for _, change := range entry.Changes {
-					if change.Value.Metadata.PhoneID != "" && change.Value.Metadata.PhoneID != account.PhoneID {
-						matches = false
-						break
-					}
-				}
-			}
-			if matches {
-				if found {
-					found = false
-					break
-				}
-				a, found = account, true
-			}
+		accounts = []Account{legacyAccount}
+	}
+	// Authenticate each active destination against the original bytes.
+	authenticated := make([]Account, 0, len(accounts))
+	for _, a := range accounts {
+		mac := hmac.New(sha256.New, []byte(a.AppSecret))
+		mac.Write(raw)
+		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+		if a.AppSecret != "" && hmac.Equal([]byte(expected), []byte(r.Header.Get("X-Hub-Signature-256"))) {
+			authenticated = append(authenticated, a)
 		}
 	}
-	if !found {
-		http.Error(w, "webhook unauthorized", http.StatusForbidden)
+	routed, err := routeEnvelope(payload, authenticated)
+	if err != nil {
+		http.Error(w, "account mismatch or invalid signature", 403)
 		return
-	}
-	mac := hmac.New(sha256.New, []byte(a.AppSecret))
-	mac.Write(raw)
-	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-	if a.AppSecret == "" || !hmac.Equal([]byte(expected), []byte(r.Header.Get("X-Hub-Signature-256"))) {
-		http.Error(w, "invalid signature", 403)
-		return
-	}
-	for _, entry := range payload.Entry {
-		if entry.ID != a.WABAID {
-			http.Error(w, "account mismatch", 403)
-			return
-		}
-		for _, change := range entry.Changes {
-			if change.Value.Metadata.PhoneID != "" && change.Value.Metadata.PhoneID != a.PhoneID {
-				http.Error(w, "phone mismatch", 403)
-				return
-			}
-		}
 	}
 	if s.Events == nil {
 		http.Error(w, "event store unavailable", 503)
 		return
 	}
-	if e = s.Events.Save(r.Context(), a.ID, raw); e != nil {
-		http.Error(w, "event persistence failed", 503)
-		return
+	for account, envelope := range routed {
+		body, _ := json.Marshal(envelope)
+		if store, ok := s.Events.(interface {
+			SaveEnvelope(context.Context, string, []byte, []byte) error
+		}); ok {
+			e = store.SaveEnvelope(r.Context(), account, body, raw)
+		} else {
+			e = s.Events.Save(r.Context(), account, body)
+		}
+		if e != nil {
+			http.Error(w, "event persistence failed", 503)
+			return
+		}
 	}
 	w.WriteHeader(200)
 }
@@ -293,30 +258,101 @@ func extractStatuses(raw []byte) []deliveryStatus {
 	return out
 }
 
-func eventLane(body []byte) string {
-	var event struct {
-		Entry []struct {
-			Changes []struct {
-				Value map[string]json.RawMessage `json:"value"`
-			} `json:"changes"`
-		} `json:"entry"`
+type webhookEnvelope struct {
+	Object string         `json:"object"`
+	Entry  []webhookEntry `json:"entry"`
+}
+type webhookEntry struct {
+	ID      string          `json:"id"`
+	Changes []webhookChange `json:"changes"`
+}
+type webhookChange struct {
+	Field string                     `json:"field,omitempty"`
+	Value map[string]json.RawMessage `json:"value"`
+}
+
+func routeEnvelope(envelope webhookEnvelope, accounts []Account) (map[string]webhookEnvelope, error) {
+	routed := map[string]webhookEnvelope{}
+	for _, entry := range envelope.Entry {
+		if len(entry.Changes) == 0 {
+			return nil, errors.New("empty changes")
+		}
+		for _, change := range entry.Changes {
+			var metadata struct {
+				PhoneID string `json:"phone_number_id"`
+			}
+			if raw := change.Value["metadata"]; len(raw) > 0 && json.Unmarshal(raw, &metadata) != nil {
+				return nil, errors.New("invalid metadata")
+			}
+			if metadata.PhoneID == "" {
+				for _, key := range []string{"messages", "statuses", "calls"} {
+					if _, ok := change.Value[key]; ok {
+						return nil, errors.New("phone metadata required")
+					}
+				}
+			}
+			// Disabled, unconfigured and unauthenticated destinations are omitted.
+			for _, a := range accounts {
+				if a.WABAID != entry.ID || (metadata.PhoneID != "" && a.PhoneID != metadata.PhoneID) {
+					continue
+				}
+				target := routed[a.ID]
+				target.Object = envelope.Object
+				target.Entry = append(target.Entry, webhookEntry{ID: entry.ID, Changes: []webhookChange{change}})
+				routed[a.ID] = target
+			}
+		}
 	}
+	if len(routed) == 0 {
+		return nil, errors.New("no authenticated active webhook destination")
+	}
+	return routed, nil
+}
+
+func eventLane(body []byte) string {
+	var event webhookEnvelope
 	if json.Unmarshal(body, &event) != nil {
 		return "realtime"
 	}
+	statuses, other := false, false
 	for _, entry := range event.Entry {
 		for _, change := range entry.Changes {
 			for key := range change.Value {
-				if key == "messages" || key == "calls" || strings.HasPrefix(key, "group") {
-					return "realtime"
+				switch key {
+				case "statuses":
+					statuses = true
+				case "metadata", "messaging_product", "contacts":
+				default:
+					other = true
 				}
 			}
 		}
 	}
-	if len(extractStatuses(body)) > 0 {
+	if statuses && !other {
 		return "status"
 	}
 	return "realtime"
+}
+
+func realtimePayload(body []byte) []byte {
+	var event webhookEnvelope
+	if json.Unmarshal(body, &event) != nil || len(event.Entry) == 0 {
+		return body
+	}
+	changed := false
+	for i := range event.Entry {
+		for j := range event.Entry[i].Changes {
+			if _, ok := event.Entry[i].Changes[j].Value["statuses"]; ok {
+				changed = true
+			}
+			delete(event.Entry[i].Changes[j].Value, "statuses")
+		}
+	}
+	if !changed {
+		return body
+	}
+	raw, _ := json.Marshal(event)
+	return raw
 }
 
 func (p PostgresEvents) Latest(ctx context.Context, account string) ([]Event, error) {

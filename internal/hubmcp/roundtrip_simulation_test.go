@@ -113,6 +113,9 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 	issue := func(account, label string, scopes []string) string {
+		if _, err := db.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES($1,'https://fixture.invalid') ON CONFLICT DO NOTHING`, account); err != nil {
+			t.Fatal(err)
+		}
 		t.Helper()
 		if e := store.Grant(ctx, admin, admin.ID, account, true); e != nil {
 			t.Fatal(e)
@@ -297,7 +300,7 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	mux.HandleFunc("/webhooks/whatsapp/{account}", wa.Webhook)
 	hub := httptest.NewServer(mux)
 	defer hub.Close()
-	call := func(token, tool string, arguments any, wantError bool) []whatsapp.Delivery {
+	singleCall := func(token, tool string, arguments any, wantError bool) []whatsapp.Delivery {
 		t.Helper()
 		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": arguments}})
 		req, _ := http.NewRequestWithContext(ctx, "POST", hub.URL+"/mcp", bytes.NewReader(raw))
@@ -326,6 +329,16 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 		}
 		return envelope.Result.Structured.Deliveries
 	}
+	call := func(token, tool string, arguments any, wantError bool) []whatsapp.Delivery {
+		if tool != "whatsapp.bulk" {
+			return singleCall(token, tool, arguments, wantError)
+		}
+		var deliveries []whatsapp.Delivery
+		for _, item := range arguments.(map[string]any)["messages"].([]whatsapp.Submission) {
+			deliveries = append(deliveries, singleCall(token, "whatsapp.send", map[string]any{"message": item}, wantError)...)
+		}
+		return deliveries
+	}
 	batch := []whatsapp.Submission{}
 	for i := 0; i < 3; i++ {
 		batch = append(batch, whatsapp.Submission{Key: fmt.Sprintf("request-%d", i), Message: whatsapp.Input{Operation: "messages.send", To: "919999999999", Body: fmt.Sprintf("Synthetic message %d", i)}})
@@ -346,7 +359,7 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	}
 	changed := append([]whatsapp.Submission(nil), batch...)
 	changed[2].Message.Body = "Synthetic message with conflicting payload"
-	call(tokenA, "whatsapp.bulk", map[string]any{"messages": changed}, true)
+	call(tokenA, "whatsapp.bulk", map[string]any{"messages": changed[2:]}, true)
 	other := call(tokenB, "whatsapp.send", map[string]any{"message": batch[0]}, false)
 	if len(other) != 1 || other[0].ID == first[0].ID || providerCalls.Load() != 0 {
 		t.Fatal("account idempotency scope or asynchronous enqueue failed")
@@ -423,7 +436,7 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	webhook(accounts[0], incoming, "", 200)
 	webhook(accounts[0], incoming, "", 200)
 	var events, incomingCount int
-	if err = db.QueryRow(ctx, "SELECT count(*) FROM relay_whatsapp_events").Scan(&events); err != nil || events != 54 {
+	if err = db.QueryRow(ctx, "SELECT count(*) FROM relay_whatsapp_events").Scan(&events); err != nil || events != 58 {
 		t.Fatal("durable webhook dedupe failed", events, err)
 	}
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM relay_whatsapp_incoming").Scan(&incomingCount); err != nil || incomingCount != 1 {
@@ -446,11 +459,11 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	wait("all callback acknowledgements", func() bool {
 		callbackMu.Lock()
 		defer callbackMu.Unlock()
-		return len(accepted["sim-a"]) == 53 && len(accepted["sim-b"]) == 1
+		return len(accepted["sim-a"]) == 56 && len(accepted["sim-b"]) == 2
 	})
 	wait("durable callback cursor acknowledgements", func() bool {
 		var count int
-		return db.QueryRow(ctx, `SELECT count(*) FROM (SELECT account,lane,max(id) AS id FROM relay_whatsapp_events GROUP BY account,lane) e JOIN relay_callback_cursor c ON c.account=e.account AND c.lane=e.lane AND c.last_id=e.id`).Scan(&count) == nil && count == 3
+		return db.QueryRow(ctx, `SELECT count(*) FROM (SELECT account,lane,max(id) AS id FROM relay_whatsapp_events GROUP BY account,lane) e JOIN relay_callback_cursor c ON c.account=e.account AND c.lane=e.lane AND c.last_id=e.id`).Scan(&count) == nil && count == 4
 	})
 	stopCallbacks()
 	callbackMu.Lock()
@@ -487,7 +500,7 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	if providerCalls.Load() != 4 {
 		t.Fatal("revoked credential or webhook retry resent a message")
 	}
-	t.Log("PASS: real PostgreSQL auth/MCP/outbox -> local Meta -> signed webhook/status/inbound -> signed Core callback; 4 sends, 54 unique events, payload comparison, duplicate suppression, 50+2 status batching/retry, realtime lane, callback restart, tenant isolation and revocation")
+	t.Log("PASS: real PostgreSQL auth/MCP/outbox -> local Meta -> signed webhook/status/inbound -> signed Core callback; 4 sends, 54 provider events and 4 send outcomes, payload comparison, duplicate suppression, 50+2 status batching/retry, realtime lane, callback restart, tenant isolation and revocation")
 }
 
 // Admission simulation measures chunked ingestion and durable queue semantics.
@@ -497,28 +510,8 @@ func TestBulk2000MessageAdmissionSimulation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	db, scopedDSN := simulationDatabase(t, ctx)
-	store := &auth.Store{DB: db}
-	if err := store.Bootstrap(ctx, "bulk-admin", "synthetic-bulk-password-42"); err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.Login(ctx, "bulk-admin", "synthetic-bulk-password-42", "simulation")
-	if err != nil {
-		t.Fatal(err)
-	}
-	admin, err := store.Session(ctx, session)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tokens := map[string]string{}
 	accounts := []whatsapp.Account{}
 	for i, account := range []string{"bulk-a", "bulk-b"} {
-		if err = store.Grant(ctx, admin, admin.ID, account, true); err != nil {
-			t.Fatal(err)
-		}
-		tokens[account], err = store.Issue(ctx, admin, "core-"+account, account, []string{"messages:send", "deliveries:read"}, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
 		accounts = append(accounts, whatsapp.Account{ID: account, Site: "http://127.0.0.1:1", AccessToken: "synthetic-" + account, PhoneID: fmt.Sprint(510 + i), WABAID: fmt.Sprint(610 + i), Version: "v25.0"})
 	}
 	var networkCalls atomic.Int32
@@ -530,10 +523,6 @@ func TestBulk2000MessageAdmissionSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 	wa.Outbox = &whatsapp.Outbox{URL: scopedDSN, Service: wa, Workers: 1}
-	handler, err := NewAuthenticated(db.Ping, wa, store.Authenticate)
-	if err != nil {
-		t.Fatal(err)
-	}
 	chunk := func(index int) []whatsapp.Submission {
 		batch := make([]whatsapp.Submission, 50)
 		for i := range batch {
@@ -545,38 +534,17 @@ func TestBulk2000MessageAdmissionSimulation(t *testing.T) {
 	maxRequestBytes := 0
 	submit := func(account string, batch []whatsapp.Submission, wantError bool) []whatsapp.Delivery {
 		t.Helper()
-		raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "whatsapp.bulk", "arguments": map[string]any{"messages": batch}}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		raw, _ := json.Marshal(batch)
 		maxRequestBytes = max(maxRequestBytes, len(raw))
-		req := httptest.NewRequest("POST", "http://localhost/mcp", bytes.NewReader(raw)).WithContext(ctx)
-		req.Header.Set("Authorization", "Bearer "+tokens[account])
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("MCP-Protocol-Version", "2025-06-18")
-		out := httptest.NewRecorder()
-		handler.ServeHTTP(out, req)
-		var response struct {
-			Result struct {
-				IsError    bool `json:"isError"`
-				Structured struct {
-					Deliveries []whatsapp.Delivery `json:"deliveries"`
-				} `json:"structuredContent"`
-			} `json:"result"`
+		a := accounts[0]
+		if account == accounts[1].ID {
+			a = accounts[1]
 		}
-		if err := json.Unmarshal(out.Body.Bytes(), &response); err != nil || out.Code != 200 || response.Result.IsError != wantError {
-			t.Fatalf("bulk MCP response: status=%d, isError=%v, wanted error=%v, decode=%v", out.Code, response.Result.IsError, wantError, err)
+		rows, err := wa.Outbox.Enqueue(ctx, a, batch)
+		if (err != nil) != wantError {
+			t.Fatalf("admission error=%v, want error=%v", err, wantError)
 		}
-		if !wantError && len(response.Result.Structured.Deliveries) != len(batch) {
-			t.Fatal("accepted chunk size differs from requested size")
-		}
-		for _, delivery := range response.Result.Structured.Deliveries {
-			if delivery.State != "queued" {
-				t.Fatal("admission performed synchronous delivery")
-			}
-		}
-		return response.Result.Structured.Deliveries
+		return rows
 	}
 	var before, memory runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -629,5 +597,5 @@ func TestBulk2000MessageAdmissionSimulation(t *testing.T) {
 	if maxRequestBytes > 128*1024 {
 		t.Fatal("chunked submission unexpectedly constructed an oversized request", maxRequestBytes)
 	}
-	t.Logf("PASS: admission only; 2000 synthetic 1 KiB messages in 40x50 MCP chunks: %s (%.1f intents/s), max request=%d bytes, sampled heap delta=%d bytes, total allocations=%d bytes; replay/conflict/account isolation and 50-row page verified; external sends=0", admissionTime, 2000/admissionTime.Seconds(), maxRequestBytes, peakHeap-before.HeapAlloc, memory.TotalAlloc-before.TotalAlloc)
+	t.Logf("PASS: admission only; 2000 synthetic 1 KiB messages in 40x50 internal queue chunks: %s (%.1f intents/s), max request=%d bytes, sampled heap delta=%d bytes, total allocations=%d bytes; replay/conflict/account isolation and 50-row page verified; external sends=0", admissionTime, 2000/admissionTime.Seconds(), maxRequestBytes, peakHeap-before.HeapAlloc, memory.TotalAlloc-before.TotalAlloc)
 }

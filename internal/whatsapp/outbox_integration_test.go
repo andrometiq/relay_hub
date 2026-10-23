@@ -75,7 +75,7 @@ func TestOutboxDurabilityIsolationAndConcurrentWorkers(t *testing.T) {
 	if _, err = c.Exec(ctx, string(statusSQL)); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"0002_whatsapp_events.sql", "0005_core_callbacks.sql", "0006_incoming_messages.sql", "0007_account_send_rate.sql", "0022_whatsapp_resolution.sql"} {
+	for _, file := range []string{"0002_whatsapp_events.sql", "0005_core_callbacks.sql", "0006_incoming_messages.sql", "0007_account_send_rate.sql", "0022_whatsapp_resolution.sql", "0028_whatsapp_callback_delivery.sql", "0029_whatsapp_send_recovery.sql"} {
 		raw, err := os.ReadFile("../database/migrations/" + file)
 		if err != nil {
 			t.Fatal(err)

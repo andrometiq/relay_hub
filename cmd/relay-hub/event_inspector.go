@@ -34,7 +34,13 @@ type postgresEventReader struct{ db *pgxpool.Pool }
 func (b postgresEventReader) List(ctx context.Context, account, channel string, before int64) (eventPage, error) {
 	query := `SELECT e.id,e.occurred_at::text,e.direction,left(e.body,240),CASE WHEN q.event_id IS NOT NULL THEN 'Quarantined' WHEN e.id<=COALESCE(c.last_id,0) THEN 'Forwarded' ELSE 'Pending' END FROM relay_channel_events e LEFT JOIN relay_channel_callback_cursor c ON c.account=e.account AND c.channel=e.channel LEFT JOIN relay_channel_callback_quarantine q ON q.event_id=e.id AND q.resolved_at IS NULL WHERE e.account=$1 AND e.channel=$2 AND ($3::bigint=0 OR e.id<$3) ORDER BY e.id DESC LIMIT 51`
 	if channel == "WhatsApp" {
-		query = `SELECT e.id,e.created_at::text,e.lane,left(COALESCE(e.payload#>>'{entry,0,changes,0,value,messages,0,text,body}',''),240),CASE WHEN e.id<c.last_id OR (e.id=c.last_id AND c.status_offset=0) THEN 'Forwarded' ELSE 'Pending' END FROM relay_whatsapp_events e LEFT JOIN relay_callback_cursor c ON c.account=e.account AND c.lane=e.lane WHERE e.account=$1 AND $2='WhatsApp' AND ($3::bigint=0 OR e.id<$3) ORDER BY e.id DESC LIMIT 51`
+		query = `SELECT e.id,e.created_at::text,e.lane,left(COALESCE(e.payload#>>'{entry,0,changes,0,value,messages,0,text,body}',''),240),CASE WHEN d.quarantined THEN 'Quarantined' WHEN d.failed THEN 'Retrying'
+ WHEN (e.lane<>'realtime' OR coalesce(d.realtime,false)) AND
+ ((e.lane<>'status' AND NOT e.payload @? '$.entry[*].changes[*].value.statuses') OR coalesce(d.status,false)) THEN 'Forwarded' ELSE 'Pending' END
+ FROM relay_whatsapp_events e LEFT JOIN LATERAL (
+ SELECT bool_or(quarantined) quarantined,bool_or(failures>0 AND NOT acknowledged) failed,
+ bool_or(acknowledged AND lane='realtime') realtime,bool_or(acknowledged AND lane='status') status
+ FROM relay_whatsapp_callback_delivery WHERE event_id=e.id) d ON true WHERE e.account=$1 AND $2='WhatsApp' AND ($3::bigint=0 OR e.id<$3) ORDER BY e.id DESC LIMIT 51`
 	}
 	rows, err := b.db.Query(ctx, query, account, channel, before)
 	if err != nil {

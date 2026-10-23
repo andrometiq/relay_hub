@@ -195,7 +195,7 @@ func (s *Service) flowJSON(ctx context.Context, a Account, id string) (map[strin
 	return map[string]any{"flow_json": nil}, nil
 }
 
-func (s *Service) sendFlow(ctx context.Context, a Account, in Input, validateOnly bool) (map[string]any, error) {
+func (s *Service) sendFlow(ctx context.Context, a Account, in Input, validateOnly bool, before func() error) (map[string]any, error) {
 	if !a.Templates || !digits.MatchString(in.ID) || !digits.MatchString(in.To) || len(in.To) < 7 || len(in.To) > 15 || strings.TrimSpace(in.Body) == "" || len([]rune(in.Body)) > 1024 || strings.TrimSpace(in.FlowCTA) == "" || len([]rune(in.FlowCTA)) > 20 || !identifier.MatchString(in.FlowScreen) || !identifier.MatchString(in.FlowToken) {
 		return nil, errors.New("valid published Flow, recipient, message, button, screen and token required")
 	}
@@ -228,7 +228,7 @@ func (s *Service) sendFlow(ctx context.Context, a Account, in Input, validateOnl
 		body["context"] = map[string]string{"message_id": in.ReplyTo}
 	}
 	if in.tracking != "" {
-		body["biz_opaque_callback_data"] = in.tracking
+		body["biz_opaque_callback_data"] = "relay-outbox:" + in.tracking
 	}
-	return s.graph(ctx, a, "POST", a.PhoneID+"/messages", nil, body)
+	return s.graphSubmission(ctx, a, "POST", a.PhoneID+"/messages", nil, body, before)
 }

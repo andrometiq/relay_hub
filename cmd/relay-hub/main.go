@@ -77,7 +77,19 @@ func check(ctx context.Context, ready bool) error {
 	return database.CheckVersion(ctx, conn)
 }
 
-func runtimeWhatsApp(ctx context.Context, store *accountstore.Store) ([]whatsapp.Account, error) {
+type runtimeAccountSource interface {
+	Runtime(context.Context) ([]accountstore.RuntimeCredential, error)
+}
+
+func activateWhatsApp(ctx context.Context, wa *whatsapp.Service, store runtimeAccountSource) error {
+	configured, err := runtimeWhatsApp(ctx, store)
+	if err != nil {
+		return err
+	}
+	return wa.ReplaceAccounts(configured)
+}
+
+func runtimeWhatsApp(ctx context.Context, store runtimeAccountSource) ([]whatsapp.Account, error) {
 	rows, err := store.Runtime(ctx)
 	if err != nil {
 		return nil, err
@@ -98,7 +110,7 @@ func runtimeWhatsApp(ctx context.Context, store *accountstore.Store) ([]whatsapp
 			AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
 			AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
 			CoreAPIKey: get("core_api_key"), CoreAPISecret: get("core_api_secret"), CallbackSecret: get("callback_secret"),
-			SyncMetadata: boolValue(row.Config["sync_metadata"]), Templates: boolValue(row.Config["templates"]), Groups: boolValue(row.Config["groups"]), Calls: boolValue(row.Config["calls"]),
+			SyncMetadata: boolValue(row.Config["sync_metadata"]), Templates: boolValue(row.Config["templates"]),
 		})
 	}
 	return accounts, nil
@@ -220,7 +232,7 @@ func run() error {
 		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 			return errors.New("Hub binds to loopback; expose through a TLS reverse proxy")
 		}
-		wa, err := whatsapp.Load(os.Getenv("RELAY_WHATSAPP_CONFIG"))
+		wa, err := whatsapp.New(nil)
 		if err != nil {
 			return err
 		}
@@ -250,13 +262,10 @@ func run() error {
 		if err = accountStore.ProtectLegacyConfig(context.Background()); err != nil {
 			return errors.New("cannot protect stored channel configuration; existing data preserved")
 		}
-		if configured, loadErr := runtimeWhatsApp(context.Background(), accountStore); loadErr != nil {
-			return errors.New("cannot load enabled WhatsApp credentials")
-		} else if len(configured) > 0 {
-			if err = wa.ReplaceAccounts(configured); err != nil {
-				return errors.New("enabled WhatsApp account configuration is invalid")
-			}
+		if err = activateWhatsApp(context.Background(), wa, accountStore); err != nil {
+			return errors.New("cannot activate database WhatsApp configuration")
 		}
+
 		runtimeRows, err := accountStore.Runtime(context.Background())
 		if err != nil {
 			return errors.New("cannot load channel credentials")
@@ -282,6 +291,7 @@ func run() error {
 		}
 		channelEvents := channels.Store{DB: authPool}
 		channelCallbacksDispatcher := &channels.CallbackDispatcher{URL: os.Getenv("DATABASE_URL")}
+		callbacks := &whatsapp.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Service: wa}
 		wa.Outbox, err = whatsapp.NewOutbox(context.Background(), os.Getenv("DATABASE_URL"), wa, workers)
 		if err != nil {
 			return err
@@ -639,61 +649,8 @@ func run() error {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"events": list, "more": more})
 		})))
-		mux.Handle("GET /api/callback-failures", browserAuth.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			u, err := browserAuth.Session(r)
-			if err != nil {
-				http.Error(w, "unauthorized", 401)
-				return
-			}
-			if u.Role != "admin" {
-				http.Error(w, "forbidden", 403)
-				return
-			}
-			account, channel := r.URL.Query().Get("account"), r.URL.Query().Get("channel")
-			if account == "" || len(account) > 100 || (channel != "Telegram" && channel != "Email") {
-				http.Error(w, "invalid filter", 400)
-				return
-			}
-			before := int64(0)
-			if raw := r.URL.Query().Get("before"); raw != "" {
-				before, err = strconv.ParseInt(raw, 10, 64)
-				if err != nil || before < 1 {
-					http.Error(w, "invalid cursor", 400)
-					return
-				}
-			}
-			rows, err := authPool.Query(r.Context(), `SELECT event_id,reason,created_at::text FROM relay_channel_callback_quarantine WHERE account=$1 AND channel=$2 AND resolved_at IS NULL AND ($3::bigint=0 OR event_id<$3) ORDER BY event_id DESC LIMIT 51`, account, channel, before)
-			if err != nil {
-				http.Error(w, "unavailable", 503)
-				return
-			}
-			defer rows.Close()
-			type failure struct {
-				ID      int64  `json:"id"`
-				Reason  string `json:"reason"`
-				Created string `json:"created_at"`
-			}
-			items := []failure{}
-			for rows.Next() {
-				var item failure
-				if err = rows.Scan(&item.ID, &item.Reason, &item.Created); err != nil {
-					http.Error(w, "unavailable", 503)
-					return
-				}
-				items = append(items, item)
-			}
-			if rows.Err() != nil {
-				http.Error(w, "unavailable", 503)
-				return
-			}
-			more := len(items) > 50
-			if more {
-				items = items[:50]
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"items": items, "more": more})
-		})))
-		mux.Handle("POST /api/callback-failures/retry", browserAuth.Protect(callbackRetryAdmin(channelCallbacksDispatcher.RetryQuarantined, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"))))
+		mux.Handle("GET /api/callback-failures", browserAuth.Protect(callbackFailuresAdmin(authPool, browserAuth.Session)))
+		mux.Handle("POST /api/callback-failures/retry", browserAuth.Protect(callbackRetryAdmin(channelCallbacksDispatcher.RetryQuarantined, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), callbacks.RecoverCallback)))
 		deliveryUI := deliveryAdmin(hubDeliveryBackend{wa: wa.Outbox, channels: channels.Outbox{DB: authPool, Registry: channelRegistry}}, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"))
 		mux.Handle("GET /api/delivery-queue", browserAuth.Protect(deliveryUI))
 		mux.Handle("POST /api/delivery-queue", browserAuth.Protect(deliveryUI))
@@ -786,7 +743,6 @@ func run() error {
 		wa.Outbox.Run(shutdown)
 		channels.Outbox{DB: authPool, Registry: channelRegistry}.Run(shutdown)
 		channels.MailboxPoller{DB: authPool, Registry: channelRegistry}.Run(shutdown)
-		callbacks := &whatsapp.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Service: wa}
 		callbacks.Run(shutdown)
 		channelCallbacksDispatcher.Run(shutdown, channelCallbacks)
 		go func() {

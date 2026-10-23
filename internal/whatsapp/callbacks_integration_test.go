@@ -38,7 +38,7 @@ func TestCallbackBatchAcknowledgementAndIndependentLanes(t *testing.T) {
 	if _, err = c.Exec(ctx, "SET search_path TO "+schema); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"0002_whatsapp_events.sql", "0004_delivery_status.sql", "0005_core_callbacks.sql", "0006_incoming_messages.sql", "0026_status_callback_offset.sql"} {
+	for _, file := range []string{"0002_whatsapp_events.sql", "0004_delivery_status.sql", "0005_core_callbacks.sql", "0006_incoming_messages.sql", "0026_status_callback_offset.sql", "0028_whatsapp_callback_delivery.sql"} {
 		raw, err := os.ReadFile("../database/migrations/" + file)
 		if err != nil {
 			t.Fatal(err)
@@ -120,7 +120,7 @@ func TestCallbackBatchAcknowledgementAndIndependentLanes(t *testing.T) {
 	if batchSizes[1] != 1 {
 		t.Fatal("status backlog blocked realtime")
 	}
-	if _, err = c.Exec(ctx, "UPDATE relay_callback_cursor SET next_attempt=now()"); err != nil {
+	if _, err = c.Exec(ctx, "UPDATE relay_whatsapp_callback_delivery SET next_attempt=now()"); err != nil {
 		t.Fatal(err)
 	}
 	if err = d.deliver(ctx, a, "status"); err != nil {
@@ -148,7 +148,7 @@ func TestCallbackBatchAcknowledgementAndIndependentLanes(t *testing.T) {
 		t.Fatal("failed partial batch advanced", partial, err)
 	}
 	fail = false
-	if _, err = c.Exec(ctx, "UPDATE relay_callback_cursor SET next_attempt=now()"); err != nil {
+	if _, err = c.Exec(ctx, "UPDATE relay_whatsapp_callback_delivery SET next_attempt=now()"); err != nil {
 		t.Fatal(err)
 	}
 	restarted := CallbackDispatcher{URL: scoped, Service: svc}

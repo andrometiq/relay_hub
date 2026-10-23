@@ -83,7 +83,11 @@ func TestSharedWebhookRoutesByVerificationTokenAndPayload(t *testing.T) {
 	a := testAccount()
 	a.AppSecret = "app-secret"
 	a.VerifyToken = "verify-secret"
-	s, err := New([]Account{a})
+	b := a
+	b.ID = "second"
+	b.PhoneID = "333"
+	b.CoreToken = ""
+	s, err := New([]Account{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}

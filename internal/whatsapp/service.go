@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,6 +112,7 @@ type Input struct {
 	Location              *Location       `json:"location,omitempty"`
 	Contacts              []ContactCard   `json:"contacts,omitempty"`
 	tracking              string
+	beforeSubmit          func(context.Context) error
 	Before                string   `json:"before,omitempty"`
 	Description           string   `json:"description,omitempty"`
 	Participants          []string `json:"participants,omitempty"`
@@ -228,7 +230,22 @@ func (s *Service) Authenticate(token string) (Account, bool) {
 func (s *Service) Execute(ctx context.Context, a Account, in Input) (map[string]any, error) {
 	return s.execute(ctx, a, in, false)
 }
-func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly bool) (map[string]any, error) {
+func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly bool) (result map[string]any, err error) {
+	submitted := false
+	before := func() error {
+		if in.beforeSubmit != nil {
+			if err := in.beforeSubmit(ctx); err != nil {
+				return &deferredError{err}
+			}
+		}
+		submitted = true
+		return nil
+	}
+	defer func() {
+		if err != nil && !submitted {
+			err = &preSubmissionError{err}
+		}
+	}()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	select {
@@ -258,7 +275,7 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		}
 	}
 	if in.Operation == "messages.flow" {
-		return s.sendFlow(ctx, a, in, validateOnly)
+		return s.sendFlow(ctx, a, in, validateOnly, before)
 	}
 	if strings.HasPrefix(in.Operation, "flows.") {
 		return s.flow(ctx, a, in, validateOnly)
@@ -356,7 +373,7 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		if len(upload) > 0 && !validateOnly {
 			id, err := s.uploadAttachment(ctx, a, in, upload, uploadType)
 			if err != nil {
-				return nil, err
+				return nil, &deferredError{err}
 			}
 			media["id"] = id
 		}
@@ -666,9 +683,12 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		}
 		return nil, nil
 	}
-	return s.graph(ctx, a, method, path, query, body)
+	return s.graphSubmission(ctx, a, method, path, query, body, before)
 }
 func (s *Service) graph(ctx context.Context, a Account, method, path string, query url.Values, body any) (map[string]any, error) {
+	return s.graphSubmission(ctx, a, method, path, query, body, nil)
+}
+func (s *Service) graphSubmission(ctx context.Context, a Account, method, path string, query url.Values, body any, before func() error) (map[string]any, error) {
 	encoded, e := json.Marshal(body)
 	if e != nil {
 		return nil, errors.New("invalid request body")
@@ -690,6 +710,11 @@ func (s *Service) graph(ctx context.Context, a Account, method, path string, que
 	}
 	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
+	if before != nil {
+		if err := before(); err != nil {
+			return nil, err
+		}
+	}
 	return s.request(req)
 }
 
@@ -700,15 +725,32 @@ func (s *Service) request(req *http.Request) (map[string]any, error) {
 	}
 	defer response.Body.Close()
 	data, e := io.ReadAll(io.LimitReader(response.Body, 1<<20+1))
-	if e != nil || len(data) > 1<<20 {
+	if (e != nil || len(data) > 1<<20) && response.StatusCode < 300 {
 		return nil, errors.New("provider response invalid or too large")
 	}
 	var result map[string]any
-	if json.Unmarshal(data, &result) != nil || result == nil {
-		return nil, errors.New("invalid provider response")
-	}
+	decodeErr := json.Unmarshal(data, &result)
 	if response.StatusCode >= 300 || result["error"] != nil {
-		return nil, &ProviderError{Status: response.StatusCode}
+		rejection := &ProviderError{Status: response.StatusCode}
+		var envelope struct {
+			Error struct {
+				Code      int  `json:"code"`
+				Subcode   int  `json:"error_subcode"`
+				Transient bool `json:"is_transient"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(data, &envelope) == nil {
+			rejection.Code, rejection.Subcode, rejection.Transient = envelope.Error.Code, envelope.Error.Subcode, envelope.Error.Transient
+		}
+		if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil {
+			rejection.RetryAfter = max(0, min(seconds, 3600))
+		} else if stamp, err := http.ParseTime(response.Header.Get("Retry-After")); err == nil {
+			rejection.RetryAfter = max(0, min(int(time.Until(stamp).Seconds())+1, 3600))
+		}
+		return nil, rejection
+	}
+	if decodeErr != nil || result == nil {
+		return nil, errors.New("invalid provider response")
 	}
 	// Graph paging URLs may embed access tokens. Return only opaque cursors.
 	if paging, ok := result["paging"].(map[string]any); ok {
@@ -756,7 +798,25 @@ func (s *Service) checkGroup(ctx context.Context, a Account, id string) error {
 
 // ProviderError distinguishes an explicit rejection from a lost response.
 // It deliberately excludes provider bodies, which may echo sensitive data.
-type ProviderError struct{ Status int }
+type ProviderError struct {
+	Status     int  `json:"http_status"`
+	Code       int  `json:"code,omitempty"`
+	Subcode    int  `json:"subcode,omitempty"`
+	Transient  bool `json:"transient,omitempty"`
+	RetryAfter int  `json:"retry_after,omitempty"`
+}
+
+func (e *ProviderError) Retryable() bool {
+	return e.Status == 429 || e.Transient || e.Code == 130429 || e.Code == 131056
+}
+
+type preSubmissionError struct{ error }
+
+func (e *preSubmissionError) Unwrap() error { return e.error }
+
+type deferredError struct{ error }
+
+func (e *deferredError) Unwrap() error { return e.error }
 
 func (e *ProviderError) Error() string {
 	return "provider rejected operation; inspect delivery status before retry"
