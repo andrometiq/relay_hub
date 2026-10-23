@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from "vue";
 import { Badge, Button, ErrorMessage, FormControl, FeatherIcon } from "@relay/ui";
+import ChannelConnection from "./ChannelConnection.vue";
 import DocumentForm from "./DocumentForm.vue";
 
 const props = defineProps({
@@ -56,6 +57,24 @@ const coreFields = computed(() => [
   { ...privateField("callback_secret", "Callback signing secret", "At least 32 characters"), wide: true },
 ]);
 
+const smtpFields = computed(() => [
+  { name: "host", label: "SMTP host", type: "Data", required: true, placeholder: "smtp.example.com" },
+  { name: "port", label: "SMTP port", type: "Int", required: true, min: 1, max: 65535 },
+  { name: "username", label: "SMTP username", type: "Data" },
+  { name: "from", label: "From address", type: "Data", required: true, placeholder: "support@example.com" },
+]);
+const imapFields = computed(() => [
+  { name: "imap_host", label: "IMAP host (optional)", type: "Data", placeholder: "imap.example.com" },
+  { name: "imap_port", label: "IMAP port", type: "Int", min: 1, max: 65535 },
+  { name: "imap_username", label: "IMAP username", type: "Data", placeholder: "Defaults to SMTP username" },
+  privateField("imap_password", "IMAP password", "Defaults to SMTP password"),
+  { name: "imap_folder", label: "Mailbox folder", type: "Data", placeholder: "INBOX", wide: true },
+]);
+const trustFields = [
+  { name: "trusted_authserv_id", label: "Trusted authserv-id", type: "Data", placeholder: "From your mail provider’s Authentication-Results header" },
+  { name: "trusted_dsn_domain", label: "Trusted DSN domain", type: "Data", placeholder: "Authenticated delivery-report sender domain" },
+];
+
 const callbackURL = computed(() => {
   const path = window.location.pathname;
   const prefix = path === "/hub" || path.startsWith("/hub/") ? "/hub" : "";
@@ -81,7 +100,36 @@ async function copyCallback() {
 </script>
 
 <template>
-  <section class="channel-pane" aria-label="WhatsApp configuration">
+  <section v-if="channel !== 'WhatsApp'" class="channel-pane" :aria-label="channel + ' configuration'">
+    <header class="channel-pane__header">
+      <div class="channel-pane__title">
+        <span class="channel-pane__mark"><FeatherIcon :name="channel === 'Email' ? 'mail' : 'send'" /></span>
+        <div><h3>{{ channel }}</h3><p>{{ channel === 'Email' ? 'SMTP, mailbox and authenticated ingress' : 'Bot connection and webhook delivery' }}</p></div>
+      </div>
+      <FormControl type="checkbox" label="Enable channel" :model-value="enabled" @update:model-value="emit('update:enabled', $event)" />
+    </header>
+    <div v-if="!enabled" class="channel-pane__disabled"><h4>{{ channel }} is disabled</h4><p>Enable the channel to configure its connection.</p><Button :label="'Enable ' + channel" @click="emit('update:enabled', true)" /></div>
+    <div v-else class="channel-pane__content space-y-6">
+      <div class="setup-callout"><FeatherIcon name="info" :size="16" /><p>Saved credentials are write-only. Leave a saved secret blank to keep it.</p></div>
+      <DocumentForm v-if="channel === 'Email'" :model-value="config || {}" :fields="smtpFields" :errors="errors" @update:model-value="emit('update:config', $event)" />
+      <div>
+        <FormControl :label="channel === 'Telegram' ? 'Bot token' : 'SMTP password'" type="password" autocomplete="new-password" :placeholder="configured('secret') ? 'Saved — leave blank to keep' : channel === 'Telegram' ? 'Token from BotFather' : 'Mail provider password'" :model-value="secret" @update:model-value="emit('update:secret', $event)" />
+        <ErrorMessage :message="errors.secret" />
+      </div>
+      <template v-if="channel === 'Email'">
+        <p class="text-sm text-ink-gray-6">SMTP uses implicit TLS on port 465 and required STARTTLS on other ports. IMAP uses STARTTLS on port 143 and implicit TLS on other ports.</p>
+        <div class="setup-pane-heading"><div><h4>Receive from a mailbox</h4><p>Leave the IMAP host blank when using webhook ingress only.</p></div></div>
+        <DocumentForm :model-value="config || {}" :fields="imapFields" :errors="errors" @update:model-value="emit('update:config', $event)" />
+        <div class="setup-pane-heading"><div><h4>Trusted email evidence</h4><p>Use the exact authentication service ID and delivery-report domain supplied by your mail provider. Empty values do not establish sender or delivery evidence.</p></div></div>
+        <DocumentForm :model-value="config || {}" :fields="trustFields" :errors="errors" @update:model-value="emit('update:config', $event)" />
+      </template>
+      <div class="setup-pane-heading"><div><h4>Core delivery</h4><p>Telegram and email share Core delivery for this account. Configure all three values on one channel, or use the same three values on both.</p></div></div>
+      <DocumentForm :model-value="config || {}" :fields="coreFields" :errors="errors" @update:model-value="emit('update:config', $event)" />
+      <ChannelConnection v-if="accountId" :account="accountId" :channel="channel" />
+      <p v-else class="text-sm text-ink-gray-6">Save this account to activate the connection and check its health.</p>
+    </div>
+  </section>
+  <section v-else class="channel-pane" aria-label="WhatsApp configuration">
     <header class="channel-pane__header">
       <div class="channel-pane__title">
         <span class="channel-pane__mark"><FeatherIcon name="message-circle" /></span>

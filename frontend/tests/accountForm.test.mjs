@@ -124,3 +124,34 @@ test("account save preserves hidden WhatsApp capabilities without submitting oth
   assert.notEqual(payload.channels[0].config, config);
   assert.equal(config.groups, true);
 });
+
+test('Telegram and email validation is channel scoped and honors saved secrets', async () => {
+  const {validateChannelDraft} = await import('../src/composables/accountForm.js');
+  const draft = {enabled:true,channelEnabled:{Telegram:true,Email:true},configured:{Telegram:['secret'],Email:['secret','imap_password']},channelConfig:{Telegram:{},Email:{host:'smtp.example.invalid',port:587,from:'sender@example.invalid',username:'sender',imap_host:'imap.example.invalid'}}};
+  assert.deepEqual(validateChannelDraft(draft,'Telegram'), {});
+  assert.ok(validateChannelDraft(draft,'Telegram','broken').secret);
+  assert.deepEqual(validateChannelDraft(draft,'Email'), {});
+  Object.assign(draft.channelConfig.Email,{port:65536,imap_port:-1,from:'bad',trusted_authserv_id:'https://bad',core_api_key:'partial'});
+  const errors=validateChannelDraft(draft,'Email');
+  for (const key of ['port','imap_port','from','trusted_authserv_id','core_api_secret','callback_secret']) assert.ok(errors[key],key);
+  draft.channelEnabled.Email=false;
+  assert.deepEqual(validateChannelDraft(draft,'Email'), {});
+});
+
+
+test('email provider hosts accept raw IPv6 and reject brackets and malformed literals', async () => {
+  const {validateChannelDraft} = await import('../src/composables/accountForm.js');
+  for (const [host, valid] of [
+    ['::1', true], ['2001:db8::25', true], ['::ffff:192.0.2.1', true],
+    ['2001:db8:0:1:2:3:4:5', true], ['smtp.example.invalid', true], ['127.0.0.1', true],
+    ['[::1]', false], ['[2001:db8::25]', false], ['2001:::1', false],
+    ['1:2:3', false], ['fe80::1%eth0', false], ['::ffff:999.0.0.1', false],
+    ['smtp.invalid:587', false], ['https://smtp.invalid', false],
+  ]) {
+    const draft = {enabled:true, channelEnabled:{Email:true}, configured:{Email:['secret']},
+      channelConfig:{Email:{host, imap_host:host, port:587, username:'local', from:'sender@example.invalid'}}};
+    const errors = validateChannelDraft(draft, 'Email');
+    assert.equal(!errors.host, valid, host);
+    assert.equal(!errors.imap_host, valid, host);
+  }
+});
