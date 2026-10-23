@@ -184,6 +184,12 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "event persistence failed", 503)
 			return
 		}
+		if eventLane(body) == "realtime" {
+			select {
+			case s.callbackWake <- struct{}{}:
+			default:
+			}
+		}
 	}
 	w.WriteHeader(200)
 }

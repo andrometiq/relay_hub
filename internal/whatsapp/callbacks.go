@@ -27,10 +27,12 @@ type CallbackDispatcher struct {
 func (d *CallbackDispatcher) Run(ctx context.Context) {
 	for _, lane := range []string{"realtime", "status"} {
 		interval := 250 * time.Millisecond
+		var wake <-chan struct{} = d.Service.callbackWake
 		if lane == "status" {
 			interval = time.Second
+			wake = nil
 		}
-		go callbackworker.Run(ctx, interval, 8, func() []callbackworker.Job {
+		go callbackworker.RunWithWake(ctx, interval, 8, func() []callbackworker.Job {
 			accounts := []Account{}
 			for _, a := range d.Service.AccountsSnapshot() {
 				if a.CoreAPIKey != "" {
@@ -43,11 +45,12 @@ func (d *CallbackDispatcher) Run(ctx context.Context) {
 				jobs = append(jobs, callbackworker.Job{Key: a.ID, Run: func(jobCtx context.Context) { _ = d.deliver(jobCtx, a, lane) }})
 			}
 			return jobs
-		})
+		}, wake)
 	}
 }
 
 func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string) error {
+	started := time.Now()
 	c, err := pgx.Connect(ctx, d.URL)
 	if err != nil {
 		return err
@@ -168,6 +171,7 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	req.Header.Set("Authorization", "token "+a.CoreAPIKey+":"+a.CoreAPISecret)
 	req.Header.Set("X-Relay-Timestamp", timestamp)
 	req.Header.Set("X-Relay-Signature", hex.EncodeToString(mac.Sum(nil)))
+	req.Header.Set("X-Relay-Dispatch-Ms", strconv.FormatFloat(float64(time.Since(started).Microseconds())/1000, 'f', 3, 64))
 	response, err := d.Service.client.Do(req)
 	ack := false
 	if err == nil {

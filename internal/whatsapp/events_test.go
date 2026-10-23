@@ -50,6 +50,16 @@ func TestWebhookVerificationAndPersistence(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("status %d want %d", w.Code, tc.status)
 		}
+		select {
+		case <-s.callbackWake:
+			if tc.status != 200 || store.saved != 1 {
+				t.Fatal("woke before persistence succeeded")
+			}
+		default:
+			if tc.status == 200 {
+				t.Fatal("committed realtime event did not wake delivery")
+			}
+		}
 	}
 	if store.saved != 1 {
 		t.Fatal("unverified event persisted")
@@ -60,6 +70,29 @@ func TestWebhookVerificationAndPersistence(t *testing.T) {
 	s.Webhook(w, r)
 	if w.Code != 200 || w.Body.String() != "123" {
 		t.Fatal("verification failed")
+	}
+}
+
+func TestStatusWebhookDoesNotWakeRealtime(t *testing.T) {
+	a := testAccount()
+	a.AppSecret = "app-secret"
+	s, _ := New([]Account{a})
+	s.Events = &fakeEvents{}
+	body := `{"object":"whatsapp_business_account","entry":[{"id":"222","changes":[{"value":{"metadata":{"phone_number_id":"111"},"statuses":[{"id":"out","status":"read"}]}}]}]}`
+	mac := hmac.New(sha256.New, []byte(a.AppSecret))
+	mac.Write([]byte(body))
+	r := httptest.NewRequest("POST", "/webhooks/whatsapp/site-a", strings.NewReader(body))
+	r.SetPathValue("account", "site-a")
+	r.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	w := httptest.NewRecorder()
+	s.Webhook(w, r)
+	if w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	select {
+	case <-s.callbackWake:
+		t.Fatal("status storm woke realtime lane")
+	default:
 	}
 }
 

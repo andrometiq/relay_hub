@@ -11,10 +11,15 @@ type Job struct {
 	Run func(context.Context)
 }
 
-// Run refreshes the account snapshot every tick. A slow account consumes one
+// Run refreshes the account snapshot before dispatch. A slow account consumes one
 // slot, never the entire dispatcher. Keys cannot overlap within this scheduler;
 // database leases/locks remain responsible for exclusion across replicas.
 func Run(ctx context.Context, interval time.Duration, workers int, snapshot func() []Job) {
+	RunWithWake(ctx, interval, workers, snapshot, nil)
+}
+
+// RunWithWake retains the ticker for retries and work committed by other replicas.
+func RunWithWake(ctx context.Context, interval time.Duration, workers int, snapshot func() []Job, wake <-chan struct{}) {
 	if workers < 1 || interval <= 0 {
 		panic("invalid callback worker configuration")
 	}
@@ -22,37 +27,51 @@ func Run(ctx context.Context, interval time.Duration, workers int, snapshot func
 	defer ticker.Stop()
 	done := make(chan string, workers)
 	busy := make(map[string]bool)
-	next := 0
+	queued := make(map[string]bool)
+	var pending []string
 	for {
+		refresh := false
 		select {
 		case <-ctx.Done():
 			return
 		case key := <-done:
 			delete(busy, key)
 		case <-ticker.C:
-			jobs := snapshot()
-			if len(jobs) == 0 {
-				continue
-			}
-			start := next % len(jobs)
-			for scanned := 0; scanned < len(jobs) && len(busy) < workers; scanned++ {
-				index := (start + scanned) % len(jobs)
-				next = (index + 1) % len(jobs)
-				job := jobs[index]
-				if busy[job.Key] {
-					continue
-				}
-				busy[job.Key] = true
-				go func() {
-					jobCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-					defer cancel()
-					job.Run(jobCtx)
-					select {
-					case done <- job.Key:
-					case <-ctx.Done():
-					}
-				}()
+			refresh = true
+		case <-wake:
+			refresh = true
+		}
+		jobs := make(map[string]Job)
+		for _, job := range snapshot() {
+			jobs[job.Key] = job
+			if refresh && !queued[job.Key] {
+				pending = append(pending, job.Key)
+				queued[job.Key] = true
 			}
 		}
+		remaining := pending[:0]
+		for _, key := range pending {
+			job, ok := jobs[key]
+			if !ok {
+				delete(queued, key)
+				continue
+			}
+			if busy[key] || len(busy) >= workers {
+				remaining = append(remaining, key)
+				continue
+			}
+			delete(queued, key)
+			busy[key] = true
+			go func() {
+				jobCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				defer cancel()
+				job.Run(jobCtx)
+				select {
+				case done <- job.Key:
+				case <-ctx.Done():
+				}
+			}()
+		}
+		pending = remaining
 	}
 }
