@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  accountSavePayload,
   activeChannels,
   whatsappReady,
   validateWhatsAppDraft,
@@ -111,4 +112,15 @@ test("template management requires the numeric Meta app ID", () => {
   assert.ok(validateWhatsAppDraft(draft).app_id);
   draft.channelConfig.WhatsApp.app_id = "789";
   assert.equal(validateWhatsAppDraft(draft).app_id, undefined);
+});
+
+test("account save preserves hidden WhatsApp capabilities without submitting other channels", () => {
+  const config = { phone_id: "123", groups: true, calls: true, templates: true };
+  const draft = { id: " a ", site: "https://core.test/", enabled: true,
+    channelEnabled: { WhatsApp: false }, channelConfig: { WhatsApp: config } };
+  const payload = accountSavePayload(draft);
+  assert.deepEqual(payload, { id: "a", site: "https://core.test", enabled: true,
+    channels: [{ channel: "WhatsApp", enabled: false, config }] });
+  assert.notEqual(payload.channels[0].config, config);
+  assert.equal(config.groups, true);
 });

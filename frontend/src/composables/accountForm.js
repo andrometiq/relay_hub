@@ -66,3 +66,16 @@ export function validateWhatsAppDraft(draft, secrets = {}) {
       "Use at least 32 characters for the callback signing secret.";
   return errors;
 }
+
+export function accountSavePayload(draft) {
+  return {
+    id: draft.id.trim(),
+    site: new URL(draft.site).origin,
+    enabled: !!draft.enabled,
+    channels: [{
+      channel: "WhatsApp",
+      enabled: !!draft.channelEnabled.WhatsApp,
+      config: { ...(draft.channelConfig.WhatsApp || {}) },
+    }],
+  };
+}
