@@ -1,6 +1,8 @@
-import { ref, computed, reactive } from "vue";
+import { ref, reactive } from "vue";
 import { hubApi } from "../services/hubApi";
 export function useHubData() {
+  const updated = ref("");
+  const revision = ref(0);
   const accounts = ref([]),
     runtime = ref({}),
     deliveries = ref({});
@@ -13,24 +15,12 @@ export function useHubData() {
     next: "",
     previous: [],
     total: 0,
-    enabled: 0,
     busy: false,
   });
-  const channelRows = computed(() =>
-    accounts.value.flatMap((account) =>
-      (account.channels || []).map((channel) => ({
-        ...channel,
-        account: account.id,
-        site: account.site,
-      })),
-    ),
-  );
-  const enabledChannels = computed(() => accountPage.enabled);
   function applyAccounts(data) {
     accounts.value = data.accounts || [];
     accountPage.next = data.next || "";
     accountPage.total = data.total ?? accounts.value.length;
-    accountPage.enabled = data.enabled_channels ?? 0;
   }
   const accountPath = (query, after) =>
     "accounts?" + new URLSearchParams({ query, after });
@@ -84,17 +74,18 @@ export function useHubData() {
     error.value =
       results.find((result) => result.status === "rejected")?.reason.message ||
       "";
+    updated.value = new Date().toLocaleTimeString();
+    revision.value++;
     busy.value = false;
   }
   return {
+    updated, revision,
     accounts,
     runtime,
     deliveries,
     status,
     busy,
     error,
-    channelRows,
-    enabledChannels,
     refresh,
     accountPage,
     searchAccounts,

@@ -43,7 +43,7 @@ const countErrors = (step) =>
     <div class="account-setup-nav__group">
       <div class="account-setup-nav__channel-heading">
         <span>Channels</span>
-        <Badge :label="channelReady ? 'Connected' : channelEnabled ? 'Setup needed' : 'Disabled'" :theme="channelReady ? 'green' : channelEnabled ? 'orange' : 'gray'" />
+        <Badge :label="channelReady ? 'Verified' : channelEnabled ? 'Setup needed' : 'Disabled'" :theme="channelReady ? 'green' : channelEnabled ? 'orange' : 'gray'" />
       </div>
       <div class="account-setup-nav__channel">
         <div class="account-setup-nav__channel-name">

@@ -350,6 +350,7 @@ func run() error {
 			}
 			json.NewEncoder(w).Encode(map[string]any{"accounts": rows, "next": next, "previous": previous, "total": total, "enabled_channels": enabled, "csrf": auth.CSRF(cookie.Value)})
 		})))
+		mux.Handle("GET /api/accounts/health", browserAuth.Protect(accountHealth(authPool, browserAuth.Session)))
 		mux.Handle("GET /api/accounts/metadata", browserAuth.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, err := browserAuth.Session(r)
 			if err != nil {
