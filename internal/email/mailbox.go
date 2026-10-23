@@ -10,20 +10,23 @@ import (
 	"github.com/emersion/go-imap/v2/imapclient"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"time"
 )
 
 type MailboxCursor struct {
-	Validity uint32
-	UID      uint32
+	Validity     uint32
+	UID          uint32
+	Backlog      bool
+	ResetUIDNext uint32
 }
 
 func (c *Client) MailboxConfigured() bool { return c.cfg.Enabled && c.cfg.IMAPHost != "" }
 
 // FetchMailbox uses read-only EXAMINE and BODY.PEEK, so ingestion does not mark
 // mail read. A page covers at most 20 UIDs and one bounded body at a time.
-func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, consume func(uint32, uint32, *Received, string) error) (MailboxCursor, error) {
+func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, checkpoint func(MailboxCursor) error, consume func(uint32, uint32, *Received, string) error) (MailboxCursor, error) {
 	fail := errors.New("mailbox connection or synchronization failed")
 	if !c.MailboxConfigured() {
 		return cursor, fail
@@ -66,14 +69,36 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, consume
 		return cursor, fail
 	}
 	if cursor.Validity != mailbox.UIDValidity {
-		cursor = MailboxCursor{Validity: mailbox.UIDValidity}
+		cursor = MailboxCursor{Validity: mailbox.UIDValidity, ResetUIDNext: uint32(mailbox.UIDNext)}
+		// Persist the reset snapshot even when empty or the first fetch fails.
+		if err := checkpoint(cursor); err != nil {
+			return cursor, err
+		}
 	}
 	ceiling := uint32(mailbox.UIDNext) - 1
 	if cursor.UID >= ceiling {
+		cursor.Backlog = false
 		return cursor, nil
 	}
-	end := min(uint64(cursor.UID)+20, uint64(ceiling))
-	for uid := uint64(cursor.UID) + 1; uid <= end; uid++ {
+	// Bound the UID search window as well as the number of bodies per page.
+	end := uint32(min(uint64(cursor.UID)+10000, uint64(ceiling)))
+	search, err := client.UIDSearch(&imap.SearchCriteria{UID: []imap.UIDSet{{{Start: imap.UID(cursor.UID + 1), Stop: imap.UID(end)}}}}, nil).Wait()
+	if err != nil {
+		return cursor, fail
+	}
+	uids := search.AllUIDs()
+	slices.Sort(uids)
+	uids = slices.Compact(uids)
+	more := len(uids) > 20
+	if more {
+		uids = uids[:20]
+	}
+	cursor.Backlog = more || end < ceiling
+	for _, found := range uids {
+		uid := uint32(found)
+		if uid <= cursor.UID || uid > end {
+			return cursor, fail
+		}
 		section := &imap.FetchItemBodySection{Peek: true, Partial: &imap.SectionPartial{Size: MaxMessageBytes + 1}}
 		command := client.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{UID: true, RFC822Size: true, BodySection: []*imap.FetchItemBodySection{section}})
 		var raw []byte
@@ -94,13 +119,20 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, consume
 					size = value.Size
 				case imapclient.FetchItemDataBodySection:
 					if value.Literal != nil {
-						raw, err = io.ReadAll(io.LimitReader(value.Literal, MaxMessageBytes+1))
-						if err != nil || len(raw) > MaxMessageBytes {
+						if value.Literal.Size() > MaxMessageBytes {
+							// Release the literal reader before waiting for the decoder.
+							conn.Close()
+							_, _ = io.Copy(io.Discard, value.Literal)
 							client.Close()
 							if e := consume(cursor.Validity, uint32(uid), nil, "Message exceeds 6 MiB"); e != nil {
 								return cursor, e
 							}
 							cursor.UID = uint32(uid)
+							return cursor, fail
+						}
+						raw, err = io.ReadAll(value.Literal)
+						if err != nil || int64(len(raw)) != value.Literal.Size() {
+							client.Close()
 							return cursor, fail
 						}
 					}
@@ -114,7 +146,7 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, consume
 			if returned != imap.UID(uid) {
 				return cursor, fail
 			}
-			received, parseErr := Parse(raw)
+			received, parseErr := c.ParseIngress(raw)
 			reason := ""
 			if size > MaxMessageBytes || parseErr != nil {
 				reason = "Message MIME or size exceeds supported limits"
@@ -130,6 +162,10 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, consume
 		}
 		cursor.UID = uint32(uid)
 	}
+	if !more {
+		cursor.UID = end
+	}
+	cursor.Backlog = cursor.UID < ceiling
 	return cursor, nil
 }
 
