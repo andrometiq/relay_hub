@@ -155,22 +155,33 @@ def main():
             fields=['name', 'request_key', 'status', 'outbound_message'])
         return dict(messages=messages, templates=templates, events=events, actions=actions)
 
+    from whatsapp_sim_acceptance import Acceptance
+    acceptance = Acceptance(frappe, fixture, insert)
+
     def dispatch(req):
         action = req['action']
+        if action.startswith('acceptance_'):
+            method = action.removeprefix('acceptance_')
+            assert method in {'seed_ai', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable'}
+            return getattr(acceptance, method)(**{key: value for key, value in req.items() if key != 'action'})
         if action == 'preflight':
             assert frappe.conf.developer_mode, 'Target must be a development site'
+            acceptance.preflight()
             assert 'relay_core' in frappe.get_installed_apps(), 'Relay Core is not installed'
             for name in ['Relay Settings', 'Relay Hub Event', 'Relay WhatsApp Template', 'Relay Business Routing', 'Customer']:
                 assert frappe.db.exists('DocType', name), f'Missing installed DocType: {name}'
             # A paused synthetic contact blocks AI/flows. No external channels are seeded.
             assert not frappe.get_all('Notification', filters={'enabled': 1, 'document_type': ['in',
-                ['Contact', 'Customer', 'User', 'Relay Message', 'Relay Contact']]}, limit_page_length=1), 'Disable external fixture notifications first'
+                ['Contact', 'Customer', 'Supplier', 'GL Entry', 'Sales Order', 'Item', 'User', 'Relay Message', 'Relay Contact']]}, limit_page_length=1), 'Disable external fixture notifications first'
+            for doctype, field in [('Webhook', 'webhook_doctype'), ('YRP Notification Template', 'document_type')]:
+                if frappe.db.exists('DocType', doctype):
+                    assert not frappe.get_all(doctype, filters={'enabled': 1, field: ['in', ['Sales Order', 'Supplier', 'GL Entry', 'Item']]}, limit_page_length=1), 'Disable external fixture webhooks/notifications first'
             return {'canonical_origin': frappe.utils.get_url().rstrip('/'), 'version': frappe.__version__,
                     'site': site, 'developer_mode': bool(frappe.conf.developer_mode)}
         if action == 'provision':
             run = req['run']
             fixture['service'] = user('service', ['Relay Hub Service'], run)
-            fixture['operator'] = user('operator', ['System Manager', 'Relay Communication Manager', 'Sales Manager'], run)
+            fixture['operator'] = user('operator', ['System Manager', 'Relay Communication Manager', 'Sales Manager', 'Accounts Manager', 'Purchase Manager'], run)
             fixture['unauthorized'] = user('unauthorized', ['Relay Communication User'], run)
             contact_type = frappe.db.get_value('Relay Contact Type', {'business_doctype': 'Customer'}, 'name')
             if contact_type:

@@ -351,3 +351,95 @@ configuration or Frappe schema was changed.
 Evidence: `.runtime/sim-report/latency/report.md` and `report.json`. These are
 webhook-to-Core-row measurements, not browser rendering measurements. Changes
 remain uncommitted for orchestrator review.
+
+## AI and business-event extension (steps 13–14)
+
+The runner now prepares steps 13 and 14 after template approval. These additions
+are **not yet connected-validated**. The target web unit uses `--noreload`; restart
+is required before running changed Core code. The agent must not restart the
+user's units. The operator command is:
+
+```sh
+systemctl --user restart v16-web.service v16-worker.service
+```
+
+Socket.IO is unchanged. Reload only `Relay AI Skill` using
+`frappe.reload_doc('relay_core', 'doctype', 'relay_ai_skill', force=True)` on
+`yrp.site`; do not migrate or export fixtures. This reload was applied during
+preparation, and the disabled Shadow sample RELAY-AIS-0000000001 was installed. The disabled Supplier ledger sample is installed idempotently by
+Core's install/migrate hooks and by the connected fixture setup. Existing sample
+configuration is preserved; the runner refuses customized read contracts or a
+sample assigned to another channel.
+
+Step 13 also requires the global `relay_automation_enabled` gate. It is absent
+from yrp.site's merged configuration as checked during review, so a restart
+alone cannot activate AI. Preflight now refuses a missing/disabled gate before
+provisioning fixtures or starting the Hub; AI fixture setup rechecks it too.
+The runner never changes site configuration. **Separate user approval is required**
+for this activation command, run from `/home/sakthi/development/pilot/benches/version_16`:
+
+```sh
+bench --site yrp.site set-config relay_automation_enabled 1 --parse
+```
+
+This enables the site's automation gate, not just the simulation skill. After
+approval and activation, the operator must perform the web/worker restart above
+before connected validation. Neither command was run during this review.
+
+| Step | Assertions added | Current validation |
+| --- | --- | --- |
+| 13 | Offer an explicit range before a read; confirmation invokes the real scoped GL tool; one durable action/outbox/Meta POST/history row per reply; Sent, Delivered and Read receipts; webhook replay does not resend; one assigned supplier ticket and pause on handoff; second supplier, cancelled and out-of-range GL rows never reach the fake AI or reply. | Unit checks only; connected run pending gate activation and restart. |
+| 14 | Normal Sales Order insert/submit captures one intent despite lifecycle replay; one template POST to the customer; actual conversation timeline entry; a second submit succeeds with relay-sim stopped and retains its intent. | Unit checks only; connected run pending gate activation and restart. |
+
+`cmd/relay-sim` exposes `/ai/chat/completions` on its existing loopback fake-Meta
+listener. It implements only the `relay-sim-ledger` fixture conversation and
+accepts only a synthetic key. It has no outbound transport. A dedicated **AI
+Provider Account** uses the existing OpenRouter adapter with that loopback base
+URL, and a dedicated **AI Model** selects it. No shared provider code or site
+configuration changes are needed for provider selection; the automation gate
+activation above is still required. The fake deliberately returns incorrect final
+arithmetic; Core must replace it with its deterministic ledger presentation.
+AI request captures use the existing credential redaction.
+
+The runner creates two identifiable Suppliers, a linked Contact and verified
+WhatsApp endpoint, plus five GL Entry read-contract fixtures: debit 100.10,
+credit 40.05, another supplier's debit 88,000, an out-of-range debit 77,000,
+and a cancelled debit 1,250. Cancelled rows must never reach the model or reply.
+GL rows are inserted directly as test read data, **not posted accounting
+vouchers**. Production GL controllers and accounting posting are outside this
+acceptance scope. The real AI worker still uses Frappe query/document/field
+permissions to read those rows. The event source is a normally submitted Sales
+Order with a non-stock service item at rate 125 and quantity two.
+Company, payable Account, Supplier/Item Groups and UOM must already exist.
+
+Preflight refuses enabled notifications/webhooks for the new fixture document
+types. No real provider credential is seeded. At completion the runner disables
+its sample skill and event rule, retaining data for inspection. An outage intent
+may remain Pending/Uncertain/Failed; this step establishes submit isolation, not
+outage recovery. The runner stops only its own Hub. No connected success should
+be inferred from dry-run, UI build, or unit tests.
+
+The paused-message assertion waits for that exact provider ID's committed Core
+message before checking zero automation runs, actions and outgoing messages.
+Projection creates any automation run synchronously with message insertion, so
+the committed row is the transaction barrier; callback acknowledgements alone
+do not establish this. Even a queued Pending run fails the check.
+
+
+### Review fixes: local validation
+
+All four review findings were confirmed and fixed. The ledger query excludes
+cancelled rows before pagination; unit coverage combines cancellation with full
+and truncated results and rejects attempts to override the filter. The paused
+message check rejects even a Pending automation run after its own projection.
+Ticket badges and detail names wrap long business names within 375px cards.
+
+- Core: 240 unit tests, 235 passed, three skipped, the two known ffprobe errors.
+- Frontend: 64 Node tests passed; `npm run build` and `npm run build:site` passed.
+- Browser fixture: assignment, close, empty state, shadow result and live preview
+  passed at 375/768/1440px, plus spaced and unbroken long names at 375px.
+  This uses intercepted APIs and is not target-site acceptance.
+- Hub: `go vet ./...`, `go test ./...` and 30 Python runner tests passed.
+- No connected run, restart, site-config change, migration or fixture export was
+  performed. Steps 13–14 remain unvalidated on yrp.site until the prerequisites
+  above are fulfilled. Existing steps 7–12 were not rerun during this review.
