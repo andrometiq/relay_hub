@@ -18,6 +18,7 @@ import (
 )
 
 type Config struct {
+	TrustedAuthservID, TrustedDSNDomain              string
 	IMAPHost, IMAPUsername, IMAPPassword, IMAPFolder string
 	IMAPPort                                         int
 	AccountID, Host, Username, Password, From        string
