@@ -8,10 +8,12 @@ import {
   FormControl,
   FeatherIcon,
 } from "@relay/ui";
+import AccountHealth from "../components/AccountHealth.vue";
 import InfiniteList from "../components/InfiniteList.vue";
 import { hubApi } from "../services/hubApi";
 
 defineEmits(["navigate"]);
+const list = ref();
 const query = ref("");
 const selected = ref(null);
 const metadata = ref(null);
@@ -36,6 +38,8 @@ async function loadChannels({ cursor, direction, q }) {
         enabled: !!account.enabled && !!channel?.enabled,
         configured: !!channel,
         sync: !!channel?.config?.sync_metadata,
+        verified: channel?.config?.connection_status === "connected",
+        verifiedAt: channel?.config?.verified_at,
       };
     }),
     more: direction === "before" ? !!data.previous : !!data.next,
@@ -46,8 +50,9 @@ async function open(row) {
   selected.value = row;
   metadata.value = null;
   metadataError.value = "";
-  if (!row.configured) return;
   const current = ++request;
+  metadataBusy.value = false;
+  if (!row.configured) return;
   metadataBusy.value = true;
   try {
     const result = await hubApi(
@@ -60,6 +65,7 @@ async function open(row) {
     if (current === request) metadataBusy.value = false;
   }
 }
+defineExpose({ refresh: () => list.value?.reload() });
 </script>
 
 <template>
@@ -84,7 +90,7 @@ async function open(row) {
       <span>Account</span><span>Site</span><span>Connection</span
       ><span>Sync</span><span></span>
     </div>
-    <InfiniteList :load="loadChannels" :query="query" :row-height="64">
+    <InfiniteList ref="list" :load="loadChannels" :query="query" :row-height="64">
       <template #default="{ row }">
         <button
           type="button"
@@ -132,6 +138,7 @@ async function open(row) {
       <template #body-content>
         <div v-if="selected" class="space-y-5">
           <dl class="entity-details">
+            <div><dt>Credentials verified</dt><dd>{{ selected.verified ? selected.verifiedAt || "Verified" : "Not verified" }}</dd></div>
             <div><dt>Frappe site</dt><dd>{{ selected.site }}</dd></div>
             <div>
               <dt>Connection</dt>
@@ -142,11 +149,15 @@ async function open(row) {
               <dd>{{ selected.sync ? "Every hour" : "Off" }}</dd>
             </div>
           </dl>
+          <AccountHealth :account="selected.account" />
           <ErrorMessage :message="metadataError" />
           <p v-if="metadataBusy" role="status" class="text-sm text-ink-gray-5">
             Checking Meta sync…
           </p>
           <dl v-else-if="metadata" class="entity-details">
+            <div><dt>Display number</dt><dd>{{ metadata.profile?.display_phone_number || 'Not cached yet' }}</dd></div>
+            <div><dt>Verified name</dt><dd>{{ metadata.profile?.verified_name || 'Not cached yet' }}</dd></div>
+            <div><dt>Quality rating</dt><dd>{{ metadata.profile?.quality_rating || 'Not cached yet' }}</dd></div>
             <div><dt>Sync status</dt><dd>{{ metadata.status }}</dd></div>
             <div>
               <dt>Last successful sync</dt>

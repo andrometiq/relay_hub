@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from "vue";
+import { ref, watch, computed } from "vue";
 import {
   Badge,
   Button,
@@ -8,12 +8,17 @@ import {
   FormControl,
   FeatherIcon,
 } from "@relay/ui";
+import CallbackFailures from "./CallbackFailures.vue";
 import AccountPicker from "../components/AccountPicker.vue";
 import { hubApi } from "../services/hubApi";
 
-defineProps(["deliveries"]);
+
+const emit = defineEmits(["changed"]);
+const cancelConfirm = ref(false);
+const callbacks = ref();
 const account = ref("");
 const rows = ref([]);
+const deliveries = computed(() => rows.value.reduce((counts, row) => ({...counts, [row.state]: (counts[row.state] || 0) + 1}), {}));
 const more = ref(false);
 const busy = ref(false);
 const error = ref("");
@@ -72,6 +77,8 @@ function scrolled(event) {
 function open(row) {
   selected.value = row;
   resolving.value = false;
+  cancelConfirm.value = false;
+  error.value = "";
   outcome.value = "submitted";
   note.value = "";
   providerId.value = "";
@@ -95,13 +102,16 @@ async function change(action) {
         : {}),
     });
     selected.value = null;
+    busy.value = false;
     await load();
+    emit("changed");
   } catch (exception) {
     error.value = exception.message;
   } finally {
     busy.value = false;
   }
 }
+defineExpose({ refresh: async () => { await load(); await callbacks.value?.refresh(); } });
 </script>
 
 <template>
@@ -119,6 +129,7 @@ async function change(action) {
         @click="load()"
       />
     </div>
+    <p class="text-sm text-ink-gray-6 mb-3">Counts reflect loaded deliveries for the selected account.</p>
     <div class="metrics">
       <article>
         <span>Queued</span><strong>{{ deliveries.queued || 0 }}</strong>
@@ -167,11 +178,13 @@ async function change(action) {
           <FeatherIcon name="chevron-right" class="h-4 w-4 text-ink-gray-4" />
         </button>
         <p v-if="busy" class="infinite-list__status" role="status">Loading…</p>
-        <p v-else-if="!rows.length" class="entity-prompt">
+        <p v-else-if="!rows.length && !error" class="entity-prompt">
           No deliveries for this account.
         </p>
       </div>
     </template>
+
+    <CallbackFailures ref="callbacks" v-if="account" :key="account" :account="account" @changed="emit('changed')" />
 
     <Dialog
       :model-value="!!selected"
@@ -187,8 +200,13 @@ async function change(action) {
             <div><dt>Message type</dt><dd>{{ selected.operation || "Message" }}</dd></div>
             <div><dt>Queue state</dt><dd>{{ selected.state }}</dd></div>
             <div><dt>Provider status</dt><dd>{{ selected.delivery_status || "Pending" }}</dd></div>
+            <div><dt>Attempts</dt><dd>{{ selected.attempts ?? 0 }}</dd></div>
+            <div><dt>Provider ID</dt><dd>{{ selected.result?.messages?.[0]?.id || "Not assigned" }}</dd></div>
+            <div v-if="selected.provider_error"><dt>Provider error</dt><dd>{{ selected.provider_error }}</dd></div>
             <div v-if="selected.error"><dt>Issue</dt><dd>{{ selected.error }}</dd></div>
           </dl>
+          <ErrorMessage :message="error" />
+          <p v-if="cancelConfirm" role="alert">Cancel this queued send? The Hub will cancel only if sending has not started.</p>
           <form v-if="resolving" class="space-y-4" @submit.prevent="change('resolve')">
             <p class="text-sm text-ink-gray-6">
               Record the outcome only after checking it in Meta. This action
@@ -219,9 +237,9 @@ async function change(action) {
           <Button label="Close" :disabled="busy" @click="close" />
           <Button
             v-if="selected?.state === 'queued'"
-            label="Cancel queued send"
+            :label="cancelConfirm ? 'Confirm cancellation' : 'Cancel queued send'"
             :loading="busy"
-            @click="change('cancel')"
+            @click="cancelConfirm ? change('cancel') : (cancelConfirm = true)"
           />
           <Button
             v-if="selected?.state === 'uncertain' && !resolving"

@@ -4,26 +4,27 @@ import { Badge, Button, Dialog, FormControl, FeatherIcon } from "@relay/ui";
 import AccountSetupNavigation from "../components/AccountSetupNavigation.vue";
 import ChannelCredentials from "../components/ChannelCredentials.vue";
 import DocumentForm from "../components/DocumentForm.vue";
-import InfiniteList from "../components/InfiniteList.vue";
-import { hubApi } from "../services/hubApi";
+import AccountPagination from "../components/AccountPagination.vue";
+
 import { useAccountEditor, accountFields, whatsappReady } from "../composables/useAccountEditor";
 
-const props = defineProps({ accounts: Array, refresh: Function, page: Object });
+const props = defineProps({ accounts: Array, refresh: Function, page: Object, busy: Boolean, error: String });
+const emit = defineEmits(["search", "page"]);
 const query = ref(props.page.query || "");
-const list = ref();
+
 const activeStep = ref("account");
 const steps = ["account", "meta", "webhook", "features", "delivery"];
 const stepFields = {
   account: ["id", "site", "enabled"],
   meta: ["secret", "phone_id", "waba_id", "app_id", "graph_version"],
   webhook: ["app_secret", "verify_token"],
-  features: [],
+  features: ["messages_per_second"],
   delivery: ["core_api_key", "core_api_secret", "callback_secret"],
 };
 
 const reload = async () => {
   await props.refresh();
-  list.value?.reload();
+
 };
 const {
   editing,
@@ -35,7 +36,7 @@ const {
   saving,
   edit: beginEdit,
   close,
-  save,
+  save, retryActivation, activationPending,
 } = useAccountEditor(toRef(props, "accounts"), reload);
 
 const fields = computed(() =>
@@ -66,12 +67,6 @@ function moveStep(offset) {
   activeStep.value = steps[next];
 }
 
-async function loadAccounts({ cursor, direction, q }) {
-  const parameters = new URLSearchParams({ query: q.slice(0, 80) });
-  if (cursor) parameters.set(direction === "before" ? "before" : "after", cursor);
-  const data = await hubApi("accounts?" + parameters);
-  return { items: data.accounts || [], more: direction === "before" ? !!data.previous : !!data.next };
-}
 </script>
 
 <template>
@@ -79,7 +74,7 @@ async function loadAccounts({ cursor, direction, q }) {
     <div class="view-heading">
       <div>
         <h2>Accounts</h2>
-        <p>Connect each Frappe site to its business messaging channels.</p>
+        <p>Configure each site’s WhatsApp credentials, webhook and Core callbacks.</p>
       </div>
       <Button label="New account" variant="solid" icon-left="plus" @click="openAccount(null)" />
     </div>
@@ -88,23 +83,25 @@ async function loadAccounts({ cursor, direction, q }) {
 
     <div class="entity-toolbar">
       <FormControl v-model="query" type="search" placeholder="Search by account or site" aria-label="Search accounts" autocomplete="off" />
+      <Button label="Search" :loading="busy || page.busy" @click="emit('search', query)" />
       <span>{{ page.total }} account{{ page.total === 1 ? "" : "s" }}</span>
     </div>
 
     <div class="entity-list-head" aria-hidden="true">
       <span>Account</span><span>Site</span><span>WhatsApp</span><span>Status</span><span></span>
     </div>
-    <InfiniteList ref="list" :load="loadAccounts" :query="query" :row-height="64">
-      <template #default="{ row }">
-        <button type="button" class="entity-row" :aria-label="'Open account ' + row.id" @click="openAccount(row)">
+    <p v-if="busy || page.busy" role="status">Loading accounts…</p>
+    <div class="account-list">
+        <button v-for="row in accounts" :key="row.id" type="button" class="entity-row" :aria-label="'Open account ' + row.id" @click="openAccount(row)">
           <span class="entity-primary"><span class="entity-icon" aria-hidden="true"><FeatherIcon name="briefcase" class="h-4 w-4" /></span><strong>{{ row.id }}</strong></span>
           <span class="entity-site">{{ row.site }}</span>
-          <span><Badge :label="configured(row) ? 'Connected' : 'Setup needed'" :theme="configured(row) ? 'green' : 'orange'" /></span>
+          <span><Badge :label="configured(row) ? 'Credentials verified' : 'Setup needed'" :theme="configured(row) ? 'green' : 'orange'" /></span>
           <span><Badge :label="row.enabled ? 'Enabled' : 'Disabled'" :theme="row.enabled ? 'green' : 'gray'" /></span>
           <FeatherIcon name="chevron-right" class="h-4 w-4 text-ink-gray-4" />
         </button>
-      </template>
-    </InfiniteList>
+    </div>
+    <p v-if="!busy && !page.busy && !error && !accounts.length" class="entity-prompt">No accounts found. Create an account to begin WhatsApp setup.</p>
+    <AccountPagination :page="{ ...page, busy: busy || page.busy }" @page="emit('page', $event)" />
 
     <Dialog
       v-model="editing"
@@ -131,12 +128,12 @@ async function loadAccounts({ cursor, direction, q }) {
           <main class="account-editor__main">
             <section v-if="activeStep === 'account'" class="account-pane">
               <div class="setup-pane-heading">
-                <div><h4>Account details</h4><p>The Hub uses this identity to route each channel to the correct Frappe site.</p></div>
+                <div><h4>Account details</h4><p>The Hub uses this identity to route WhatsApp events to the correct Frappe site.</p></div>
               </div>
               <DocumentForm v-model="draft" :fields="fields" :errors="errors" />
               <div class="account-route-preview">
                 <span><FeatherIcon name="globe" /></span>
-                <div><strong>One site, separate channels</strong><p>Messages stay scoped to this account. Each channel keeps its own credentials, webhook, and runtime state.</p></div>
+                <div><strong>One site, one WhatsApp connection</strong><p>Messages stay scoped to this account with its own credentials, webhook and Core callback configuration.</p></div>
               </div>
             </section>
             <ChannelCredentials
@@ -150,18 +147,19 @@ async function loadAccounts({ cursor, direction, q }) {
               v-model:enabled="draft.channelEnabled.WhatsApp"
               v-model:secret="secrets.WhatsApp"
             />
-            <p v-if="notice" role="alert" class="feedback-panel account-editor__notice">{{ notice }}</p>
           </main>
         </form>
       </template>
       <template #actions="{ close: closeDialog }">
+        <div class="w-full"><p v-if="notice" role="alert" class="feedback-panel">{{ notice }}</p>
         <div class="account-editor__actions">
           <Button label="Cancel" :disabled="saving" @click="closeDialog" />
           <span class="account-editor__action-spacer"></span>
           <Button v-if="stepIndex > 0" label="Back" icon-left="arrow-left" :disabled="saving" @click="moveStep(-1)" />
           <Button v-if="stepIndex < steps.length - 1" label="Next" icon-right="chevron-right" :disabled="saving" @click="moveStep(1)" />
+          <Button v-if="activationPending" label="Retry activation" :loading="saving" @click="retryActivation" />
           <Button type="submit" form="relay-account-form" label="Save account" variant="solid" :loading="saving" />
-        </div>
+        </div></div>
       </template>
     </Dialog>
   </section>

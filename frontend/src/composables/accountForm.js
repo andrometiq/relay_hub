@@ -72,7 +72,7 @@ export function accountSavePayload(draft) {
     id: draft.id.trim(),
     site: new URL(draft.site).origin,
     enabled: !!draft.enabled,
-    channels: [{
+    channels: [...(draft.preservedChannels || []), {
       channel: "WhatsApp",
       enabled: !!draft.channelEnabled.WhatsApp,
       config: { ...(draft.channelConfig.WhatsApp || {}) },

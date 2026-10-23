@@ -1,12 +1,12 @@
 import { ref, toRaw } from "vue";
-import { validateFields } from "../components/formValidation";
-import { hubApi } from "../services/hubApi";
+import { validateFields } from "../components/formValidation.js";
+import { hubApi } from "../services/hubApi.js";
 import {
   accountSavePayload,
   activeChannels,
   whatsappReady,
   validateWhatsAppDraft,
-} from "./accountForm";
+} from "./accountForm.js";
 
 const WHATSAPP = "WhatsApp";
 export { activeChannels, whatsappReady, validateWhatsAppDraft };
@@ -26,6 +26,7 @@ export const accountFields = [
 ];
 
 export function useAccountEditor(accounts, saved) {
+  const activationPending = ref(false);
   const editing = ref(false),
     editingID = ref(null),
     draft = ref({}),
@@ -35,13 +36,15 @@ export function useAccountEditor(accounts, saved) {
     saving = ref(false);
 
   function edit(account) {
+    activationPending.value = false;
     editingID.value = account?.id || null;
-    const channels = account?.channels || [];
+    const channels = toRaw(account?.channels || []);
     const whatsapp = channels.find((channel) => channel.channel === WHATSAPP);
     draft.value = {
       id: account?.id || "",
       site: account?.site || "",
       enabled: account?.enabled ?? true,
+      preservedChannels: structuredClone(toRaw(channels.filter(channel => channel.channel !== WHATSAPP))),
       channels: [WHATSAPP],
       channelConfig: {
         [WHATSAPP]: {
@@ -97,14 +100,22 @@ export function useAccountEditor(accounts, saved) {
         secrets: { [WHATSAPP]: secrets.value[WHATSAPP] },
         create: editingID.value === null,
       });
-      try {
-        await hubApi("accounts/reload", {});
-      } catch {
-        notice.value =
-          "Saved, but WhatsApp could not start. Reopen the account and check the required fields.";
+      editingID.value = account.id;
+      activationPending.value = true;
+      // Saved credentials are write-only. Keep their presence, clear replacement values.
+      const config = draft.value.channelConfig[WHATSAPP];
+      const privateKeys = ["app_secret", "verify_token", "core_api_key", "core_api_secret", "callback_secret"];
+      draft.value.configured[WHATSAPP] = [...new Set([...draft.value.configured[WHATSAPP], ...privateKeys.filter(key => config[key]), ...(secrets.value[WHATSAPP] ? ["secret"] : [])])];
+      privateKeys.forEach(key => delete config[key]);
+      secrets.value[WHATSAPP] = "";
+      try { await hubApi("accounts/reload", {}); }
+      catch (error) {
+        notice.value = `Account saved. Activation failed: ${error.message} Use Retry activation.`;
+        await saved();
         return false;
       }
-      notice.value = "Account saved and WhatsApp is active.";
+      activationPending.value = false;
+      notice.value = account.enabled ? "Account saved and runtime reloaded. Check Connections for webhook and Core delivery confirmation." : "Disabled account saved. Runtime reloaded.";
       await saved();
       editing.value = false;
       secrets.value = {};
@@ -117,7 +128,19 @@ export function useAccountEditor(accounts, saved) {
       saving.value = false;
     }
   }
+  async function retryActivation() {
+    if (saving.value || !activationPending.value) return;
+    saving.value = true;
+    try {
+      await hubApi("accounts/reload", {});
+      activationPending.value = false;
+      notice.value = "Runtime reloaded. Check Connections for webhook and Core delivery confirmation.";
+      await saved();
+    } catch (error) { notice.value = `Activation failed: ${error.message}`; }
+    finally { saving.value = false; }
+  }
   return {
+    retryActivation, activationPending,
     editing,
     editingID,
     draft,

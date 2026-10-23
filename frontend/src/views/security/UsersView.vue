@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from "vue";
-import { Badge, Button, Dialog, FormControl, FeatherIcon } from "@relay/ui";
+import { Badge, Button, Dialog, FormControl, FeatherIcon, ErrorMessage } from "@relay/ui";
 import RelayForm from "../../components/RelayForm.vue";
 import InfiniteList from "../../components/InfiniteList.vue";
 import { securityRequest, searchSecurityOptions } from "../../composables/security";
@@ -35,13 +35,14 @@ async function load(params) {
   const data = await securityRequest("users?" + new URLSearchParams(params));
   return { items: data.Users, more: data.More };
 }
-async function act(values, route = "users", close = true) {
+async function act(values, route = "users", afterSave = null) {
   busy.value = true;
   error.value = "";
   try {
     await securityRequest(route, { csrf: props.data.CSRF, ...values });
-    if (close) { mode.value = ""; selected.value = null; }
     list.value?.reload();
+    if (afterSave) await afterSave();
+    else { mode.value = ""; selected.value = null; }
     return true;
   } catch (exception) {
     error.value = exception.message;
@@ -51,8 +52,21 @@ async function act(values, route = "users", close = true) {
 }
 async function toggleEnabled() {
   const row = selected.value;
-  if (!row) return;
-  if (await act({ action: "enabled", id: row.id, enabled: !row.enabled }, "users", false)) row.enabled = !row.enabled;
+  if (!row || busy.value) return;
+  const enabled = !row.enabled;
+  await act({ action: "enabled", id: row.id, enabled }, "users", async () => {
+    row.enabled = enabled;
+    row.effective_grants = null;
+    try {
+      // The existing cursor API can start at this user without scanning earlier pages.
+      const result = await load({ cursor: String(BigInt(row.id) - 1n), direction: "after" });
+      const updated = result.items.find(user => user.id === row.id);
+      if (!updated) throw new Error("User is no longer available. Refresh the users list.");
+      Object.assign(row, updated);
+    } catch (exception) {
+      throw new Error(`User status saved, but account access could not be refreshed: ${exception.message}`);
+    }
+  });
 }
 function submit() {
   if (mode.value === "reset") act({ ...model.value, id: selected.value.id }, "password");
@@ -77,6 +91,13 @@ function submit() {
 
     <Dialog :model-value="!!mode" :options="{ title: mode === 'create' ? 'New user' : mode === 'grant' ? 'Account access' : mode === 'reset' ? 'Reset password' : selected?.username || 'User', size: 'lg' }" :disable-outside-click-to-close="busy" @update:model-value="(value) => !value && (mode = '')">
       <template #body-content>
+        <ErrorMessage v-if="mode === 'details'" :message="error" />
+        <section v-if="selected && ['details', 'grant'].includes(mode)" class="mb-4">
+          <h3 class="font-medium mb-2">Effective account access</h3>
+          <p class="text-sm text-ink-gray-6">{{ !selected.enabled ? 'Disabled users cannot access the Hub or use auth keys.' : selected.role === 'admin' ? 'Administrators manage all Hub accounts. API keys still require explicit account grants.' : 'Members can issue scoped auth keys for their granted accounts.' }}</p>
+          <p v-if="!selected.grants?.length" class="mt-2">No explicit account grants.</p>
+          <ul v-else class="mt-2"><li v-for="grant in selected.grants" :key="grant" class="py-2 break-all">{{ grant }} · {{ selected.effective_grants == null ? "Account access not refreshed" : selected.effective_grants.includes(grant) ? "Account access enabled" : "User or account disabled" }}</li></ul>
+        </section>
         <RelayForm v-if="['create','grant','reset'].includes(mode)" v-model="model" :fields="fields()" :error="error" :busy="busy" @submit="submit" />
         <dl v-else-if="selected" class="entity-details"><div><dt>Username</dt><dd>{{ selected.username }}</dd></div><div><dt>Role</dt><dd>{{ selected.role === 'admin' ? 'Administrator' : 'Member' }}</dd></div><div><dt>Status</dt><dd>{{ selected.enabled ? 'Active' : 'Disabled' }}</dd></div></dl>
       </template>
