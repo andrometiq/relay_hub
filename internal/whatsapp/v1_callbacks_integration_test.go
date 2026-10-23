@@ -289,7 +289,9 @@ func TestMalformedReceiptBacklogDoesNotStarveValidStatuses(t *testing.T) {
 			t.Fatal("malformed backlog blocked valid statuses", err)
 		}
 		var pending, backedOff int
-		if err := db.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE failures=$1 AND error_position=0 AND error<>'' AND next_attempt>now())
+		// The backlog can take longer than the first retry delay on a shared test
+		// database. Assert the persisted schedule relative to its write time.
+		if err := db.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE failures=$1 AND error_position=0 AND error<>'' AND next_attempt>=updated_at+interval '1 second')
  FROM relay_whatsapp_callback_delivery WHERE NOT acknowledged`, failures+1).Scan(&pending, &backedOff); err != nil || pending != 300 || backedOff != 300 {
 			t.Fatal("invalid receipts not retained with backoff", pending, backedOff, err)
 		}
