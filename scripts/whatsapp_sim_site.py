@@ -37,7 +37,7 @@ def expected_rows(kind, identity, data, historical):
     if kind == 'read':
         providers = set(historical)
         found = [m for m in data['messages'] if m['provider_id'] in providers]
-        return (len(providers) == len(found) == 417
+        return (bool(providers) and len(providers) == len(found)
                 and {m['provider_id'] for m in found} == providers
                 and all(m['status'] == 'Read' for m in found)), found
     if kind == 'template':
@@ -124,10 +124,28 @@ def main():
                      roles=[{'role': role} for role in roles], api_key=key, api_secret=secret)
         return {'name': doc.name, 'api_key': key, 'api_secret': secret}
 
+    def seed_messages(group, run, count):
+        from relay_core.message_updates import provider_key
+        from relay_core.automation.service import internal_save
+        historical = []
+        for i in range(count):
+            provider = f'wamid.sim.{group}.{run}.{i}'
+            doc = frappe.get_doc(dict(doctype='Relay Message', relay_contact=fixture['contact'], channel=fixture['channel'],
+                direction='Outgoing', status='Sent', provider_id=provider, sender_endpoint='919999999999',
+                provider_message_key=provider_key(fixture['channel'], '919999999999', provider),
+                source_key=f'sim-{group}-{run}-{i}', message_type='text', content=f'Local simulation {group} {i+1}',
+                business_doctype='Customer', business_name=fixture['customer'], sent_at=frappe.utils.now_datetime(),
+                provider_context=json.dumps({'provider': 'WhatsApp', 'message_id': provider})))
+            internal_save(doc, new=True)
+            historical.append(provider)
+        fixture[group] = historical
+        frappe.db.commit()
+        return historical
+
     def snapshot():
         frappe.db.rollback()
         messages = frappe.get_all('Relay Message', filters={'relay_contact': fixture['contact'],
-            'provider_id': ['in', fixture['historical'] + sorted(observed_providers)]},
+            'provider_id': ['in', fixture['historical'] + fixture.get('storm', []) + sorted(observed_providers)]},
             fields=['name', 'provider_id', 'status', 'direction', 'source_key', 'content'], limit_page_length=0)
         templates = frappe.get_all('Relay WhatsApp Template', filters={'account': 'sim-v1'},
             fields=['template_id', 'status', 'hub_event_id', 'template_name'])
@@ -165,22 +183,10 @@ def main():
             assert channel.enabled, 'Simulation channel is disabled'
             contact, person, customer = fixture_contact(frappe, insert, channel, run)
             fixture.update(contact=contact.name, channel=channel.name, customer=customer.name, person=person.name)
-            from relay_core.message_updates import provider_key
-            from relay_core.automation.service import internal_save
-            historical = []
-            for i in range(417):
-                provider = f'wamid.sim.history.{run}.{i}'
-                doc = frappe.get_doc(dict(doctype='Relay Message', relay_contact=contact.name, channel=channel.name,
-                    direction='Outgoing', status='Sent', provider_id=provider, sender_endpoint='919999999999',
-                    provider_message_key=provider_key(channel.name, '919999999999', provider),
-                    source_key=f'sim-history-{run}-{i}', message_type='text', content=f'Local simulation history {i+1}',
-                    business_doctype='Customer', business_name=customer.name, sent_at=frappe.utils.now_datetime(),
-                    provider_context=json.dumps({'provider': 'WhatsApp', 'message_id': provider})))
-                internal_save(doc, new=True)
-                historical.append(provider)
-            fixture['historical'] = historical
-            frappe.db.commit()
+            seed_messages('historical', run, 417)
             return fixture
+        if action == 'seed_storm':
+            return seed_messages('storm', req['run'], req['count'])
         if action == 'settings':
             settings = frappe.get_single('Relay Settings')
             settings.update({'hub_url': req['hub_url'], 'hub_account': 'sim-v1',
@@ -216,12 +222,14 @@ def main():
         if action == 'wait':
             if req['kind'] == 'message':
                 observed_providers.add(req['id'])
+            providers = fixture[req.get('group', 'historical')]
             deadline = time.monotonic() + req.get('timeout', 30)
             while time.monotonic() < deadline:
                 data = snapshot()
-                ready, found = expected_rows(req['kind'], req['id'], data, fixture['historical'])
+                ready, found = expected_rows(req['kind'], req['id'], data, providers)
                 if ready:
-                    return {'observed_ns': time.monotonic_ns(), 'rows': found}
+                    return {'observed_ns': time.monotonic_ns(), 'rows': found,
+                            'receipts_complete': expected_rows('read', '', data, providers)[0]}
                 time.sleep(.02)
             raise TimeoutError('Core projection did not reach the expected state; see core_diagnostics in report.json')
         raise ValueError('Unknown fixture action')

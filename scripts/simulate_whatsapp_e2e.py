@@ -22,7 +22,8 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = Path('/home/sakthi/development/pilot/benches/version_16')
 STEPS = {'7': 'Signed ingress', '8': 'Journal, Core projection and deduplication',
-         '9': 'Core send idempotency', '10': '1,251 receipts and concurrent inbound latency',
+         '9': 'Core send idempotency', '10': '1,251 receipt batch check',
+         '10b': 'inbound latency under a sustained receipt storm',
          '11': '503, wrong acknowledgement and restart recovery', '12': 'Template lifecycle',
          'realtime': 'Authenticated Socket.IO message event without HTTP polling'}
 
@@ -75,11 +76,19 @@ def inbound(provider, sender='919999999999'):
         'from': sender, 'timestamp': str(int(time.time())), 'type': 'text', 'text': {'body': 'Simulation inbound'}}]})
 
 
-def receipt_storm(ids):
+def receipt_storm(ids, count=None):
     stamp = int(time.time())
-    return envelope({'metadata': {'phone_number_id': '110'}, 'statuses': [
+    statuses = [
         {'id': provider, 'recipient_id': '919999999999', 'status': status, 'timestamp': str(stamp + offset)}
-        for provider in ids for offset, status in enumerate(('sent', 'delivered', 'read'))]})
+        for provider in ids for offset, status in enumerate(('sent', 'delivered', 'read'))]
+    return envelope({'metadata': {'phone_number_id': '110'}, 'statuses': statuses[-count:] if count else statuses})
+
+
+def sustained_storm(ids, count):
+    statuses = receipt_storm(ids, count)['entry'][0]['changes'][0]['value']['statuses']
+    # Keep signed ingress envelopes below Hub's 1 MiB limit.
+    for offset in range(0, len(statuses), 3000):
+        yield envelope({'metadata': {'phone_number_id': '110'}, 'statuses': statuses[offset:offset + 3000]})
 
 
 def successful_status_batches(records, event_id):
@@ -103,14 +112,15 @@ def inbound_breakdown(records, sample):
         **callback['response']['message'].get('timing', {}))
 
 
-def storm_latency(samples, timings, event_id):
-    spans = [t for t in timings if t['hub_event_id'] == str(event_id) and t['queue'] == 'long']
+def storm_latency(samples, timings, event_ids, receipt_count):
+    spans = [t for t in timings if t['hub_event_id'] in {str(e) for e in event_ids} and t['queue'] == 'long']
     overlapping = [s['latency_ms'] for s in samples if s['phase'] == 'processing' and any(
-        s['started_ns'] < t['finished_ns'] and s['observed_ns'] > t['started_ns'] for t in spans)]
+        t['started_ns'] <= s['observed_ns'] < t['finished_ns'] for t in spans)]
     duration = (max(t['finished_ns'] for t in spans) - min(t['started_ns'] for t in spans)) / 1e9 if spans else None
     return {'samples': len(overlapping), 'p50': percentile(overlapping, 50), 'p95': percentile(overlapping, 95),
             'target_ms': 500, 'passed': len(overlapping) >= 5 and percentile(overlapping, 95) < 500,
-            'status_projection_seconds': duration, 'receipts_per_second': 1251 / duration if duration else None}
+            'receipt_count': receipt_count, 'status_projection_seconds': duration,
+            'receipts_per_second': receipt_count / duration if duration else None}
 
 
 def read_env():
@@ -365,19 +375,33 @@ class Runner:
 
     def observe_inbound(self, provider, payload=None, phase='held'):
         result = self.emit(payload or inbound(provider))
-        observed = self.site.call('wait', kind='message', id=provider, timeout=5)
+        observed = self.site.call('wait', kind='message', id=provider, timeout=5, group='storm' if phase == 'processing' else 'historical')
         # Both clocks are CLOCK_MONOTONIC on this host; control overhead is separately visible.
         self.record_inbound(provider, result, observed, phase)
+        return observed
 
-    def wait_projection_timings(self, event_id):
+    def sample_receipt_projection(self):
+        deadline = time.monotonic() + max(60, self.args.storm_receipts / 100)
+        count = 0
+        while time.monotonic() < deadline:
+            started = time.monotonic()
+            observed = self.observe_inbound(f'wamid.sim.processing.{self.run_id}.{count}', phase='processing')
+            count += 1
+            if observed['receipts_complete']:
+                return count
+            # Pace send starts without adding the observation latency to the spacing.
+            time.sleep(max(0, .25 - (time.monotonic() - started)))
+        raise TimeoutError('Receipt projection did not finish during inbound sampling')
+
+    def wait_projection_timings(self, event_ids, batches):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             timings = self.site.call('diagnostics')['projection_timings']
-            completed = {t['event'] for t in timings if t['hub_event_id'] == str(event_id) and t['queue'] == 'long'}
-            if len(completed) == 3:
+            completed = {t['event'] for t in timings if t['hub_event_id'] in {str(e) for e in event_ids} and t['queue'] == 'long'}
+            if len(completed) == batches:
                 return timings
             time.sleep(.05)
-        raise TimeoutError('Missing timings for the three committed receipt projection jobs')
+        raise TimeoutError(f'Missing timings for {batches} committed receipt projection jobs')
 
     def execute(self):
         if self.args.dry_run:
@@ -385,7 +409,8 @@ class Runner:
                 'socketio': self.args.socketio_origin, 'database': 'relay_hub_sim@127.0.0.1:18433',
                 'bench_python': str(self.args.frappe_python), 'sites': str(self.args.sites),
                 'writes': 'Only an actual run provisions the Hub database and Core fixture/settings.',
-                'receipt_count': 1251, 'expected_batches': [500, 500, 251]}
+                'receipt_count': 1251, 'expected_batches': [500, 500, 251],
+                'storm_receipts': self.args.storm_receipts}
             return
         for origin in (self.hub, self.meta):
             parsed = urllib.parse.urlsplit(origin)
@@ -494,12 +519,6 @@ class Runner:
             self.captures.extend(bad_ack['records'])
             self.stop_hub()
             self.start(resume=True)
-            self.wait_control(lambda s: bool(successful_status_batches(s['records'], event_id)), timeout=60)
-            for i in range(30):
-                try:
-                    self.observe_inbound(f'wamid.sim.processing.{self.run_id}.{i}', phase='processing')
-                except (AssertionError, RuntimeError, TimeoutError) as exc:
-                    fast_errors.append(str(exc))
             recovered = self.wait_control(lambda s: pending(s)['acknowledged'], timeout=60)
             evidence.update(event_id=event_id, failed_offset=0, wrong_ack_offset=0, recovered_offset=pending(recovered)['status_offset'], restarted=True)
         with self.step('10', continue_on_error=True) as evidence:
@@ -512,8 +531,6 @@ class Runner:
             assert all(len(json.dumps(r['body']['statuses'], separators=(',', ':')).encode()) <= 512 * 1024 for r in statuses)
             self.site.call('wait', kind='read', id='')
             assert not fast_errors, 'Concurrent inbound projection failed'
-            timings = self.wait_projection_timings(event_id)
-            self.report['storm_latency_ms'] = storm_latency(self.report['inbound_samples'], timings, event_id)
             self.emit(storm)
             # Late delivered must not regress Read.
             late = receipt_storm(self.fixture['historical'][:1])
@@ -524,8 +541,23 @@ class Runner:
             self.site.call('wait', kind='event', id=late_id)
             self.site.call('wait', kind='read', id='')
             assert not [r for r in self.control('state')['records'] if r['kind'] == 'graph' and r['path'].endswith('/messages')], 'Restart resent a message'
-            evidence.update(receipts=1251, messages=417, final_status='Read', held_inbound_samples=5,
-                            processing_inbound_samples=30)
+            evidence.update(receipts=1251, messages=417, final_status='Read', held_inbound_samples=5)
+        with self.step('10b', continue_on_error=True) as evidence:
+            count = self.args.storm_receipts
+            providers = self.site.call('seed_storm', run=self.run_id, count=math.ceil(count / 3))
+            previous_ids = {e['id'] for e in self.control('state')['events']}
+            for payload in sustained_storm(providers, count):
+                self.emit(payload)
+            processing_samples = self.sample_receipt_projection()
+            state = self.wait_control(lambda s: all(c['acknowledged'] for c in s['callbacks'] if c['lane'] == 'status'),
+                                      timeout=max(60, count / 100))
+            storm_ids = [e['id'] for e in state['events'] if e['lane'] == 'status' and e['id'] not in previous_ids]
+            batches = [r for event_id in storm_ids for r in successful_status_batches(state['records'], event_id)]
+            assert sum(len(r['body']['statuses']) for r in batches) == count, 'Incomplete storm delivery'
+            timings = self.wait_projection_timings(storm_ids, len(batches))
+            self.report['storm_latency_ms'] = storm_latency(self.report['inbound_samples'], timings, storm_ids, count)
+            evidence.update(self.report['storm_latency_ms'], messages=len(providers),
+                            processing_inbound_samples=processing_samples, event_ids=storm_ids)
             assert self.report['storm_latency_ms']['passed'], 'Storm p95 must be < 500 ms with at least five samples overlapping actual receipt projection'
         with self.step('12', continue_on_error=True) as evidence:
             template = {'name': 'sim_v1_update_' + self.run_id, 'language': 'en_US', 'category': 'UTILITY',
@@ -611,8 +643,11 @@ def arguments(argv=None):
     parser.add_argument('--hub-addr', type=address, default='127.0.0.1:18091')
     parser.add_argument('--meta-addr', type=address, default='127.0.0.1:18094')
     parser.add_argument('--report-dir', type=Path, default=ROOT / '.runtime/sim-report')
+    parser.add_argument('--storm-receipts', type=int, default=12000, help='Receipt count for step 10b (default: 12000)')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
+    if args.storm_receipts <= 0:
+        parser.error('--storm-receipts must be positive')
     args.report_dir = args.report_dir.resolve()
     if not (args.report_dir.is_relative_to(ROOT) or args.report_dir.is_relative_to('/tmp')):
         parser.error('Report directory must be inside Hub or /tmp')

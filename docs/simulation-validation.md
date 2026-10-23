@@ -45,7 +45,7 @@ helper filesystem writes outside Hub and `/tmp` are rejected.
 An actual run writes real local Core records: dedicated service/operator and
 unauthorized users, a Customer and linked Contact, a paused Relay Contact,
 verified endpoint `919999999999`, one enabled WhatsApp channel for `sim-v1`, and
-417 identifiable outgoing history rows. It sets **Relay Settings** to the
+417 identifiable outgoing history rows plus 4,000 storm rows by default. It sets **Relay Settings** to the
 simulation account and token. These records and settings remain for inspection;
 there is no destructive cleanup or automatic restoration. Previously issued
 simulation Hub tokens are revoked when provisioning a new run. Reruns use fresh
@@ -66,10 +66,21 @@ The runner stops only its own Hub process.
 | 7 | Wrong HMAC and wrong phone are rejected; signed text is journaled. |
 | 8 | One Hub incoming/journal row and one projected Core Relay Message survive an identical webhook replay. The durable Core Hub Event is checked. |
 | 9 | Two real `relay_core.messaging.send` calls with one request key yield one Core action, one Hub intent and exactly one fake Meta POST. Recipient, text, quote context, tracking ID and resulting Core provider ID are checked. |
-| 10 | 417 historical messages receive sent/delivered/read receipts: successful signed Core callbacks contain 500, 500 and 251 receipts, each within 512 KiB. Final states are Read; replay and late Delivered cannot regress them. Five fresh inbounds are observed while receipts are held; 30 more are sent after successful receipt delivery starts. At least five must overlap actual receipt projection, with p95 < 500 ms. |
+| 10 | 417 historical messages receive sent/delivered/read receipts: successful signed Core callbacks contain 500, 500 and 251 receipts, each within 512 KiB. Final states are Read; replay and late Delivered cannot regress them. Five fresh inbounds are observed while receipts are held. |
+| 10b | A separate sustained storm defaults to 12,000 receipts over 4,000 outgoing messages. Signed single inbounds start immediately after injection, paced at 250 ms until all storm rows are Read. At least five Core-row observations must overlap measured receipt projection intervals, with p95 < 500 ms. |
 | 11 | Controlled 503 and wrong acknowledgement leave the durable receipt offset at zero. Restarting only relay-sim with `--resume` loads its stored account and resumes the original event, retaining the existing Hub token and Core settings. No new provider send is allowed. |
 | 12 | Core creates a PENDING template, lists two paginated templates, then projects a signed APPROVED notification into Relay WhatsApp Template and emits its realtime invalidation. |
 | Realtime | The authorized operator subscribes through authenticated Socket.IO over WebSocket; a `relay_changed` messages event arrives. An unauthorized operator must not receive that contact's message event. A successful run observes 31 idle seconds without application HTTP polling. |
+
+Use `--storm-receipts N` to configure step 10b independently of step 10's fixed
+1,251 receipts. Any positive count is accepted; the runner seeds `ceil(N / 3)`
+messages and omits initial statuses from the first message when needed, preserving
+its final Read receipt. The storm uses signed envelopes of at most 3,000 receipts
+to stay below Hub's 1 MiB ingress limit. Timing combines all storm event IDs. Sampling has a timeout of `max(60, N / 100)` seconds.
+The report includes storm receipt count, first-to-last projection seconds (including
+batch gaps), receipts/second, qualifying sample count and inbound p50/p95. Only
+observations inside actual projection intervals count toward the latency gate;
+batch gaps and held-receipt samples never count.
 
 Reports are `.runtime/sim-report/report.json` and `report.md`, including per-step
 pass/fail/not-run, journal identities, sanitized transport captures, batch sizes,
@@ -89,7 +100,7 @@ This runner tests the actual Socket.IO protocol using the bench's existing
 certify browser rendering, or test browser reconnect/catch-up behavior. The
 older `scripts/simulate.py` aggregates separate regression fixtures; it is not a
 substitute for this connected run. The storm gate explicitly requires p95 < 500 ms
-and at least five samples whose webhook-to-row intervals overlap a receipt
+and at least five samples whose Core-row observation falls within a receipt
 worker's projection interval. Held 503 samples and the initial cold sample do
 not qualify. The measured samples and failures are retained.
 
@@ -291,3 +302,52 @@ binary build, 20 runner tests, eight new Core projection tests and runner dry-ru
 passed. The full Core suite ran 180 tests before the final two test additions:
 175 passed, three skipped, and two existing audio tests errored because this
 sandbox has no `ffprobe`. Opt-in database/provider tests were not enabled.
+
+## Paced inbound sampling — connected validation, 2026-10-24
+
+The sampler now starts immediately after restart releases the held storm, without
+waiting for a successful receipt callback. It sends signed single inbounds at
+250 ms start spacing until the historical rows are Read, with a 60 s timeout.
+The overlap filter requires the Core-row observation itself to fall inside a
+receipt job's measured projection interval; observations after commit do not count.
+
+All 22 runner tests passed with the bench environment on `PATH` (the default
+Python lacks `rq`). The exact connected command above completed, but acceptance
+**failed**: 19 processing samples produced zero qualifying observations. The three
+projection jobs lasted 87.43, 89.19 and 76.32 ms across a 2.08 s first-to-last
+span. These short intervals cannot reliably yield ten observations at 250 ms
+spacing. Gaps between jobs remain excluded, and the gate remains p95 < 500 ms
+with at least five overlapping samples. Overall inbound p95 was 107.61 ms.
+Steps 7, 8, 9, 11, 12 and realtime passed, including receipt batches of
+500/500/251, recovery and final Read states. That run did not validate the latency gate. The report paths below now contain
+the subsequent sustained-storm run.
+
+
+## Sustained receipt storm — connected validation, 2026-10-24
+
+Step 10 retains the 1,251-receipt batch/replay assertions. Step 10b independently
+seeds 4,000 outgoing rows and injects 12,000 receipts by default. The first attempt
+hit HTTP 413 with a single large envelope; the runner now sends four signed
+3,000-receipt envelopes within the existing ingress limit. Paced single inbound
+messages continue until the storm rows reach Read. The strict overlap filter and
+p95 < 500 ms threshold are unchanged.
+
+The exact connected command above passed on `yrp.site` (Frappe 16.52.0,
+developer mode enabled), including recovery, templates and authenticated realtime.
+All 25 runner unit tests passed with the bench Python. No app source, site
+configuration or Frappe schema was changed.
+
+| Measurement | Result |
+| --- | ---: |
+| Step 10 receipt batches | 500 / 500 / 251 |
+| Step 10b storm receipts / outgoing messages | 12,000 / 4,000 |
+| First-to-last projection span, including gaps | 29.096 s |
+| Receipt throughput over that span | 412.43/s |
+| Paced inbound observations / actual projection overlaps | 117 / 23 |
+| Overlapping inbound p50 / p95 | 131.42 / 148.39 ms |
+| Overall inbound p50 / p95 | 127.47 / 143.14 ms |
+| Connected acceptance | All steps passed |
+
+Evidence: `.runtime/sim-report/latency/report.md` and `report.json`. These are
+webhook-to-Core-row measurements, not browser rendering measurements. Changes
+remain uncommitted for orchestrator review.
