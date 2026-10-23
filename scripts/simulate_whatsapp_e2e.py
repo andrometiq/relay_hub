@@ -87,6 +87,32 @@ def successful_status_batches(records, event_id):
             and not r.get('fault') and r['body']['statuses'][0]['event_id'] == event_id]
 
 
+def inbound_breakdown(records, sample):
+    provider = json.dumps(sample['provider'])
+    webhook = next(r for r in records if r['kind'] == 'webhook' and r['status'] == 200
+                   and provider in json.dumps(r['body']))
+    callback = next(r for r in records if r['kind'] == 'callback' and r['status'] == 200
+                    and provider in json.dumps(r['body']))
+    dispatch = float(callback.get('headers', {}).get('X-Relay-Dispatch-Ms', ['0'])[0])
+    return dict(sample,
+        ingress_ms=(webhook['finished_ns'] - webhook['started_ns']) / 1e6,
+        hub_schedule_ms=max(0, (callback['started_ns'] - webhook['finished_ns']) / 1e6 - dispatch),
+        hub_dispatch_ms=dispatch,
+        callback_http_ms=(callback['finished_ns'] - callback['started_ns']) / 1e6,
+        post_callback_ms=max(0, sample['latency_ms'] - (callback['finished_ns'] - webhook['started_ns']) / 1e6),
+        **callback['response']['message'].get('timing', {}))
+
+
+def storm_latency(samples, timings, event_id):
+    spans = [t for t in timings if t['hub_event_id'] == str(event_id) and t['queue'] == 'long']
+    overlapping = [s['latency_ms'] for s in samples if s['phase'] == 'processing' and any(
+        s['started_ns'] < t['finished_ns'] and s['observed_ns'] > t['started_ns'] for t in spans)]
+    duration = (max(t['finished_ns'] for t in spans) - min(t['started_ns'] for t in spans)) / 1e9 if spans else None
+    return {'samples': len(overlapping), 'p50': percentile(overlapping, 50), 'p95': percentile(overlapping, 95),
+            'target_ms': 500, 'passed': len(overlapping) >= 5 and percentile(overlapping, 95) < 500,
+            'status_projection_seconds': duration, 'receipts_per_second': 1251 / duration if duration else None}
+
+
 def read_env():
     values = {}
     for line in (ROOT / '.env').read_text().splitlines():
@@ -249,7 +275,8 @@ class Runner:
         self.run_id = str(time.time_ns())
         self.report = {'run': self.run_id, 'mode': 'dry-run' if args.dry_run else 'connected', 'site': args.site,
             'steps': {k: {'name': v, 'status': 'not_run'} for k, v in STEPS.items()}, 'latencies_ms': [],
-            'batch_sizes': [], 'limitations': ['Socket.IO transport acceptance; installed browser rendering is not exercised.']}
+            'batch_sizes': [], 'inbound_samples': [],
+            'limitations': ['Socket.IO transport acceptance; installed browser rendering is not exercised.']}
         self.process = self.site = self.realtime = self.denied = None
         self.captures = []
         self.logs = []
@@ -330,12 +357,27 @@ class Runner:
         assert result['status'] == (403 if values.get('invalid_signature') else 200), 'Unexpected webhook response'
         return result
 
-    def observe_inbound(self, provider, payload=None):
+    def record_inbound(self, provider, result, observed, phase):
+        latency = (observed['observed_ns'] - result['monotonic_ns']) / 1e6
+        self.report['latencies_ms'].append(latency)
+        self.report['inbound_samples'].append(dict(provider=provider, phase=phase, latency_ms=latency,
+            started_ns=result['monotonic_ns'], observed_ns=observed['observed_ns']))
+
+    def observe_inbound(self, provider, payload=None, phase='held'):
         result = self.emit(payload or inbound(provider))
         observed = self.site.call('wait', kind='message', id=provider, timeout=5)
         # Both clocks are CLOCK_MONOTONIC on this host; control overhead is separately visible.
-        latency = (observed['observed_ns'] - result['monotonic_ns']) / 1e6
-        self.report['latencies_ms'].append(latency)
+        self.record_inbound(provider, result, observed, phase)
+
+    def wait_projection_timings(self, event_id):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            timings = self.site.call('diagnostics')['projection_timings']
+            completed = {t['event'] for t in timings if t['hub_event_id'] == str(event_id) and t['queue'] == 'long'}
+            if len(completed) == 3:
+                return timings
+            time.sleep(.05)
+        raise TimeoutError('Missing timings for the three committed receipt projection jobs')
 
     def execute(self):
         if self.args.dry_run:
@@ -384,7 +426,7 @@ class Runner:
             assert emitted, 'Projection requires successful signed ingress'
             observed = self.site.call('wait', kind='message', id=first)
             row = observed['rows'][0]
-            self.report['latencies_ms'].append((observed['observed_ns'] - emitted['monotonic_ns']) / 1e6)
+            self.record_inbound(first, emitted, observed, 'initial')
         with self.step('realtime', continue_on_error=True) as evidence:
             assert self.realtime and self.denied, 'Authenticated Socket.IO connection unavailable'
             event = self.realtime.wait('messages', started, timeout=2)
@@ -452,6 +494,12 @@ class Runner:
             self.captures.extend(bad_ack['records'])
             self.stop_hub()
             self.start(resume=True)
+            self.wait_control(lambda s: bool(successful_status_batches(s['records'], event_id)), timeout=60)
+            for i in range(30):
+                try:
+                    self.observe_inbound(f'wamid.sim.processing.{self.run_id}.{i}', phase='processing')
+                except (AssertionError, RuntimeError, TimeoutError) as exc:
+                    fast_errors.append(str(exc))
             recovered = self.wait_control(lambda s: pending(s)['acknowledged'], timeout=60)
             evidence.update(event_id=event_id, failed_offset=0, wrong_ack_offset=0, recovered_offset=pending(recovered)['status_offset'], restarted=True)
         with self.step('10', continue_on_error=True) as evidence:
@@ -464,6 +512,8 @@ class Runner:
             assert all(len(json.dumps(r['body']['statuses'], separators=(',', ':')).encode()) <= 512 * 1024 for r in statuses)
             self.site.call('wait', kind='read', id='')
             assert not fast_errors, 'Concurrent inbound projection failed'
+            timings = self.wait_projection_timings(event_id)
+            self.report['storm_latency_ms'] = storm_latency(self.report['inbound_samples'], timings, event_id)
             self.emit(storm)
             # Late delivered must not regress Read.
             late = receipt_storm(self.fixture['historical'][:1])
@@ -474,7 +524,9 @@ class Runner:
             self.site.call('wait', kind='event', id=late_id)
             self.site.call('wait', kind='read', id='')
             assert not [r for r in self.control('state')['records'] if r['kind'] == 'graph' and r['path'].endswith('/messages')], 'Restart resent a message'
-            evidence.update(receipts=1251, messages=417, final_status='Read', concurrent_inbound_samples=5)
+            evidence.update(receipts=1251, messages=417, final_status='Read', held_inbound_samples=5,
+                            processing_inbound_samples=30)
+            assert self.report['storm_latency_ms']['passed'], 'Storm p95 must be < 500 ms with at least five samples overlapping actual receipt projection'
         with self.step('12', continue_on_error=True) as evidence:
             template = {'name': 'sim_v1_update_' + self.run_id, 'language': 'en_US', 'category': 'UTILITY',
                         'components': [{'type': 'BODY', 'text': 'Local simulation update'}]}
@@ -525,6 +577,12 @@ class Runner:
         for log in self.logs:
             log.close()
         self.report['captures'] = self.captures
+        self.report['inbound_breakdown'] = []
+        for sample in self.report['inbound_samples']:
+            try:
+                self.report['inbound_breakdown'].append(inbound_breakdown(self.captures, sample))
+            except (StopIteration, KeyError):
+                self.report.setdefault('timing_errors', []).append(sample['provider'])
         self.report['latency_ms'] = {'p50': percentile(self.report['latencies_ms'], 50),
                                      'p95': percentile(self.report['latencies_ms'], 95),
                                      'measurement': 'signed webhook send to observed Core row (CLOCK_MONOTONIC); 20 ms DB observation interval, no HTTP polling'}
@@ -535,7 +593,8 @@ class Runner:
                  '| Step | Status | Evidence / error |', '| --- | --- | --- |']
         for key, step in self.report['steps'].items():
             lines.append(f"| {key}: {step['name']} | {step['status']} | {step.get('error', '')} |")
-        lines += ['', f"Latency (ms): {self.report['latency_ms']}", f"Receipt batches: {self.report['batch_sizes']}", '',
+        lines += ['', f"Latency (ms): {self.report['latency_ms']}", f"Storm latency (ms): {self.report.get('storm_latency_ms')}",
+                  f"Receipt batches: {self.report['batch_sizes']}", '',
                   *self.report['limitations']]
         if 'error' in self.report:
             lines += ['', self.report['error']]
