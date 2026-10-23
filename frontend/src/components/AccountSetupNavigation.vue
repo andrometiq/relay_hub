@@ -63,5 +63,11 @@ const countErrors = (step) =>
         </button>
       </div>
     </div>
+    <div class="account-setup-nav__group">
+      <button v-for="channel in ['Telegram', 'Email']" :key="channel" type="button" :class="{ active: active === channel, invalid: Object.keys(errors).some(key => key.startsWith(channel + '.')) }" :aria-current="active === channel ? 'step' : undefined" @click="$emit('select', channel)">
+        <span class="account-setup-nav__icon"><FeatherIcon :name="channel === 'Email' ? 'mail' : 'send'" /></span>
+        <span class="account-setup-nav__copy"><strong>{{ channel }}</strong><small>Connection and Core delivery</small></span>
+      </button>
+    </div>
   </nav>
 </template>

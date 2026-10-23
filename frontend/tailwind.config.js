@@ -1,4 +1,6 @@
 export default {
+  // RelayButton builds variant classes dynamically; retain their component styles.
+  safelist: [{ pattern: /^relay-button--(solid|subtle|ghost|red|blue|green|gray|xs|sm|lg|icon-only)$/ }],
   content: ['./index.html', './src/**/*.{vue,js}'],
   theme: {
     extend: {

@@ -1,3 +1,5 @@
+export const CHANNELS = ["WhatsApp", "Telegram", "Email"];
+export const PRIVATE_KEYS = ["app_secret", "verify_token", "core_token", "core_api_key", "core_api_secret", "callback_secret", "imap_password"];
 const WHATSAPP = "WhatsApp";
 
 export function activeChannels(account) {
@@ -72,10 +74,48 @@ export function accountSavePayload(draft) {
     id: draft.id.trim(),
     site: new URL(draft.site).origin,
     enabled: !!draft.enabled,
-    channels: [...(draft.preservedChannels || []), {
-      channel: "WhatsApp",
-      enabled: !!draft.channelEnabled.WhatsApp,
-      config: { ...(draft.channelConfig.WhatsApp || {}) },
-    }],
+    channels: [...(draft.preservedChannels || []), ...(draft.channels || ["WhatsApp"]).map(channel => ({
+      channel,
+      enabled: !!draft.channelEnabled[channel],
+      config: { ...(draft.channelConfig[channel] || {}) },
+    }))],
   };
+}
+
+function mailHost(value) {
+  const host = String(value || "");
+  if (/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(host)) return true;
+  // URL's IPv6 parser validates raw literals; brackets belong to transport only.
+  if (!host.includes(":") || !/^[a-f0-9:.]+$/i.test(host)) return false;
+  try { return new URL(`http://[${host}]/`).hostname.startsWith("["); }
+  catch { return false; }
+}
+
+export function validateChannelDraft(draft, channel, secret = "") {
+  const config = draft.channelConfig?.[channel] || {};
+  if (channel === WHATSAPP) return validateWhatsAppDraft(draft, { ...config, secret });
+  const errors = {};
+  if (!draft.enabled || !draft.channelEnabled?.[channel]) return errors;
+  const has = name => !!String(name === "secret" ? secret : config[name] || "").trim() || (draft.configured?.[channel] || []).includes(name);
+  if (channel === "Telegram" && ((!has("secret")) || (secret && !/^[0-9]{6,12}:[A-Za-z0-9_-]{20,}$/.test(secret)))) errors.secret = "Enter the bot token provided by BotFather.";
+  if (channel === "Email") {
+    const host = mailHost;
+    if (!host(config.host)) errors.host = "Enter an SMTP hostname without a URL or port.";
+    const port = value => /^\d+$/.test(String(value)) && Number(value) >= 1 && Number(value) <= 65535;
+    if (!port(config.port)) errors.port = "Use a port from 1 to 65535.";
+    if (!/^(?:[^<>\r\n]+ <[^\s@<>]+@[^\s@<>]+>|[^\s@<>]+@[^\s@<>]+)$/.test(config.from || "")) errors.from = "Enter the sender email address.";
+    if (config.username && !has("secret")) errors.secret = "Enter the SMTP password.";
+    if (config.imap_host) {
+      if (!host(config.imap_host)) errors.imap_host = "Enter an IMAP hostname without a URL or port.";
+      if (!port(config.imap_port || 993)) errors.imap_port = "Use a port from 1 to 65535.";
+      if (!config.imap_username && !config.username) errors.imap_username = "Enter an IMAP username or the shared SMTP username.";
+      if (!has("imap_password") && !has("secret")) errors.imap_password = "Enter an IMAP password or the shared SMTP password.";
+    }
+    if (String(config.imap_folder || "").length > 200) errors.imap_folder = "Use a folder name of at most 200 characters.";
+    for (const key of ["trusted_authserv_id", "trusted_dsn_domain"]) if (config[key] && !host(config[key])) errors[key] = "Enter the exact trusted hostname or domain.";
+  }
+  const callback = ["core_api_key", "core_api_secret", "callback_secret"];
+  if (callback.some(has) && !callback.every(has)) for (const name of callback) if (!has(name)) errors[name] = "Complete all three Core delivery credentials.";
+  if (config.callback_secret && config.callback_secret.length < 32) errors.callback_secret = "Use at least 32 characters for the callback signing secret.";
+  return errors;
 }

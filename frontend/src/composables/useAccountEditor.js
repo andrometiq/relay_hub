@@ -2,6 +2,7 @@ import { ref, toRaw } from "vue";
 import { validateFields } from "../components/formValidation.js";
 import { hubApi } from "../services/hubApi.js";
 import {
+  CHANNELS, PRIVATE_KEYS, validateChannelDraft,
   accountSavePayload,
   activeChannels,
   whatsappReady,
@@ -44,8 +45,8 @@ export function useAccountEditor(accounts, saved) {
       id: account?.id || "",
       site: account?.site || "",
       enabled: account?.enabled ?? true,
-      preservedChannels: structuredClone(toRaw(channels.filter(channel => channel.channel !== WHATSAPP))),
-      channels: [WHATSAPP],
+      preservedChannels: structuredClone(toRaw(channels.filter(channel => !CHANNELS.includes(channel.channel)))),
+      channels: CHANNELS,
       channelConfig: {
         [WHATSAPP]: {
           graph_version: "v25.0",
@@ -61,7 +62,15 @@ export function useAccountEditor(accounts, saved) {
         [WHATSAPP]: whatsapp?.configured_secrets || [],
       },
     };
-    secrets.value = { [WHATSAPP]: "" };
+    for (const name of CHANNELS.filter(name => name !== WHATSAPP)) {
+      const channel = channels.find(item => item.channel === name);
+      draft.value.channelConfig[name] = { ...(name === "Email" ? { port: 587, imap_port: 993, imap_folder: "INBOX" } : {}), ...structuredClone(toRaw(channel?.config || {})) };
+      draft.value.channelEnabled[name] = channel?.enabled ?? false;
+      draft.value.configured[name] = [...(channel?.configured_secrets || [])];
+    }
+    // Existing non-WhatsApp accounts do not acquire an enabled WhatsApp channel.
+    if (account && !whatsapp) draft.value.channelEnabled.WhatsApp = false;
+    secrets.value = Object.fromEntries(CHANNELS.map(name => [name, ""]));
     errors.value = {};
     notice.value = "";
     editing.value = true;
@@ -71,16 +80,15 @@ export function useAccountEditor(accounts, saved) {
     if (saving.value) return;
     editing.value = false;
     errors.value = {};
+    secrets.value = {};
+    draft.value = {};
   }
 
   async function save() {
     if (saving.value) return false;
     errors.value = {
       ...validateFields(accountFields, draft.value),
-      ...validateWhatsAppDraft(draft.value, {
-        ...draft.value.channelConfig?.[WHATSAPP],
-        secret: secrets.value[WHATSAPP],
-      }),
+      ...Object.fromEntries(CHANNELS.flatMap(channel => Object.entries(validateChannelDraft(draft.value, channel, secrets.value[channel])).map(([key, value]) => [channel === WHATSAPP ? key : `${channel}.${key}`, value]))),
     };
     if (
       accounts.value.some(
@@ -97,17 +105,18 @@ export function useAccountEditor(accounts, saved) {
       const account = accountSavePayload(draft.value);
       await hubApi("accounts", {
         account,
-        secrets: { [WHATSAPP]: secrets.value[WHATSAPP] },
+        secrets: { ...secrets.value },
         create: editingID.value === null,
       });
       editingID.value = account.id;
       activationPending.value = true;
       // Saved credentials are write-only. Keep their presence, clear replacement values.
-      const config = draft.value.channelConfig[WHATSAPP];
-      const privateKeys = ["app_secret", "verify_token", "core_api_key", "core_api_secret", "callback_secret"];
-      draft.value.configured[WHATSAPP] = [...new Set([...draft.value.configured[WHATSAPP], ...privateKeys.filter(key => config[key]), ...(secrets.value[WHATSAPP] ? ["secret"] : [])])];
-      privateKeys.forEach(key => delete config[key]);
-      secrets.value[WHATSAPP] = "";
+      for (const channel of CHANNELS) {
+        const config = draft.value.channelConfig[channel];
+        draft.value.configured[channel] = [...new Set([...draft.value.configured[channel], ...PRIVATE_KEYS.filter(key => config[key]), ...(secrets.value[channel] ? ["secret"] : [])])];
+        PRIVATE_KEYS.forEach(key => delete config[key]);
+        secrets.value[channel] = "";
+      }
       try { await hubApi("accounts/reload", {}); }
       catch (error) {
         notice.value = `Account saved. Activation failed: ${error.message} Use Retry activation.`;

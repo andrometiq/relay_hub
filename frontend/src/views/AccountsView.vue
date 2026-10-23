@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, toRef } from "vue";
+import { computed, ref, toRef, nextTick } from "vue";
 import { Badge, Button, Dialog, FormControl, FeatherIcon } from "@relay/ui";
 import AccountSetupNavigation from "../components/AccountSetupNavigation.vue";
 import ChannelCredentials from "../components/ChannelCredentials.vue";
@@ -13,7 +13,9 @@ const emit = defineEmits(["search", "page"]);
 const query = ref(props.page.query || "");
 
 const activeStep = ref("account");
-const steps = ["account", "meta", "webhook", "features", "delivery"];
+const errorSummary = ref();
+const channelErrors = computed(() => Object.fromEntries(Object.entries(errors.value).filter(([key]) => key.startsWith(activeStep.value + ".")).map(([key, value]) => [key.slice(activeStep.value.length + 1), value])));
+const steps = ["account", "meta", "webhook", "features", "delivery", "Telegram", "Email"];
 const stepFields = {
   account: ["id", "site", "enabled"],
   meta: ["secret", "phone_id", "waba_id", "app_id", "graph_version"],
@@ -50,16 +52,20 @@ const stepIndex = computed(() => steps.indexOf(activeStep.value));
 
 function openAccount(account) {
   beginEdit(account);
-  activeStep.value = account && !configured(account) ? "meta" : "account";
+  activeStep.value = account?.channels?.find(channel => channel.enabled && channel.channel !== "WhatsApp")?.channel || (account && !configured(account) ? "meta" : "account");
 }
 
 function firstInvalidStep() {
-  return steps.find((step) => stepFields[step].some((field) => errors.value[field]));
+  return steps.find((step) => stepFields[step]?.some((field) => errors.value[field]) || Object.keys(errors.value).some(key => key.startsWith(step + ".")));
 }
 
 async function submitAccount() {
   const saved = await save();
-  if (!saved) activeStep.value = firstInvalidStep() || activeStep.value;
+  if (!saved) {
+    activeStep.value = firstInvalidStep() || activeStep.value;
+    await nextTick();
+    errorSummary.value?.focus();
+  }
 }
 
 function moveStep(offset) {
@@ -74,7 +80,7 @@ function moveStep(offset) {
     <div class="view-heading">
       <div>
         <h2>Accounts</h2>
-        <p>Configure each site’s WhatsApp credentials, webhook and Core callbacks.</p>
+        <p>Configure each site’s channels, webhooks and Core delivery.</p>
       </div>
       <Button label="New account" variant="solid" icon-left="plus" @click="openAccount(null)" />
     </div>
@@ -88,19 +94,19 @@ function moveStep(offset) {
     </div>
 
     <div class="entity-list-head" aria-hidden="true">
-      <span>Account</span><span>Site</span><span>WhatsApp</span><span>Status</span><span></span>
+      <span>Account</span><span>Site</span><span>Channels</span><span>Status</span><span></span>
     </div>
     <p v-if="busy || page.busy" role="status">Loading accounts…</p>
     <div class="account-list">
         <button v-for="row in accounts" :key="row.id" type="button" class="entity-row" :aria-label="'Open account ' + row.id" @click="openAccount(row)">
           <span class="entity-primary"><span class="entity-icon" aria-hidden="true"><FeatherIcon name="briefcase" class="h-4 w-4" /></span><strong>{{ row.id }}</strong></span>
           <span class="entity-site">{{ row.site }}</span>
-          <span><Badge :label="configured(row) ? 'Credentials verified' : 'Setup needed'" :theme="configured(row) ? 'green' : 'orange'" /></span>
+          <span><Badge :label="row.channels.filter(channel => channel.enabled).map(channel => channel.channel).join(' · ') || 'None enabled'" theme="gray" /></span>
           <span><Badge :label="row.enabled ? 'Enabled' : 'Disabled'" :theme="row.enabled ? 'green' : 'gray'" /></span>
           <FeatherIcon name="chevron-right" class="h-4 w-4 text-ink-gray-4" />
         </button>
     </div>
-    <p v-if="!busy && !page.busy && !error && !accounts.length" class="entity-prompt">No accounts found. Create an account to begin WhatsApp setup.</p>
+    <p v-if="!busy && !page.busy && !error && !accounts.length" class="entity-prompt">No accounts found. Create an account to connect a channel.</p>
     <AccountPagination :page="{ ...page, busy: busy || page.busy }" @page="emit('page', $event)" />
 
     <Dialog
@@ -126,16 +132,28 @@ function moveStep(offset) {
           </aside>
 
           <main class="account-editor__main">
+            <p v-if="Object.keys(errors).length" ref="errorSummary" tabindex="-1" role="alert" class="feedback-panel">Check the highlighted settings before saving.</p>
             <section v-if="activeStep === 'account'" class="account-pane">
               <div class="setup-pane-heading">
-                <div><h4>Account details</h4><p>The Hub uses this identity to route WhatsApp events to the correct Frappe site.</p></div>
+                <div><h4>Account details</h4><p>The Hub uses this identity to route channel events to the correct Frappe site.</p></div>
               </div>
               <DocumentForm v-model="draft" :fields="fields" :errors="errors" />
               <div class="account-route-preview">
                 <span><FeatherIcon name="globe" /></span>
-                <div><strong>One site, one WhatsApp connection</strong><p>Messages stay scoped to this account with its own credentials, webhook and Core callback configuration.</p></div>
+                <div><strong>One site, multiple channels</strong><p>Messages stay scoped to this account with its own credentials, webhook and Core callback configuration.</p></div>
               </div>
             </section>
+            <ChannelCredentials
+              v-else-if="['Telegram', 'Email'].includes(activeStep)"
+              :key="activeStep"
+              :channel="activeStep"
+              :account-id="editingID"
+              :configured="draft.configured?.[activeStep] || []"
+              :errors="channelErrors"
+              v-model:config="draft.channelConfig[activeStep]"
+              v-model:enabled="draft.channelEnabled[activeStep]"
+              v-model:secret="secrets[activeStep]"
+            />
             <ChannelCredentials
               v-else
               channel="WhatsApp"
