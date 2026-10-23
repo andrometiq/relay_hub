@@ -88,14 +88,14 @@ func (s *recorder) record(r *http.Request, kind string, body []byte, status int,
 			headers.Set(k, v)
 		}
 	}
-	for _, k := range []string{"Authorization", "Cookie", "X-Relay-Signature", "X-Hub-Signature-256"} {
+	for _, k := range []string{"Authorization", "Cookie", "X-Relay-Signature", "X-Hub-Signature-256", "X-Telegram-Bot-Api-Secret-Token", "X-Relay-Email-Secret"} {
 		if r.Header.Get(k) != "" {
 			headers.Set(k, "[redacted]")
 		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rows = append(s.rows, capture{len(s.rows) + 1, kind, r.Method, r.URL.Path, headers, safeJSON(body), status, safeJSON(reply), started.Sub(s.start).Nanoseconds(), time.Since(s.start).Nanoseconds(), fault})
+	s.rows = append(s.rows, capture{len(s.rows) + 1, kind, r.Method, redactProviderPath(r.URL.Path), headers, safeJSON(body), status, safeJSON(reply), started.Sub(s.start).Nanoseconds(), time.Since(s.start).Nanoseconds(), fault})
 }
 
 type simTransport struct {
@@ -129,7 +129,7 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	site := t.site
 	t.mu.RUnlock()
 	origin := u.Scheme + "://" + u.Host
-	graph := origin == "https://graph.facebook.com"
+	graph := origin == "https://graph.facebook.com" || origin == "https://api.telegram.org"
 	if graph {
 		clone.URL.Scheme = t.meta.Scheme
 		clone.URL.Host = t.meta.Host
@@ -145,7 +145,7 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return t.base.RoundTrip(clone)
 	}
 	kind := "callback"
-	if strings.HasSuffix(r.URL.Path, ".receive_statuses") {
+	if strings.HasSuffix(r.URL.Path, ".receive_statuses") || strings.HasSuffix(r.URL.Path, ".receive_channel_statuses") {
 		kind = "status"
 	}
 	started := time.Now()
@@ -185,4 +185,14 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	t.records.record(r, kind, body, res.StatusCode, reply, started, fault)
 	res.Body = io.NopCloser(bytes.NewReader(reply))
 	return res, nil
+}
+
+func redactProviderPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		if strings.HasPrefix(part, "bot") {
+			parts[i] = "bot[redacted]"
+		}
+	}
+	return strings.Join(parts, "/")
 }
