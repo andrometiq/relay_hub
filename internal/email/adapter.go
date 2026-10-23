@@ -6,11 +6,15 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"strconv"
 	"time"
+
+	"github.com/andrometiq/relay_hub/internal/deliverypolicy"
 )
 
 type Config struct {
@@ -61,10 +65,28 @@ func New(cfg Config) (*Client, error) {
 func (c *Client) Send(ctx context.Context, to []string, subject, body string, cc, bcc []string) error {
 	return c.SendMessage(ctx, Message{To: to, Cc: cc, Bcc: bcc, Subject: subject, Body: body})
 }
-func (c *Client) SendMessage(ctx context.Context, in Message) error {
+func (c *Client) SendMessage(ctx context.Context, in Message) (sendErr error) {
+	stage := "configuration"
+	dataStarted := false
+	defer func() {
+		if sendErr == nil {
+			return
+		}
+		code := 0
+		var protocol *textproto.Error
+		if errors.As(sendErr, &protocol) {
+			code = protocol.Code
+		}
+		unknown := dataStarted && (code < 400 || code >= 600)
+		// Once DATA begins, even explicit transient rejection requires review;
+		// only failures before DATA are automatically retryable.
+		retry := !dataStarted && stage != "configuration" && stage != "compose" && (code == 0 || code/100 == 4)
+		sendErr = &SendError{Stage: stage, Code: code, OutcomeUnknown: unknown, Retryable: retry, cause: sendErr}
+	}()
 	if !c.cfg.Enabled {
 		return errors.New("email account is disabled")
 	}
+	stage = "compose"
 	msg, recipients, err := c.compose(in)
 	if err != nil {
 		return err
@@ -76,6 +98,7 @@ func (c *Client) SendMessage(ctx context.Context, in Message) error {
 	if dial == nil {
 		dial = (&net.Dialer{}).DialContext
 	}
+	stage = "connect"
 	conn, err := dial(ctx, "tcp", address)
 	if err != nil {
 		return err
@@ -87,6 +110,7 @@ func (c *Client) SendMessage(ctx context.Context, in Message) error {
 	rawConn := conn
 	stop := context.AfterFunc(ctx, func() { rawConn.Close() })
 	defer stop()
+	stage = "tls"
 	if c.cfg.Port == 465 {
 		secure := tls.Client(conn, c.TLSConfig())
 		if err = secure.HandshakeContext(ctx); err != nil {
@@ -94,11 +118,13 @@ func (c *Client) SendMessage(ctx context.Context, in Message) error {
 		}
 		conn = secure
 	}
+	stage = "greeting"
 	client, err := smtp.NewClient(conn, c.cfg.Host)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
+	stage = "tls"
 	if c.cfg.Port != 465 {
 		if ok, _ := client.Extension("STARTTLS"); ok {
 			if err = client.StartTLS(c.TLSConfig()); err != nil {
@@ -108,28 +134,38 @@ func (c *Client) SendMessage(ctx context.Context, in Message) error {
 			return errors.New("SMTP server does not support required TLS")
 		}
 	}
+	stage = "auth"
 	if c.cfg.Username != "" {
 		if err = client.Auth(smtp.PlainAuth("", c.cfg.Username, c.cfg.Password, c.cfg.Host)); err != nil {
 			return err
 		}
 	}
 	from, _ := mail.ParseAddress(c.cfg.From)
+	stage = "mail"
 	if err = client.Mail(from.Address); err != nil {
 		return err
 	}
+	stage = "rcpt"
 	for _, recipient := range recipients {
 		if err = client.Rcpt(recipient); err != nil {
 			return err
 		}
 	}
+	stage = "data_command"
+	if err := deliverypolicy.BeforeSubmission(ctx); err != nil {
+		return err
+	}
 	writer, err := client.Data()
 	if err != nil {
 		return err
 	}
+	stage = "data"
+	dataStarted = true
 	if _, err = writer.Write(msg); err != nil {
-		writer.Close()
+		// Closing the DATA writer would terminate and potentially submit a partial message.
 		return err
 	}
+	stage = "data_reply"
 	if err = writer.Close(); err != nil {
 		return err
 	}
@@ -140,3 +176,17 @@ func (c *Client) SendMessage(ctx context.Context, in Message) error {
 func (c *Client) TLSConfig() *tls.Config {
 	return &tls.Config{ServerName: c.cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: c.tlsRoots}
 }
+
+// SendError exposes safe protocol metadata without provider text or credentials.
+type SendError struct {
+	Stage          string `json:"stage"`
+	Code           int    `json:"code"`
+	OutcomeUnknown bool   `json:"outcome_unknown"`
+	Retryable      bool   `json:"retryable"`
+	cause          error
+}
+
+func (e *SendError) Error() string {
+	return fmt.Sprintf("SMTP delivery failed at %s (code %d, outcome unknown: %t)", e.Stage, e.Code, e.OutcomeUnknown)
+}
+func (e *SendError) Unwrap() error { return e.cause }

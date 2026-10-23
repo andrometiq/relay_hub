@@ -27,11 +27,13 @@ import (
 // These simulations perform the actual TLS and SMTP exchanges over loopback.
 // Only a generated local CA is trusted; verification is never disabled.
 type smtpSimulation struct {
-	implicitTLS     bool
-	rejectRecipient int
-	failQuit        bool
-	stallAt         string
-	wrongHostname   bool
+	implicitTLS                                        bool
+	rejectRecipient                                    int
+	failQuit                                           bool
+	stallAt                                            string
+	wrongHostname                                      bool
+	authCode, rcptCode, dataCommandCode, dataReplyCode int
+	dropFinalReply                                     bool
 }
 
 type smtpTranscript struct {
@@ -150,6 +152,12 @@ func newSMTPFixture(t *testing.T, options smtpSimulation) smtpFixture {
 					return
 				}
 				result.auth = string(decoded)
+				if options.authCode != 0 {
+					if !reply(fmt.Sprintf("%d Synthetic auth rejection", options.authCode)) {
+						return
+					}
+					continue
+				}
 				if stall("AUTH") || !reply("235 Authentication successful") {
 					return
 				}
@@ -163,6 +171,12 @@ func newSMTPFixture(t *testing.T, options smtpSimulation) smtpFixture {
 				if stall("RCPT") {
 					return
 				}
+				if options.rcptCode != 0 {
+					if !reply(fmt.Sprintf("%d Synthetic recipient rejection", options.rcptCode)) {
+						return
+					}
+					continue
+				}
 				if options.rejectRecipient == len(result.recipients) {
 					if !reply("550 Recipient rejected") {
 						return
@@ -171,6 +185,12 @@ func newSMTPFixture(t *testing.T, options smtpSimulation) smtpFixture {
 					return
 				}
 			case "DATA":
+				if options.dataCommandCode != 0 {
+					if !reply(fmt.Sprintf("%d Synthetic DATA rejection", options.dataCommandCode)) {
+						return
+					}
+					continue
+				}
 				if !reply("354 End with a single dot") {
 					return
 				}
@@ -178,7 +198,16 @@ func newSMTPFixture(t *testing.T, options smtpSimulation) smtpFixture {
 				if result.err != nil || stall("DATA") {
 					return
 				}
+				if options.dataReplyCode != 0 {
+					if !reply(fmt.Sprintf("%d Synthetic DATA rejection", options.dataReplyCode)) {
+						return
+					}
+					continue
+				}
 				result.accepted = true
+				if options.dropFinalReply {
+					return
+				}
 				if !reply("250 Stored") {
 					return
 				}
@@ -388,8 +417,9 @@ func TestSMTPCancellationDuringTLSAndDelivery(t *testing.T) {
 				cancel()
 				select {
 				case err := <-finished:
-					if err == nil {
-						t.Fatalf("cancelled %s send reported success", stage)
+					var outcome *SendError
+					if !errors.As(err, &outcome) || outcome.OutcomeUnknown != (stage == "DATA") || outcome.Retryable == (stage == "DATA") {
+						t.Fatalf("wrong cancellation outcome at %s: %v", stage, err)
 					}
 				case <-time.After(time.Second):
 					t.Fatalf("cancellation did not interrupt %s", stage)
@@ -400,5 +430,45 @@ func TestSMTPCancellationDuringTLSAndDelivery(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSMTPStageOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name, stage              string
+		options                  smtpSimulation
+		code                     int
+		retry, unknown, accepted bool
+	}{
+		{name: "auth permanent", stage: "auth", options: smtpSimulation{authCode: 535}, code: 535},
+		{name: "auth transient", stage: "auth", options: smtpSimulation{authCode: 454}, code: 454, retry: true},
+		{name: "recipient permanent", stage: "rcpt", options: smtpSimulation{rcptCode: 550}, code: 550},
+		{name: "recipient transient", stage: "rcpt", options: smtpSimulation{rcptCode: 450}, code: 450, retry: true},
+		{name: "before DATA transient", stage: "data_command", options: smtpSimulation{dataCommandCode: 451}, code: 451, retry: true},
+		{name: "after DATA transient", stage: "data_reply", options: smtpSimulation{dataReplyCode: 451}, code: 451},
+		{name: "after DATA permanent", stage: "data_reply", options: smtpSimulation{dataReplyCode: 554}, code: 554},
+		{name: "lost DATA acceptance", stage: "data_reply", options: smtpSimulation{dropFinalReply: true}, unknown: true, accepted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newSMTPFixture(t, tc.options)
+			err := fixture.client.Send(t.Context(), []string{"recipient@example.invalid"}, "Stage test", "Representative message body", nil, nil)
+			var outcome *SendError
+			if !errors.As(err, &outcome) || outcome.Stage != tc.stage || outcome.Code != tc.code || outcome.Retryable != tc.retry || outcome.OutcomeUnknown != tc.unknown {
+				t.Fatalf("incorrect outcome: %+v", err)
+			}
+			result := smtpResult(t, fixture)
+			if result.accepted != tc.accepted {
+				t.Fatalf("provider acceptance mismatch %+v", result)
+			}
+		})
+	}
+	client, _ := New(Config{Enabled: true, AccountID: "local", Host: "127.0.0.1", Port: 465, From: "local@example.invalid"})
+	client.dialContext = func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("synthetic connection refusal containing private provider details")
+	}
+	err := client.Send(t.Context(), []string{"recipient@example.invalid"}, "Connection failure", "Representative body", nil, nil)
+	var outcome *SendError
+	if !errors.As(err, &outcome) || outcome.Stage != "connect" || !outcome.Retryable || outcome.OutcomeUnknown || strings.Contains(err.Error(), "private") {
+		t.Fatal("incorrect connect outcome", err)
 	}
 }

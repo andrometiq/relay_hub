@@ -3,6 +3,7 @@ package email
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -54,7 +55,8 @@ func TestSMTPRejectsHeaderInjectionBeforeConnecting(t *testing.T) {
 	client, _ := New(Config{Enabled: true, AccountID: "simulation", Host: "127.0.0.1", Port: 1, From: "sender@example.invalid"})
 	for _, subject := range []string{"Test\r\nBcc: hidden@example.invalid", "Test\nInjected: value"} {
 		err := client.Send(t.Context(), []string{"recipient@example.invalid"}, subject, "synthetic", nil, nil)
-		if err == nil || err.Error() != "invalid email header" {
+		var failure *SendError
+		if !errors.As(err, &failure) || failure.Stage != "compose" || failure.OutcomeUnknown || failure.Retryable {
 			t.Fatalf("header injection not rejected: %v", err)
 		}
 	}
@@ -96,7 +98,8 @@ func TestSMTPRefusesPlaintextBeforeSendingCredentials(t *testing.T) {
 	n, _ := strconv.Atoi(port)
 	client, _ := New(Config{Enabled: true, AccountID: "simulation", Host: host, Port: n, From: "sender@example.invalid", Username: "test", Password: "synthetic-secret"})
 	err = client.Send(t.Context(), []string{"recipient@example.invalid"}, "Test", "body", nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "required TLS") {
+	var failure *SendError
+	if !errors.As(err, &failure) || failure.Stage != "tls" || failure.OutcomeUnknown {
 		t.Fatalf("plaintext server accepted: %v", err)
 	}
 	for _, line := range <-commands {
