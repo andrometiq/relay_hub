@@ -371,11 +371,12 @@ func (s *Store) Runtime(ctx context.Context) ([]RuntimeCredential, error) {
 }
 
 // Credential returns one decrypted provider configuration for an in-process
-// validation/reload path. It is never serialized by an HTTP handler.
+// validation/reload path. Enabled reflects the channel flag, including when its
+// parent account is disabled. It is never serialized by an HTTP handler.
 func (s *Store) Credential(ctx context.Context, accountID, channel string) (RuntimeCredential, error) {
 	var value RuntimeCredential
 	var raw, ciphertext, nonce, configCipher, configNonce []byte
-	err := s.DB.QueryRow(ctx, `SELECT a.account_id,a.site,a.enabled,c.channel,c.config,c.secret_ciphertext,c.secret_nonce,c.config_ciphertext,c.config_nonce
+	err := s.DB.QueryRow(ctx, `SELECT a.account_id,a.site,c.enabled,c.channel,c.config,c.secret_ciphertext,c.secret_nonce,c.config_ciphertext,c.config_nonce
 		FROM relay_accounts a JOIN relay_channel_credentials c ON c.account_id=a.account_id
 		WHERE a.account_id=$1 AND c.channel=$2`, accountID, channel).Scan(&value.AccountID, &value.Site, &value.Enabled, &value.Channel, &raw, &ciphertext, &nonce, &configCipher, &configNonce)
 	if err != nil {

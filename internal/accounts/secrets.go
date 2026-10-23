@@ -13,7 +13,7 @@ var sensitiveKeys = []string{"app_secret", "verify_token", "core_token", "core_a
 var publicConfigKeys = map[string]map[string]bool{
 	"WhatsApp": {"app_id": true, "phone_id": true, "waba_id": true, "graph_version": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true},
 	"Telegram": {},
-	"Email":    {"host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true},
+	"Email":    {"host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
 }
 
 func sensitive(key string) bool {

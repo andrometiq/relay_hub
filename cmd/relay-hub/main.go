@@ -355,6 +355,9 @@ func run() error {
 			json.NewEncoder(w).Encode(map[string]any{"accounts": rows, "next": next, "previous": previous, "total": total, "enabled_channels": enabled, "csrf": auth.CSRF(cookie.Value)})
 		})))
 		mux.Handle("GET /api/accounts/health", browserAuth.Protect(accountHealth(authPool, browserAuth.Session)))
+		connections := accountConnection(channelRegistry, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), os.Getenv("RELAY_PUBLIC_ORIGIN")+os.Getenv("RELAY_PUBLIC_PREFIX"), os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"))
+		mux.Handle("GET /api/accounts/{account}/{channel}/connection", browserAuth.Protect(connections))
+		mux.Handle("POST /api/accounts/{account}/{channel}/connection", browserAuth.Protect(connections))
 		mux.Handle("GET /api/accounts/metadata", browserAuth.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, err := browserAuth.Session(r)
 			if err != nil {
@@ -409,6 +412,10 @@ func run() error {
 			}
 			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 65536)).Decode(&in) != nil {
 				http.Error(w, "invalid request", 400)
+				return
+			}
+			if err := validateChannelAccount(r.Context(), accountStore, in.Account, in.Secrets); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			for index := range in.Account.Channels {
@@ -680,7 +687,7 @@ func run() error {
 			json.NewEncoder(w).Encode(map[string]string{"status": "ready", "database": "PostgreSQL 18", "instance": os.Getenv("RELAY_INSTANCE")})
 		})
 		mux.Handle("GET /", browserAuth.Protect(http.FileServer(http.Dir(ui))))
-		server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+		server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
 		mailboxPool, err := channels.NewMailboxPool(context.Background(), authPool.Config())
 		if err != nil {
 			return err
