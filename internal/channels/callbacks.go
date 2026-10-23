@@ -168,7 +168,7 @@ func (d *CallbackDispatcher) deliverBatch(ctx context.Context, c *pgx.Conn, a Ru
 	req.Header.Set("Authorization", "token "+a.APIKey+":"+a.APISecret)
 	req.Header.Set("X-Relay-Timestamp", fmtInt(ts))
 	req.Header.Set("X-Relay-Signature", hex.EncodeToString(mac.Sum(nil)))
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := a.client().Do(req)
 	ack := false
 	if err == nil {
 		ack = acknowledged(resp, len(events))
@@ -188,7 +188,17 @@ func (d *CallbackDispatcher) deliverBatch(ctx context.Context, c *pgx.Conn, a Ru
 	return last, nil
 }
 
-type RuntimeCallback struct{ Account, Site, APIKey, APISecret, CallbackSecret string }
+type RuntimeCallback struct {
+	Account, Site, APIKey, APISecret, CallbackSecret string
+	HTTPClient                                       *http.Client
+}
+
+func (a RuntimeCallback) client() *http.Client {
+	if a.HTTPClient != nil {
+		return a.HTTPClient
+	}
+	return &http.Client{Timeout: 15 * time.Second}
+}
 
 // Deliver sends one bounded Telegram/email event batch to Core. The caller
 // owns scheduling; this method persists per-event acknowledgements and is idempotent
