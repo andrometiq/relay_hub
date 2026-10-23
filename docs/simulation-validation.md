@@ -239,34 +239,20 @@ PYTHONDONTWRITEBYTECODE=1 \
 GOCACHE=/tmp/relay-sim-gocache go test ./...
 ```
 
-The PostgreSQL launcher test is opt-in and uses only `relay_hub_sim`; it keeps
-identifiable simulation rows and does not drop schemas or delete data. It starts
-actual launcher child processes, real MCP/outbox workers and a signed local Core
-HTTP fixture, testing one provider send and 503/wrong-ack restart recovery into
-500/500/251 batches. This verifies the launcher, **not actual Core projection**.
-After the connected runner has created the simulation database, run it without
-printing credentials:
+The PostgreSQL launcher test is opt-in. It creates and drops an isolated schema
+in the existing `relay_hub_v1_test` database at `127.0.0.1:18433`, selected by
+`RELAY_TEST_DATABASE_URL`. It never rebinds the connected simulation account.
+It starts actual launcher child processes, real MCP/outbox/mailbox workers and
+a signed local Core HTTP fixture. Coverage includes WhatsApp's 503/wrong-ACK
+restart recovery into 500/500/251 batches, plus the Telegram and email provider
+paths documented in [Local Telegram and email providers](simulation-providers.md).
+This verifies the launcher, **not actual Core projection**.
+
+With `RELAY_TEST_DATABASE_URL` supplied securely for that test database:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 \
-/home/sakthi/development/pilot/benches/version_16/env/bin/python -B - <<'PY'
-import os, subprocess, sys, urllib.parse
-sys.path.insert(0, 'scripts')
-from simulate_whatsapp_e2e import read_env
-config = read_env()
-url = urllib.parse.urlsplit(config['DATABASE_URL'])._replace(
-    path='/relay_hub_sim', query='', fragment='')
-env = {**os.environ, 'GOCACHE': '/tmp/relay-sim-gocache',
-       'RELAY_SIM_TEST_DATABASE_URL': urllib.parse.urlunsplit(url),
-       'RELAY_CREDENTIAL_KEY': config['RELAY_CREDENTIAL_KEY']}
-raise SystemExit(subprocess.call(
-    ['go', 'test', '-race', './cmd/relay-sim', '-run', 'TestLauncherPostgres', '-v', '-count=1'],
-    env=env))
-PY
+go test -race ./cmd/relay-sim -run TestLauncherPostgres -v -count=1
 ```
-
-The launcher test temporarily binds the simulation account to its own local Core
-fixture. Run the connected runner afterward to rebind it to the target Core site.
 
 ## Observed validation — 2026-10-24
 

@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -65,6 +66,10 @@ type simulation struct {
 	hub           *url.URL
 	token         string
 	credentialKey string
+	registry      *channels.Registry
+	callbacks     *channels.CallbackDispatcher
+	telegram      *fakeTelegram
+	email         *fakeEmail
 }
 
 func (s *simulation) resume(ctx context.Context) error {
@@ -91,6 +96,9 @@ func (s *simulation) resume(ctx context.Context) error {
 		}
 		a.Groups, a.Calls, a.SyncMetadata = false, false, false
 		s.transport.site = a.Site
+		if err := s.activateChannels(a); err != nil {
+			return err
+		}
 		return s.wa.ReplaceAccounts([]whatsapp.Account{a})
 	}
 	return errors.New("no enabled simulation account to resume")
@@ -101,13 +109,20 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/_sim/telegram/") || strings.HasPrefix(r.URL.Path, "/_sim/email/") || r.URL.Path == "/_sim/providers" {
+		s.providerControl(w, r)
+		return
+	}
 	if r.Method == "GET" && r.URL.Path == "/_sim/state" {
 		state := map[string]any{}
 		for key, query := range map[string]string{
-			"events":     "SELECT id,lane,payload FROM relay_whatsapp_events WHERE account='sim-v1' ORDER BY id",
-			"incoming":   "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE account='sim-v1' ORDER BY id",
-			"deliveries": "SELECT id,request_key,state,result->'messages'->0->>'id' AS provider_message_id FROM relay_outbox WHERE account='sim-v1' ORDER BY id",
-			"callbacks":  "SELECT d.event_id,d.lane,d.acknowledged,d.status_offset,d.failures FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id WHERE e.account='sim-v1' ORDER BY d.event_id,d.lane",
+			"channel_callbacks":  "SELECT d.event_id,d.acknowledged,d.failures FROM relay_channel_callback_delivery d JOIN relay_channel_events e ON e.id=d.event_id WHERE e.account='sim-v1' ORDER BY d.event_id",
+			"channel_events":     "SELECT id,channel,provider_id,payload FROM relay_channel_events WHERE account='sim-v1' ORDER BY id",
+			"channel_deliveries": "SELECT id,request_key,state,result FROM relay_channel_outbox WHERE account='sim-v1' ORDER BY id",
+			"events":             "SELECT id,lane,payload FROM relay_whatsapp_events WHERE account='sim-v1' ORDER BY id",
+			"incoming":           "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE account='sim-v1' ORDER BY id",
+			"deliveries":         "SELECT id,request_key,state,result->'messages'->0->>'id' AS provider_message_id FROM relay_outbox WHERE account='sim-v1' ORDER BY id",
+			"callbacks":          "SELECT d.event_id,d.lane,d.acknowledged,d.status_offset,d.failures FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id WHERE e.account='sim-v1' ORDER BY d.event_id,d.lane",
 		} {
 			rows, err := s.db.Query(r.Context(), query)
 			if err != nil {
@@ -162,7 +177,7 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "account store unavailable", 503)
 			return
 		}
-		err = store.Save(r.Context(), accounts.Account{ID: a.ID, Site: a.Site, Enabled: true, Channels: []accounts.Channel{{Channel: "WhatsApp", Enabled: true, Config: map[string]any{"phone_id": a.PhoneID, "waba_id": a.WABAID, "graph_version": a.Version, "templates": true, "app_secret": a.AppSecret, "core_api_key": a.CoreAPIKey, "core_api_secret": a.CoreAPISecret, "callback_secret": a.CallbackSecret}}}}, map[string]string{"WhatsApp": a.AccessToken})
+		err = store.Save(r.Context(), accounts.Account{ID: a.ID, Site: a.Site, Enabled: true, Channels: simulationChannels(a)}, map[string]string{"WhatsApp": a.AccessToken, "Telegram": simulationBotToken, "Email": simulationMailPassword})
 		if err != nil {
 			http.Error(w, "account provisioning failed", 503)
 			return
@@ -214,6 +229,10 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		s.transport.mu.Unlock()
 		if err = s.wa.ReplaceAccounts([]whatsapp.Account{a}); err != nil {
 			http.Error(w, "activation failed", 503)
+			return
+		}
+		if err = s.activateChannels(a); err != nil {
+			http.Error(w, "channel activation failed", 503)
 			return
 		}
 		writeJSON(w, map[string]any{"token": token, "account": a.ID})
@@ -287,10 +306,15 @@ func (s *simulation) emit(w http.ResponseWriter, r *http.Request, payload []byte
 func denyRedirect(*http.Request, []*http.Request) error {
 	return errors.New("simulation refuses redirects")
 }
-func run() error {
+func run() error { return runSimulation(simulationDSN) }
+
+func runSimulation(validateDatabase func(string) error) error {
 	addr := flag.String("addr", env("RELAY_SIM_ADDR", "127.0.0.1:18091"), "Hub loopback address")
 	metaAddr := flag.String("meta-addr", env("RELAY_SIM_META_ADDR", "127.0.0.1:18094"), "fake Meta/control loopback address")
 	coreOrigin := flag.String("core-origin", env("RELAY_SIM_CORE_ORIGIN", "http://127.0.0.1:8001"), "Core loopback origin")
+	smtpAddr := flag.String("smtp-addr", "127.0.0.1:18095", "fake SMTP loopback address")
+	imapAddr := flag.String("imap-addr", "127.0.0.1:18096", "fake IMAP loopback address")
+	stateDir := flag.String("state-dir", ".runtime/relay-sim", "private provider state directory; reuse on restart")
 	migrate := flag.Bool("migrate", false, "apply Hub migrations to relay_hub_sim")
 	resume := flag.Bool("resume", false, "resume the stored simulation account without provisioning")
 	flag.Parse()
@@ -317,7 +341,7 @@ func run() error {
 		return errors.New("RELAY_SIM_CONTROL_TOKEN requires at least 32 characters")
 	}
 	dsn := os.Getenv("DATABASE_URL")
-	if err = simulationDSN(dsn); err != nil {
+	if err = validateDatabase(dsn); err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -345,7 +369,22 @@ func run() error {
 		return errors.New("simulation pool failed")
 	}
 	defer pool.Close()
+	if err = os.MkdirAll(*stateDir, 0700); err != nil {
+		return errors.New("provider state directory unavailable")
+	}
 	records := newRecorder()
+	fakeTelegram, err := newFakeTelegram(filepath.Join(*stateDir, "telegram.json"), records)
+	if err != nil {
+		return err
+	}
+	fakeEmail, err := newFakeEmail(filepath.Join(*stateDir, "email.json"), records)
+	if err != nil {
+		return err
+	}
+	if err = fakeEmail.start(*smtpAddr, *imapAddr); err != nil {
+		return err
+	}
+	defer fakeEmail.close()
 	transport := newTransport(meta, core, records)
 	defer transport.base.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 12 * time.Second, CheckRedirect: denyRedirect}
@@ -384,7 +423,10 @@ func run() error {
 		writeJSON(w, map[string]bool{"ready": true})
 	})
 	fake := &fakeMeta{records: records, pageSize: 1}
-	sim := &simulation{pool, wa, transport, fake, hub, os.Getenv("RELAY_SIM_CONTROL_TOKEN"), os.Getenv("RELAY_CREDENTIAL_KEY")}
+	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, callbacks: &channels.CallbackDispatcher{URL: dsn}}
+	sim.callbacks.Run(ctx, nil)
+	mux.HandleFunc("POST /webhooks/telegram/{account}", sim.channelWebhook("telegram"))
+	mux.HandleFunc("POST /webhooks/email/{account}", sim.channelWebhook("email"))
 	if sim.credentialKey == "" {
 		return errors.New("RELAY_CREDENTIAL_KEY is required")
 	}
@@ -396,7 +438,13 @@ func run() error {
 	mm := http.NewServeMux()
 	mm.HandleFunc("/_sim/", sim.control)
 	mm.Handle("/ai/chat/completions", &fakeAI{records: records})
-	mm.Handle("/", fake)
+	mm.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/bot") || strings.HasPrefix(r.URL.Path, "/file/bot") {
+			fakeTelegram.ServeHTTP(w, r)
+		} else {
+			fake.ServeHTTP(w, r)
+		}
+	})
 	servers := []*http.Server{{Addr: *addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}, {Addr: *metaAddr, Handler: mm, ReadHeaderTimeout: 5 * time.Second}}
 	listeners := []net.Listener{}
 	for _, server := range servers {
@@ -413,6 +461,13 @@ func run() error {
 	for i, server := range servers {
 		go func(s *http.Server, l net.Listener) { failures <- s.Serve(l) }(server, listeners[i])
 	}
+	mailboxPool, err := channels.NewMailboxPool(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer mailboxPool.Close()
+	channels.Outbox{DB: pool, Registry: registry}.Run(ctx)
+	channels.MailboxPoller{DB: mailboxPool, Registry: registry}.Run(ctx)
 	wa.Outbox.Run(ctx)
 	(&whatsapp.CallbackDispatcher{URL: dsn, Service: wa}).Run(ctx)
 	fmt.Println("relay-sim ready (loopback only)")

@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/andrometiq/relay_hub/internal/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -28,13 +28,7 @@ func (c captureDuringStateRead) TraceQueryStart(ctx context.Context, _ *pgx.Conn
 func (c captureDuringStateRead) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestStateIncludesCapturesCompletedDuringDatabaseRead(t *testing.T) {
-	dsn := os.Getenv("RELAY_SIM_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("requires relay_hub_sim and RELAY_SIM_TEST_DATABASE_URL")
-	}
-	if err := simulationDSN(dsn); err != nil {
-		t.Fatal(err)
-	}
+	dsn := isolatedLauncherDatabase(t)
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +42,15 @@ func TestStateIncludesCapturesCompletedDuringDatabaseRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	conn, err := db.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = database.Migrate(ctx, conn.Conn())
+	conn.Release()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sim := simulation{db: db, meta: &fakeMeta{records: records}, token: "local-test"}
 	req := httptest.NewRequest("GET", "/_sim/state", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer local-test")
