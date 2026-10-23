@@ -2,7 +2,9 @@ package email
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"golang.org/x/text/encoding/charmap"
 	"io"
@@ -18,17 +20,20 @@ import (
 const MaxMessageBytes = 6 * 1024 * 1024
 
 type Received struct {
-	MessageID     string       `json:"message_id"`
-	InReplyTo     string       `json:"in_reply_to,omitempty"`
-	References    []string     `json:"references,omitempty"`
-	From          string       `json:"from"`
-	To            []string     `json:"to"`
-	Cc            []string     `json:"cc,omitempty"`
-	Subject       string       `json:"subject"`
-	Body          string       `json:"body"`
-	HTML          string       `json:"html,omitempty"`
-	AutoSubmitted bool         `json:"auto_submitted"`
-	Attachments   []Attachment `json:"attachments,omitempty"`
+	Authentication   Authentication   `json:"authentication"`
+	DeliveryStatuses []DeliveryStatus `json:"delivery_statuses,omitempty"`
+	ContentHash      string           `json:"-"`
+	MessageID        string           `json:"message_id"`
+	InReplyTo        string           `json:"in_reply_to,omitempty"`
+	References       []string         `json:"references,omitempty"`
+	From             string           `json:"from"`
+	To               []string         `json:"to"`
+	Cc               []string         `json:"cc,omitempty"`
+	Subject          string           `json:"subject"`
+	Body             string           `json:"body"`
+	HTML             string           `json:"html,omitempty"`
+	AutoSubmitted    bool             `json:"auto_submitted"`
+	Attachments      []Attachment     `json:"attachments,omitempty"`
 }
 
 func decodeCharset(charset string, input io.Reader) (io.Reader, error) {
@@ -43,7 +48,9 @@ func decodeCharset(charset string, input io.Reader) (io.Reader, error) {
 		return nil, errors.New("unsupported email charset")
 	}
 }
-func Parse(raw []byte) (Received, error) {
+func Parse(raw []byte) (Received, error) { return parse(raw, "") }
+
+func parse(raw []byte, trustedServer string) (Received, error) {
 	result := Received{}
 	if len(raw) == 0 || len(raw) > MaxMessageBytes {
 		return result, errors.New("email exceeds size limit")
@@ -51,6 +58,11 @@ func Parse(raw []byte) (Received, error) {
 	message, err := mail.ReadMessage(bytes.NewReader(raw))
 	if err != nil {
 		return result, errors.New("invalid email")
+	}
+	for _, name := range []string{"From", "Message-Id", "In-Reply-To"} {
+		if len(message.Header[name]) > 1 {
+			return result, errors.New("duplicate email identity header")
+		}
 	}
 	decoder := mime.WordDecoder{CharsetReader: decodeCharset}
 	result.Subject, err = decoder.DecodeHeader(message.Header.Get("Subject"))
@@ -62,6 +74,9 @@ func Parse(raw []byte) (Received, error) {
 		return result, errors.New("email needs one sender")
 	}
 	result.From = strings.ToLower(from[0].Address)
+	result.Authentication = authenticate(raw, message.Header, result.From, trustedServer)
+	sum := sha256.Sum256(raw)
+	result.ContentHash = hex.EncodeToString(sum[:])
 	for _, header := range []string{"To", "Cc"} {
 		values, err := message.Header.AddressList(header)
 		if err != nil && message.Header.Get(header) != "" {
@@ -94,9 +109,10 @@ func Parse(raw []byte) (Received, error) {
 	if len(result.References) > 20 {
 		result.References = result.References[len(result.References)-20:]
 	}
+	kind, _, _ := mime.ParseMediaType(message.Header.Get("Content-Type"))
 	auto := strings.ToLower(message.Header.Get("Auto-Submitted"))
 	precedence := strings.ToLower(message.Header.Get("Precedence"))
-	result.AutoSubmitted = (auto != "" && auto != "no") || message.Header.Get("List-ID") != "" || precedence == "bulk" || precedence == "list" || precedence == "junk"
+	result.AutoSubmitted = kind == "multipart/report" || (auto != "" && auto != "no") || message.Header.Get("List-ID") != "" || precedence == "bulk" || precedence == "list" || precedence == "junk"
 	parts, total := 0, 0
 	var parsePart func(textproto.MIMEHeader, io.Reader, int) error
 	parsePart = func(header textproto.MIMEHeader, reader io.Reader, depth int) error {
