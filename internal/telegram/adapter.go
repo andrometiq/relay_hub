@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/andrometiq/relay_hub/internal/deliverypolicy"
 )
 
 type Config struct {
@@ -92,7 +94,10 @@ func (c *Client) call(ctx context.Context, method string, body map[string]any) (
 
 func (c *Client) perform(req *http.Request) (json.RawMessage, error) {
 	if !c.cfg.Enabled {
-		return nil, errors.New("Telegram account is disabled")
+		return nil, &APIError{ErrorCode: 403}
+	}
+	if err := deliverypolicy.BeforeSubmission(req.Context()); err != nil {
+		return nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -101,10 +106,10 @@ func (c *Client) perform(req *http.Request) (json.RawMessage, error) {
 	defer resp.Body.Close()
 	rawResponse, err := io.ReadAll(io.LimitReader(resp.Body, 1048577))
 	if err != nil || len(rawResponse) > 1048576 {
-		return nil, errors.New("invalid Telegram response; delivery outcome unknown")
+		return nil, &APIError{OutcomeUnknown: true}
 	}
 	var envelope struct {
-		OK         bool            `json:"ok"`
+		OK         *bool           `json:"ok"`
 		Result     json.RawMessage `json:"result"`
 		ErrorCode  int             `json:"error_code"`
 		Parameters struct {
@@ -113,13 +118,16 @@ func (c *Client) perform(req *http.Request) (json.RawMessage, error) {
 		} `json:"parameters"`
 	}
 	if json.Unmarshal(rawResponse, &envelope) != nil {
-		return nil, errors.New("invalid Telegram response; delivery outcome unknown")
+		return nil, &APIError{OutcomeUnknown: true}
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !envelope.OK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || envelope.OK == nil || !*envelope.OK {
+		if envelope.OK == nil || *envelope.OK || envelope.ErrorCode == 0 || resp.StatusCode >= 500 || resp.StatusCode == 408 || envelope.ErrorCode >= 500 || envelope.ErrorCode == 408 {
+			return nil, &APIError{StatusCode: resp.StatusCode, ErrorCode: envelope.ErrorCode, OutcomeUnknown: true}
+		}
 		return nil, &APIError{StatusCode: resp.StatusCode, ErrorCode: envelope.ErrorCode, RetryAfter: envelope.Parameters.RetryAfter, MigrateToChatID: envelope.Parameters.MigrateToChatID}
 	}
 	if len(envelope.Result) == 0 || string(envelope.Result) == "null" {
-		return nil, errors.New("Telegram did not confirm request acceptance")
+		return nil, &APIError{OutcomeUnknown: true}
 	}
 	return envelope.Result, nil
 }
