@@ -1,10 +1,13 @@
 <script setup>
-import { ref, watch, onBeforeUnmount } from "vue";
-import { Badge, Button, Dialog, ErrorMessage, FeatherIcon } from "@relay/ui";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
+import { Badge, Button, Dialog, ErrorMessage, FeatherIcon, FormControl } from "@relay/ui";
 import AccountPicker from "../components/AccountPicker.vue";
 import AuditEvents from "./AuditEvents.vue";
 import { hubApi } from "../services/hubApi";
 
+const audit = ref();
+const query = ref("");
+const visible = computed(() => items.value.filter(row => `${row.id} ${row.kind} ${row.preview} ${row.callback}`.toLowerCase().includes(query.value.toLowerCase())));
 const mode = ref("messages");
 const account = ref("");
 const items = ref([]);
@@ -72,7 +75,7 @@ async function inspect(row) {
     if (!result.truncated) {
       try { formatted = JSON.stringify(JSON.parse(formatted), null, 2); } catch {}
     }
-    detail.value = { ...result, text: formatted };
+    detail.value = { ...result, truncated: result.truncated || formatted.length > 65536, text: formatted.slice(0, 65536) };
   } catch (exception) {
     if (ticket === detailGeneration) error.value = exception.message;
   } finally {
@@ -87,6 +90,7 @@ watch(account, () => {
   load();
 });
 onBeforeUnmount(() => { ++generation; ++detailGeneration; });
+defineExpose({ refresh: () => mode.value === "system" ? audit.value?.refresh() : load() });
 </script>
 
 <template>
@@ -98,29 +102,32 @@ onBeforeUnmount(() => { ++generation; ++detailGeneration; });
       <button type="button" role="tab" :aria-selected="mode === 'messages'" :class="{ active: mode === 'messages' }" @click="mode = 'messages'">WhatsApp events</button>
       <button type="button" role="tab" :aria-selected="mode === 'system'" :class="{ active: mode === 'system' }" @click="mode = 'system'">System activity</button>
     </div>
-    <AuditEvents v-if="mode === 'system'" />
+    <AuditEvents ref="audit" v-if="mode === 'system'" />
     <template v-else>
       <div class="entity-toolbar">
         <AccountPicker v-model="account" :disabled="busy" />
+        <FormControl v-model="query" label="Search loaded events" type="search" placeholder="ID, preview, type or forwarding state" />
         <Button label="Refresh" icon-left="refresh-cw" :loading="busy" :disabled="!account" @click="load()" />
       </div>
       <ErrorMessage :message="error" />
       <p v-if="!account" class="entity-prompt">Select an account to inspect its WhatsApp events.</p>
       <div v-else class="event-list infinite-list" aria-label="WhatsApp events" @scroll.passive="scrolled">
-        <button v-for="row in items" :key="row.id" type="button" class="event-list-row entity-row" @click="inspect(row)">
+        <button v-for="row in visible" :key="row.id" type="button" class="event-list-row entity-row" @click="inspect(row)">
           <span class="entity-primary"><span class="entity-icon" aria-hidden="true"><FeatherIcon name="activity" class="h-4 w-4" /></span><span><strong>{{ row.kind || `Event #${row.id}` }}</strong><small>{{ row.time }}</small></span></span>
           <span class="event-preview">{{ row.preview || "Provider event" }}</span>
           <Badge :label="row.callback || 'Pending'" />
           <FeatherIcon name="chevron-right" class="h-4 w-4 text-ink-gray-4" />
         </button>
         <p v-if="busy" role="status" class="infinite-list__status">Loading…</p>
-        <p v-else-if="!items.length" class="entity-prompt">No WhatsApp events for this account.</p>
+        <p v-else-if="!visible.length && !error" class="entity-prompt">No matching events in the loaded page. Load older events to search more history.</p>
       </div>
+      <Button v-if="more" label="Load older events" :loading="busy" @click="load(true)" />
     </template>
 
     <Dialog :model-value="!!selected" :options="{ title: selected ? `WhatsApp event #${selected.id}` : 'WhatsApp event', size: 'xl' }" @update:model-value="(value) => !value && (selected = null)">
       <template #body-content>
         <div v-if="selected" class="space-y-5">
+          <ErrorMessage :message="error" />
           <dl class="entity-details">
             <div><dt>Type</dt><dd>{{ selected.kind }}</dd></div>
             <div><dt>Received</dt><dd>{{ selected.time }}</dd></div>
