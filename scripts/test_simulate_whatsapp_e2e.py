@@ -30,12 +30,13 @@ class RunnerTests(unittest.TestCase):
     def test_waits_for_finished_rq_metadata_after_message_commit(self):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
-            rows = [dict(event=str(i), hub_event_id='9', queue='long') for i in range(3)]
-            runner.site = Mock()
-            runner.site.call.side_effect = [{'projection_timings': rows[:2]}, {'projection_timings': rows}]
-            with patch.object(sim.time, 'sleep'):
-                self.assertEqual(runner.wait_projection_timings(9), rows)
-            self.assertEqual(runner.site.call.call_count, 2)
+            for batches in (3, 24):
+                rows = [dict(event=str(i), hub_event_id='9', queue='long') for i in range(batches)]
+                runner.site = Mock()
+                runner.site.call.side_effect = [{'projection_timings': rows[:-1]}, {'projection_timings': rows}]
+                with patch.object(sim.time, 'sleep'):
+                    self.assertEqual(runner.wait_projection_timings([9], batches), rows)
+                self.assertEqual(runner.site.call.call_count, 2)
 
     def test_breakdown_separates_dispatch_http_receive_and_projection(self):
         sample = dict(provider='wamid.sample', phase='held', latency_ms=100)
@@ -48,17 +49,62 @@ class RunnerTests(unittest.TestCase):
                          'callback_http_ms', 'receive_ms', 'inline_projection_ms', 'post_callback_ms')],
                          [10, 15, 5, 50, 40, 30, 20])
 
+    def test_samples_immediately_at_fixed_spacing_until_receipts_finish(self):
+        with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
+            runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
+            clock, starts = [0.0], []
+            def observe(provider, phase):
+                self.assertEqual(phase, 'processing')
+                self.assertEqual(provider, f'wamid.sim.processing.{runner.run_id}.{len(starts)}')
+                starts.append(clock[0])
+                clock[0] += .1
+                return {'receipts_complete': len(starts) == 35}
+            def sleep(seconds):
+                clock[0] += seconds
+            with patch.object(runner, 'observe_inbound', side_effect=observe), \
+                    patch.object(sim.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(sim.time, 'sleep', side_effect=sleep):
+                self.assertEqual(runner.sample_receipt_projection(), 35)
+            self.assertEqual(starts, [i * .25 for i in range(35)])
+
+    def test_sampling_times_out_if_receipts_never_finish(self):
+        with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
+            runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
+            with patch.object(runner, 'observe_inbound', return_value={'receipts_complete': False}) as observe, \
+                    patch.object(sim.time, 'monotonic', side_effect=[0, 0, 0, .1, 120]), \
+                    patch.object(sim.time, 'sleep'):
+                with self.assertRaisesRegex(TimeoutError, 'Receipt projection'):
+                    runner.sample_receipt_projection()
+            observe.assert_called_once()
+
     def test_storm_gate_requires_real_processing_overlap_and_strict_target(self):
         spans = [dict(hub_event_id='9', queue='long', started_ns=1_000_000_000, finished_ns=2_000_000_000)]
         samples = [dict(phase='processing', started_ns=1_100_000_000, observed_ns=1_300_000_000, latency_ms=200)] * 5
-        result = sim.storm_latency(samples, spans, 9)
+        result = sim.storm_latency(samples, spans, [9], 12000)
         self.assertTrue(result['passed'])
-        self.assertEqual(result['receipts_per_second'], 1251)
-        self.assertFalse(sim.storm_latency(samples[:4], spans, 9)['passed'])
-        self.assertFalse(sim.storm_latency(samples, [], 9)['passed'])
-        self.assertFalse(sim.storm_latency([dict(s, phase='held') for s in samples], spans, 9)['passed'])
-        self.assertFalse(sim.storm_latency([dict(s, latency_ms=500) for s in samples], spans, 9)['passed'])
-        self.assertFalse(sim.storm_latency(samples, spans, 10)['passed'])
+        self.assertEqual(result['receipts_per_second'], 12000)
+        self.assertEqual(result['receipt_count'], 12000)
+        self.assertFalse(sim.storm_latency(samples[:4], spans, [9], 12000)['passed'])
+        self.assertFalse(sim.storm_latency(samples, [], [9], 12000)['passed'])
+        self.assertFalse(sim.storm_latency([dict(s, phase='held') for s in samples], spans, [9], 12000)['passed'])
+        self.assertFalse(sim.storm_latency([dict(s, latency_ms=500) for s in samples], spans, [9], 12000)['passed'])
+        self.assertFalse(sim.storm_latency(samples, spans, [10], 12000)['passed'])
+        # An interval intersection alone is insufficient: the row must appear during projection.
+        for observed in (900_000_000, 2_000_000_000, 2_100_000_000):
+            self.assertFalse(sim.storm_latency([dict(s, observed_ns=observed) for s in samples], spans, [9], 12000)['passed'])
+        self.assertTrue(sim.storm_latency([dict(s, started_ns=900_000_000, observed_ns=1_000_000_000)
+                                          for s in samples], spans, [9], 12000)['passed'])
+
+    def test_storm_combines_events_but_excludes_projection_gaps(self):
+        spans = [dict(hub_event_id=str(event), queue='long', started_ns=start, finished_ns=start + 100_000_000)
+                 for event, start in ((9, 1_000_000_000), (10, 2_000_000_000))]
+        samples = [dict(phase='processing', observed_ns=stamp, latency_ms=100)
+                   for stamp in (1_050_000_000, 2_050_000_000, 1_500_000_000)]
+        result = sim.storm_latency(samples, spans, [9, 10], 6000)
+        self.assertEqual(result['samples'], 2)
+        self.assertEqual(result['status_projection_seconds'], 1.1)
+        self.assertAlmostEqual(result['receipts_per_second'], 6000 / 1.1)
+        self.assertFalse(result['passed'])
 
     def test_rejects_remote_or_ambiguous_destinations(self):
         for origin in ['http://localhost:8001', 'https://127.0.0.1:8001', 'http://192.0.2.1:80',
@@ -80,6 +126,30 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual([r['status'] for r in group], ['sent', 'delivered', 'read'])
             self.assertEqual({r['id'] for r in group}, {f'wamid.{i}'})
             self.assertEqual({r['recipient_id'] for r in group}, {'919999999999'})
+
+    def test_configurable_storm_preserves_final_read_and_exact_size(self):
+        self.assertEqual(sim.arguments([]).storm_receipts, 12000)
+        for count in (1, 2, 3, 12000, 12001):
+            self.assertEqual(sim.arguments(['--storm-receipts', str(count)]).storm_receipts, count)
+            providers = [f'wamid.{i}' for i in range(sim.math.ceil(count / 3))]
+            receipts = sim.receipt_storm(providers, count)['entry'][0]['changes'][0]['value']['statuses']
+            payloads = list(sim.sustained_storm(providers, count))
+            self.assertTrue(all(len(json.dumps(p).encode()) < 1024 * 1024 for p in payloads))
+            self.assertEqual([r for p in payloads for r in p['entry'][0]['changes'][0]['value']['statuses']], receipts)
+            self.assertEqual(len(receipts), count)
+            self.assertEqual({r['id']: r['status'] for r in receipts}, dict.fromkeys(providers, 'read'))
+        for count in ('0', '-1'):
+            with self.assertRaises(SystemExit):
+                sim.arguments(['--storm-receipts', count])
+
+    def test_read_observation_accepts_storm_size_but_not_empty_or_incomplete(self):
+        from whatsapp_sim_site import expected_rows
+        providers = [str(i) for i in range(4000)]
+        data = {'messages': [dict(provider_id=p, status='Read') for p in providers]}
+        self.assertTrue(expected_rows('read', '', data, providers)[0])
+        self.assertFalse(expected_rows('read', '', data, [])[0])
+        data['messages'].pop()
+        self.assertFalse(expected_rows('read', '', data, providers)[0])
 
     def test_successful_batches_handle_omitted_fault_and_filter_other_events(self):
         def row(event, count, **extra):
