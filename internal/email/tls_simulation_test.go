@@ -472,3 +472,22 @@ func TestSMTPStageOutcomes(t *testing.T) {
 		t.Fatal("incorrect connect outcome", err)
 	}
 }
+
+func TestSMTPConnectionCheckNeverSubmitsMail(t *testing.T) {
+	for _, options := range []smtpSimulation{{}, {implicitTLS: true}, {authCode: 535}, {wrongHostname: true}} {
+		fixture := newSMTPFixture(t, options)
+		err := fixture.client.TestSMTP(t.Context())
+		transcript := <-fixture.done
+		if (err != nil) != (options.authCode != 0 || options.wrongHostname) {
+			t.Fatalf("connection check: %v", err)
+		}
+		for _, command := range transcript.commands {
+			if strings.HasPrefix(command, "MAIL") || strings.HasPrefix(command, "RCPT") || strings.HasPrefix(command, "DATA") {
+				t.Fatal("connection test submitted mail")
+			}
+		}
+		if err != nil && strings.Contains(err.Error(), "synthetic-password") {
+			t.Fatal("leaked password")
+		}
+	}
+}

@@ -52,6 +52,9 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 	client.dialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, listener.Addr().String())
 	}
+	if err := client.TestMailbox(t.Context()); err != nil {
+		t.Fatal("read-only mailbox connection check", err)
+	}
 	var snapshots []MailboxCursor
 	checkpoint := func(cursor MailboxCursor) error {
 		snapshots = append(snapshots, cursor)

@@ -63,6 +63,8 @@ type ReactionCount struct {
 	TotalCount int64    `json:"total_count"`
 }
 
+var supportedUpdates = []string{"message", "edited_message", "channel_post", "edited_channel_post", "message_reaction", "message_reaction_count", "my_chat_member", "chat_member", "chat_join_request"}
+
 // ParseUpdate preserves group participants and topic/reply routing independently
 // of the conversation. Non-message events are accepted and classified, allowing
 // the journal to retain them without treating membership events as AI prompts.
@@ -78,10 +80,9 @@ func (c *Client) ParseUpdate(raw []byte) (Message, error) {
 	if json.Unmarshal(update["update_id"], &id) != nil || id < 1 {
 		return Message{}, errors.New("invalid Telegram update")
 	}
-	eventKinds := []string{"message", "edited_message", "channel_post", "edited_channel_post", "message_reaction", "message_reaction_count", "my_chat_member", "chat_member", "chat_join_request"}
 	var kind string
 	var payload json.RawMessage
-	for _, candidate := range eventKinds {
+	for _, candidate := range supportedUpdates {
 		if v, ok := update[candidate]; ok && string(v) != "null" {
 			if kind != "" {
 				return Message{}, errors.New("ambiguous Telegram update")

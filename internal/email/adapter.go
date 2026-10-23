@@ -107,54 +107,10 @@ func (c *Client) SendMessage(ctx context.Context, in Message) (sendErr error) {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	address := net.JoinHostPort(c.cfg.Host, strconv.Itoa(c.cfg.Port))
-	dial := c.dialContext
-	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
-	}
-	stage = "connect"
-	conn, err := dial(ctx, "tcp", address)
+	client, closeConnection, err := c.connectSMTP(ctx, &stage)
+	defer closeConnection()
 	if err != nil {
 		return err
-	}
-	defer conn.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-	}
-	rawConn := conn
-	stop := context.AfterFunc(ctx, func() { rawConn.Close() })
-	defer stop()
-	stage = "tls"
-	if c.cfg.Port == 465 {
-		secure := tls.Client(conn, c.TLSConfig())
-		if err = secure.HandshakeContext(ctx); err != nil {
-			return err
-		}
-		conn = secure
-	}
-	stage = "greeting"
-	client, err := smtp.NewClient(conn, c.cfg.Host)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	stage = "tls"
-	if c.cfg.Port != 465 {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err = client.StartTLS(c.TLSConfig()); err != nil {
-				return err
-			}
-		} else {
-			return errors.New("SMTP server does not support required TLS")
-		}
-	}
-	stage = "auth"
-	if c.cfg.Username != "" {
-		if err = client.Auth(smtp.PlainAuth("", c.cfg.Username, c.cfg.Password, c.cfg.Host)); err != nil {
-			return err
-		}
 	}
 	from, _ := mail.ParseAddress(c.cfg.From)
 	stage = "mail"
@@ -206,3 +162,73 @@ func (e *SendError) Error() string {
 	return fmt.Sprintf("SMTP delivery failed at %s (code %d, outcome unknown: %t)", e.Stage, e.Code, e.OutcomeUnknown)
 }
 func (e *SendError) Unwrap() error { return e.cause }
+
+// connectSMTP performs TLS and authentication without submitting a message.
+func (c *Client) connectSMTP(ctx context.Context, stage *string) (*smtp.Client, func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+
+	cleanup := func() { cancel() }
+	address := net.JoinHostPort(c.cfg.Host, strconv.Itoa(c.cfg.Port))
+	dial := c.dialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	*stage = "connect"
+	conn, err := dial(ctx, "tcp", address)
+	if err != nil {
+		return nil, cleanup, err
+	}
+
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+	rawConn := conn
+	stop := context.AfterFunc(ctx, func() { rawConn.Close() })
+	cleanup = func() { stop(); rawConn.Close(); cancel() }
+
+	*stage = "tls"
+	if c.cfg.Port == 465 {
+		secure := tls.Client(conn, c.TLSConfig())
+		if err = secure.HandshakeContext(ctx); err != nil {
+			return nil, cleanup, err
+		}
+		conn = secure
+	}
+	*stage = "greeting"
+	client, err := smtp.NewClient(conn, c.cfg.Host)
+	if err != nil {
+		return nil, cleanup, err
+	}
+
+	*stage = "tls"
+	if c.cfg.Port != 465 {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err = client.StartTLS(c.TLSConfig()); err != nil {
+				return nil, cleanup, err
+			}
+		} else {
+			return nil, cleanup, errors.New("SMTP server does not support required TLS")
+		}
+	}
+	*stage = "auth"
+	if c.cfg.Username != "" {
+		if err = client.Auth(smtp.PlainAuth("", c.cfg.Username, c.cfg.Password, c.cfg.Host)); err != nil {
+			return nil, cleanup, err
+		}
+	}
+	return client, cleanup, nil
+}
+
+// TestSMTP checks the saved connection without MAIL, RCPT or DATA commands.
+func (c *Client) TestSMTP(ctx context.Context) error {
+	if !c.cfg.Enabled {
+		return errors.New("email account is disabled")
+	}
+	stage := "connect"
+	_, closeConnection, err := c.connectSMTP(ctx, &stage)
+	defer closeConnection()
+	if err != nil {
+		return fmt.Errorf("SMTP connection failed at %s; check settings, TLS and credentials", stage)
+	}
+	return nil
+}
