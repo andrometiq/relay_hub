@@ -41,6 +41,8 @@ type Message struct {
 
 var messageIDRE = regexp.MustCompile(`^<[^<>\s@]{1,120}@[^<>\s@]{1,120}>$`)
 
+func ValidMessageID(id string) bool { return messageIDRE.MatchString(id) }
+
 func (in Message) Validate() error {
 	if strings.ContainsAny(in.Subject, "\r\n") {
 		return errors.New("invalid email header")
