@@ -122,21 +122,14 @@ class Acceptance:
                 assert state['paused'], 'Conversation is no longer paused'
                 assert not state['runs'], 'Paused message created an automation run'
                 assert not state['actions'] and not state['outgoing'], 'Paused message created an action'
-                # The first stage now runs after commit. Its finished job is the
-                # barrier proving that this message was checked for automation.
+                # The durable completion marker proves this committed message
+                # was checked for automation, independently of RQ retention.
                 return state
             time.sleep(.05)
         raise AssertionError('Paused message was not projected')
 
     def automation_checked(self, message):
-        from frappe.utils.background_jobs import get_job
-        from relay_core.automation.queue import message_job_id
-        job = get_job(message_job_id(message))
-        if job:
-            status = job.get_status(refresh=True)
-            assert status != 'failed', 'Paused message automation check failed'
-            return status == 'finished'
-        return False
+        return self.f.db.get_value('Relay Message', message, 'automation_status') == 'Complete'
 
     def seed_event(self, run, template_id):
         f, fixture = self.f, self.fixture
