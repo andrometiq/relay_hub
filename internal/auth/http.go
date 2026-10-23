@@ -288,16 +288,21 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if before {
 			comparison, order = "<", "DESC"
 		}
-		rows, e := h.Store.DB.Query(ctx, "SELECT id,username,role,enabled,auth_version FROM relay_users WHERE ($1::bigint=0 OR id "+comparison+" $1) AND username ILIKE $2 ORDER BY id "+order+" LIMIT 51", cursor, pattern)
+		rows, e := h.Store.DB.Query(ctx, "SELECT id,username,role,enabled,auth_version,ARRAY(SELECT account_id FROM relay_user_accounts WHERE user_id=relay_users.id ORDER BY account_id),ARRAY(SELECT g.account_id FROM relay_user_accounts g JOIN relay_accounts a ON a.account_id=g.account_id WHERE g.user_id=relay_users.id AND a.enabled AND relay_users.enabled ORDER BY g.account_id) FROM relay_users WHERE ($1::bigint=0 OR id "+comparison+" $1) AND username ILIKE $2 ORDER BY id "+order+" LIMIT 51", cursor, pattern)
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return
 		}
 		defer rows.Close()
-		list := []User{}
+		type userAccess struct {
+			User
+			Grants          []string `json:"grants"`
+			EffectiveGrants []string `json:"effective_grants"`
+		}
+		list := []userAccess{}
 		for rows.Next() {
-			var v User
-			if rows.Scan(&v.ID, &v.Username, &v.Role, &v.Enabled, &v.Version) != nil {
+			var v userAccess
+			if rows.Scan(&v.ID, &v.Username, &v.Role, &v.Enabled, &v.Version, &v.Grants, &v.EffectiveGrants) != nil {
 				http.Error(w, "Unavailable", 503)
 				return
 			}
