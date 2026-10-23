@@ -102,7 +102,7 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" && r.URL.Path == "/_sim/state" {
-		state := map[string]any{"records": s.meta.records.snapshot()}
+		state := map[string]any{}
 		for key, query := range map[string]string{
 			"events":     "SELECT id,lane,payload FROM relay_whatsapp_events WHERE account='sim-v1' ORDER BY id",
 			"incoming":   "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE account='sim-v1' ORDER BY id",
@@ -121,6 +121,9 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 			}
 			state[key] = values
 		}
+		// Transport captures precede durable callback ACKs. Read them last so
+		// every ACK observed above has its corresponding capture in this response.
+		state["records"] = s.meta.records.snapshot()
 		writeJSON(w, state)
 		return
 	}

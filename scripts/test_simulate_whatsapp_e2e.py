@@ -16,6 +16,44 @@ import simulate_whatsapp_e2e as sim
 
 
 class RunnerTests(unittest.TestCase):
+    def test_automation_workers_cannot_share_projection_capacity(self):
+        from whatsapp_sim_site import require_worker_isolation
+        def worker(*lanes):
+            return SimpleNamespace(queue_names=lambda: ['bench:' + lane for lane in lanes])
+        require_worker_isolation([worker('default'), worker('short', 'long')])
+        for workers in ([], [worker('short', 'long')], [worker('default', 'short', 'long')],
+                        [worker('default'), worker('default', 'long'), worker('short')]):
+            with self.subTest(workers=workers), self.assertRaises(AssertionError):
+                require_worker_isolation(workers)
+
+    def test_paused_assertion_waits_for_automation_and_rereads_committed_state(self):
+        from whatsapp_sim_acceptance import Acceptance
+        acceptance = Acceptance(Mock(), {}, Mock())
+        pending = dict(incoming=[{'name': 'paused'}], paused=1, runs=[], actions=[], outgoing=[])
+        acceptance.ai_state = Mock(side_effect=[pending, pending, dict(pending, runs=[{'status': 'Pending'}])])
+        acceptance.automation_checked = Mock(side_effect=[False, True])
+        with patch('whatsapp_sim_acceptance.time.sleep'), self.assertRaisesRegex(AssertionError, 'created an automation run'):
+            acceptance.wait_paused('provider')
+
+    def test_business_event_fixture_supplies_site_tax_currency_and_price_list(self):
+        from whatsapp_sim_acceptance import Acceptance
+        f = Mock(conf=SimpleNamespace(developer_mode=1), local=SimpleNamespace(site='yrp.site'))
+        f.get_all.return_value = []
+        f.db.get_single_value.return_value = 'Configured company'
+        f.db.get_value.side_effect = lambda dt, *args: {'Relay WhatsApp Template': 'template',
+            'Item Group': 'Services', 'UOM': 'Nos', 'Company': 'INR'}[dt]
+        f.get_meta.return_value.has_field.return_value = True
+        f.db.exists.return_value = True
+        insert = Mock(side_effect=lambda dt, **values: SimpleNamespace(name=dt))
+        acceptance = Acceptance(f, {'channel': 'channel', 'operator': {'name': 'operator'}, 'customer': 'customer'}, insert)
+        acceptance.seed_event('run', 'template-id')
+        item = insert.call_args_list[0].kwargs
+        self.assertEqual((item['gst_hsn_code'], item['is_stock_item']), ('998313', 0))
+        price = insert.call_args_list[1].kwargs
+        self.assertEqual((price['selling'], price['currency']), (1, 'INR'))
+        self.assertEqual(acceptance.event['company'], 'Configured company')
+        f.db.get_single_value.assert_called_once_with('Global Defaults', 'default_company')
+
     def test_ai_preflight_requires_explicit_automation_activation_before_fixtures(self):
         from whatsapp_sim_acceptance import Acceptance
         for conf in ({}, {'relay_automation_enabled': 0}, {'relay_automation_enabled': False}):
@@ -31,11 +69,12 @@ class RunnerTests(unittest.TestCase):
     def test_paused_message_waits_for_its_committed_projection(self):
         from whatsapp_sim_acceptance import Acceptance
         acceptance = Acceptance(Mock(), {}, Mock())
+        acceptance.automation_checked = Mock(return_value=True)
         state = dict(incoming=[{'name': 'PAUSED-MESSAGE'}], paused=1, runs=[], actions=[], outgoing=[])
-        acceptance.ai_state = Mock(side_effect=[dict(state, incoming=[]), state])
+        acceptance.ai_state = Mock(side_effect=[dict(state, incoming=[]), state, state])
         with patch('whatsapp_sim_acceptance.time.sleep'):
             self.assertEqual(acceptance.wait_paused('wamid.paused'), state)
-        self.assertEqual(acceptance.ai_state.call_args_list, [call('wamid.paused'), call('wamid.paused')])
+        self.assertEqual(acceptance.ai_state.call_args_list, [call('wamid.paused'), call('wamid.paused'), call('wamid.paused')])
         for change in (dict(runs=[{'status': 'Pending'}]), dict(actions=[{'status': 'Pending'}]),
                        dict(outgoing=[{}]), dict(paused=0), dict(incoming=[{}, {}])):
             acceptance.ai_state = Mock(return_value=dict(state, **change))
@@ -52,6 +91,7 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
             acceptance = Acceptance(Mock(), {}, Mock())
+            acceptance.automation_checked = Mock(return_value=True)
             acceptance.ai_state = Mock(return_value=dict(incoming=[{'name': 'PAUSED-MESSAGE'}],
                 paused=1, runs=[{'status': 'Pending'}], actions=[], outgoing=[]))
             def site_call(action, **values):
@@ -71,7 +111,7 @@ class RunnerTests(unittest.TestCase):
             with patch.object(sim, 'provider_posts', return_value=[{}, {}]), \
                     self.assertRaisesRegex(AssertionError, 'Paused message created an automation run'):
                 runner.ai_acceptance()
-            acceptance.ai_state.assert_called_once_with(f'wamid.sim.ai.paused.{runner.run_id}')
+            self.assertEqual(acceptance.ai_state.call_args_list, [call(f'wamid.sim.ai.paused.{runner.run_id}')] * 2)
 
     def test_projection_timings_ignore_expired_unrelated_and_other_site_jobs(self):
         from rq.exceptions import NoSuchJobError
@@ -184,7 +224,8 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual({r['id'] for r in group}, {f'wamid.{i}'})
             self.assertEqual({r['recipient_id'] for r in group}, {'919999999999'})
 
-    def test_configurable_storm_preserves_final_read_and_exact_size(self):
+    @patch('simulate_whatsapp_e2e.time.time', return_value=1_700_000_000)
+    def test_configurable_storm_preserves_final_read_and_exact_size(self, clock):
         self.assertEqual(sim.arguments([]).storm_receipts, 12000)
         for count in (1, 2, 3, 12000, 12001):
             self.assertEqual(sim.arguments(['--storm-receipts', str(count)]).storm_receipts, count)

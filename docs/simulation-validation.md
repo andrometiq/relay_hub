@@ -6,6 +6,48 @@ injected callback failures are simulated. Hub authentication, MCP, PostgreSQL
 journals/outbox, callback signatures, Core HTTP authentication and worker
 projection remain real. This is local acceptance, not live Meta certification.
 
+## Automation-enabled run fixes (2026-10-24)
+
+The full report captured successful receipt batches of 500, 500 and 251 for
+event 273. Step 10 saw only the first two because `/_sim/state` copied captures
+before reading callback acknowledgements. It now reads captures last, preserving
+the ordering between a transport capture and the subsequent durable ACK. The
+batch-size and complete-delivery assertions are unchanged.
+
+Inbound automation previously read policies and created intents during message
+insertion. New AI jobs used `short`; recovery and translation used `long`.
+The installed worker consumed `default,short,long`, so none of these queues had
+independent worker capacity. Core now defers inbound automation until after
+message commit and uses `default` for initial and downstream automation jobs.
+Preflight rejects workers that consume both automation and projection queues.
+Step 13 waits for the paused message's deferred automation check to finish,
+then rereads its state before asserting no run/action/reply.
+
+The recorded 668 ms storm p95 also includes Hub/HTTP delays; Core inline
+projection in that sample took 43 ms. The queue fixes do not establish a new
+latency result. Full connected acceptance remains pending activation below.
+
+Step 14's Item failed India Compliance's mandatory SAC validation. The fixture
+now supplies the installed IT consulting SAC 998313, the configured default
+Company and an explicit local selling price list in that Company's currency.
+The arbitrary Company previously selected had no applicable fiscal year.
+A local diagnostic inserted and submitted the corrected Sales Order with
+quantity 2 and total 250, then rolled back without sending externally.
+
+Activation requires the operator to replace the shared worker and reload web.
+These commands have **not** been executed. No migration, asset build or site
+configuration change is needed:
+
+```sh
+systemctl --user stop v16-worker.service
+systemd-run --user --collect --unit=v16-projection --working-directory=/home/sakthi/development/pilot/benches/version_16/sites /home/sakthi/development/pilot/benches/version_16/env/bin/python -B -m frappe.utils.bench_helper frappe worker --queue short,long
+systemd-run --user --collect --unit=v16-automation --working-directory=/home/sakthi/development/pilot/benches/version_16/sites /home/sakthi/development/pilot/benches/version_16/env/bin/python -B -m frappe.utils.bench_helper frappe worker --queue default
+systemctl --user restart v16-web.service
+```
+
+Then rerun the connected command below with `--report-dir .runtime/sim-report/full`.
+The existing full report is retained unchanged as failure evidence.
+
 ## Run
 
 From this checkout on `develop`:
@@ -30,7 +72,8 @@ PYTHONDONTWRITEBYTECODE=1 \
 Core HTTP must answer `/api/method/ping` using `Host: yrp.site`. Its canonical
 origin must be `http://yrp.site:8001`; the runner reads this from Frappe and does
 not change `site_config`. Both `short` (inbound) and `long` (receipts/templates)
-workers must run the installed Core code. The target must have developer mode,
+workers must run the installed Core code, with a separate `default` automation
+worker. The target must have developer mode,
 ERPNext's Customer/Contact configuration, Relay Core DocTypes and its roles.
 Socket.IO must authenticate that site and operator and reach the same Redis
 publication stream. The runner neither starts nor rewrites Core infrastructure.
@@ -421,9 +464,9 @@ be inferred from dry-run, UI build, or unit tests.
 
 The paused-message assertion waits for that exact provider ID's committed Core
 message before checking zero automation runs, actions and outgoing messages.
-Projection creates any automation run synchronously with message insertion, so
-the committed row is the transaction barrier; callback acknowledgements alone
-do not establish this. Even a queued Pending run fails the check.
+The deferred automation check must finish before the runner rereads that message's
+state; callback acknowledgements and message insertion alone do not establish
+this. Even a queued Pending run fails the check.
 
 
 ### Review fixes: local validation
