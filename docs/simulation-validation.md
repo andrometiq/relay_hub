@@ -6,6 +6,40 @@ injected callback failures are simulated. Hub authentication, MCP, PostgreSQL
 journals/outbox, callback signatures, Core HTTP authentication and worker
 projection remain real. This is local acceptance, not live Meta certification.
 
+## Coalesced automation follow-up (2026-10-24)
+
+Core now persists an indexed `Relay Message.automation_status` marker with each
+new incoming message and drains committed markers in batches on `default`.
+Step 13's paused-message barrier reads `Complete` from that row; per-message RQ
+jobs no longer exist for new traffic. Blank/Pending never satisfies the barrier.
+The worker-isolation and no-run/action/reply assertions remain unchanged.
+
+An explicit Core site benchmark used the existing single default worker on
+`yrp.site`: 300 paused/no-skill messages finished in one job in **1.641 s**, versus
+**138 s** estimated from the measured old 0.46 s/job. A late enabled AI contact
+behind another 300 messages produced its intent in **1.543 s** and completed a
+real Shadow worker decision through a loopback HTTP provider in **2.111 s**.
+A second process proved concurrent-drain exclusion. Killing a process after its
+uncommitted AI intent/ack writes left both rolled back; recovery produced one
+committed run and one provider call. See Core `docs/automation-queue.md` and
+`tests/automation_queue_site.py` for reproduction and the recovery contract.
+
+Only Relay Message was reloaded with `frappe.reload_doc` on yrp.site, adding
+`automation_status` and `automation_status_index`. **RESTART NEEDED** for cached
+web code before rerunning this full simulation. No restart, migration, fixture
+export, site_config change or production write was performed. These focused
+site measurements are not a passing full connected simulation report.
+
+The retained `.runtime/sim-report/full/report.json`, run
+`1792796027374890250`, separately explains step 10b's timeout: **35 status
+callbacks returned HTTP 500 / QueryDeadlockError**. Its recorded long-lane
+projection jobs have approximately 5–7 ms queue waits, so default-queue
+starvation alone does not explain this failure. A read-only follow-up found all
+4,000 storm messages eventually at Read. The receipt timeout was not relaxed;
+the database lock cycle still needs reproduction/tracing during a fresh storm.
+Shared database contention may contribute, but these observations do not prove
+that the automation drain fixes the receipt failure.
+
 ## Automation-enabled run fixes (2026-10-24)
 
 The full report captured successful receipt batches of 500, 500 and 251 for

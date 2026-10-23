@@ -26,6 +26,15 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(workers=workers), self.assertRaises(AssertionError):
                 require_worker_isolation(workers)
 
+    def test_automation_barrier_reads_durable_message_completion(self):
+        from whatsapp_sim_acceptance import Acceptance
+        f = Mock()
+        acceptance = Acceptance(f, {}, Mock())
+        for status, expected in ((None, False), ('', False), ('Pending', False), ('Complete', True)):
+            f.db.get_value.return_value = status
+            self.assertEqual(acceptance.automation_checked('message'), expected)
+        f.db.get_value.assert_called_with('Relay Message', 'message', 'automation_status')
+
     def test_paused_assertion_waits_for_automation_and_rereads_committed_state(self):
         from whatsapp_sim_acceptance import Acceptance
         acceptance = Acceptance(Mock(), {}, Mock())
