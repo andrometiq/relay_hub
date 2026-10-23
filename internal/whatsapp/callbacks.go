@@ -10,7 +10,6 @@ import (
 	"errors"
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
 	"github.com/jackc/pgx/v5"
-	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -175,14 +174,8 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	response, err := d.Service.client.Do(req)
 	ack := false
 	if err == nil {
-		raw, readErr := io.ReadAll(io.LimitReader(response.Body, 65537))
+		ack = callbackworker.Acknowledged(response, accepted)
 		response.Body.Close()
-		var reply struct {
-			Message struct {
-				Accepted int `json:"accepted"`
-			} `json:"message"`
-		}
-		ack = response.StatusCode == 200 && readErr == nil && len(raw) <= 65536 && json.Unmarshal(raw, &reply) == nil && reply.Message.Accepted == accepted
 	}
 	saveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

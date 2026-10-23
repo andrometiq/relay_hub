@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/andrometiq/relay_hub/internal/deliverypolicy"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strconv"
@@ -373,12 +374,12 @@ func sendOutcome(err error, attempts int) (string, string, time.Duration, []byte
 		retry = retry || provider.Retryable()
 	}
 	if retry {
-		if attempts >= 7 {
+		if attempts >= deliverypolicy.MaxAttempts-1 {
 			return "rejected", "Safe retry limit exhausted; message was not accepted", 0, metadata
 		}
-		delay := time.Second << min(attempts, 8)
+		delay := deliverypolicy.RetryDelay(attempts, 0)
 		if provider != nil {
-			delay = max(delay, time.Duration(provider.RetryAfter)*time.Second)
+			delay = deliverypolicy.RetryDelay(attempts, provider.RetryAfter)
 		}
 		return "queued", "Not accepted; retry scheduled", delay, metadata
 	}
