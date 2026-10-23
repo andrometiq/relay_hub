@@ -32,7 +32,7 @@ type eventReader interface {
 type postgresEventReader struct{ db *pgxpool.Pool }
 
 func (b postgresEventReader) List(ctx context.Context, account, channel string, before int64) (eventPage, error) {
-	query := `SELECT e.id,e.occurred_at::text,e.direction,left(e.body,240),CASE WHEN q.event_id IS NOT NULL THEN 'Quarantined' WHEN e.id<=COALESCE(c.last_id,0) THEN 'Forwarded' ELSE 'Pending' END FROM relay_channel_events e LEFT JOIN relay_channel_callback_cursor c ON c.account=e.account AND c.channel=e.channel LEFT JOIN relay_channel_callback_quarantine q ON q.event_id=e.id AND q.resolved_at IS NULL WHERE e.account=$1 AND e.channel=$2 AND ($3::bigint=0 OR e.id<$3) ORDER BY e.id DESC LIMIT 51`
+	query := `SELECT e.id,e.occurred_at::text,e.direction,left(e.body,240),CASE WHEN d.quarantined THEN 'Quarantined' WHEN d.acknowledged THEN 'Forwarded' WHEN d.failures>0 THEN 'Retrying' ELSE 'Pending' END FROM relay_channel_events e LEFT JOIN relay_channel_callback_delivery d ON d.event_id=e.id WHERE e.account=$1 AND e.channel=$2 AND ($3::bigint=0 OR e.id<$3) ORDER BY e.id DESC LIMIT 51`
 	if channel == "WhatsApp" {
 		query = `SELECT e.id,e.created_at::text,e.lane,left(COALESCE(e.payload#>>'{entry,0,changes,0,value,messages,0,text,body}',''),240),CASE WHEN d.quarantined THEN 'Quarantined' WHEN d.failed THEN 'Retrying'
  WHEN (e.lane<>'realtime' OR coalesce(d.realtime,false)) AND
