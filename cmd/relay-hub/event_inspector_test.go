@@ -49,30 +49,35 @@ func TestEventInspectorAuthorization(t *testing.T) {
 		}
 	}
 }
-func TestEventInspectorDatabase(t *testing.T) {
+func adminTestDatabase(t *testing.T) (context.Context, *pgxpool.Pool) {
+	t.Helper()
 	dsn := os.Getenv("RELAY_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("requires isolated PostgreSQL")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 	base, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer base.Close()
+	t.Cleanup(base.Close)
 	schema := fmt.Sprintf("relay_inspect_%d", time.Now().UnixNano())
 	if _, err = base.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
-	defer base.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	t.Cleanup(func() {
+		if _, err := base.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+	})
 	cfg, _ := pgxpool.ParseConfig(dsn)
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
 	db, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(db.Close)
 	c, err := db.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +87,12 @@ func TestEventInspectorDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ctx, db
+}
+
+func TestEventInspectorDatabase(t *testing.T) {
+	ctx, db := adminTestDatabase(t)
+	var err error
 	if _, err = db.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,body,payload) SELECT 'fixture','Telegram','inbound',n::text,repeat('x',500),jsonb_build_object('text',repeat('x',70000)) FROM generate_series(1,51) n`); err != nil {
 		t.Fatal(err)
 	}
@@ -120,18 +131,33 @@ func TestEventInspectorDatabase(t *testing.T) {
 	if err = db.QueryRow(ctx, `INSERT INTO relay_whatsapp_events(account,digest,payload,lane) VALUES('fixture','digest','{}','status') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(ctx, `INSERT INTO relay_callback_cursor(account,lane,last_id,status_offset) VALUES('fixture','status',$1,1)`, id); err != nil {
+	if _, err = db.Exec(ctx, `UPDATE relay_whatsapp_callback_delivery SET status_offset=1 WHERE event_id=$1`, id); err != nil {
 		t.Fatal(err)
 	}
 	page, err = b.List(ctx, "fixture", "WhatsApp", 0)
 	if err != nil || page.Items[0].Callback != "Pending" {
 		t.Fatal("partial status marked forwarded")
 	}
-	if _, err = db.Exec(ctx, `UPDATE relay_callback_cursor SET status_offset=0 WHERE account='fixture'`); err != nil {
+	if _, err = db.Exec(ctx, `UPDATE relay_whatsapp_callback_delivery SET status_offset=0,acknowledged=true`); err != nil {
 		t.Fatal(err)
 	}
 	page, err = b.List(ctx, "fixture", "WhatsApp", 0)
 	if err != nil || page.Items[0].Callback != "Forwarded" {
 		t.Fatal("acknowledgement not shown")
 	}
+	if _, err = db.Exec(ctx, `UPDATE relay_whatsapp_callback_delivery SET acknowledged=false,failures=1,error='Invalid receipt',quarantined=true`); err != nil {
+		t.Fatal(err)
+	}
+	page, err = b.List(ctx, "fixture", "WhatsApp", 0)
+	if err != nil || page.Items[0].Callback != "Quarantined" {
+		t.Fatal("quarantine not exposed", err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE relay_whatsapp_callback_delivery SET quarantined=false`); err != nil {
+		t.Fatal(err)
+	}
+	page, err = b.List(ctx, "fixture", "WhatsApp", 0)
+	if err != nil || page.Items[0].Callback != "Retrying" {
+		t.Fatal("failure not exposed", err)
+	}
+
 }

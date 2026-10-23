@@ -18,8 +18,7 @@ import (
 	"time"
 )
 
-// CallbackDispatcher separates realtime replies/calls from batched statuses.
-// Each cursor advances only after Core confirms its durable transaction.
+// CallbackDispatcher acknowledges immutable events independently in each lane.
 type CallbackDispatcher struct {
 	URL     string
 	Service *Service
@@ -63,29 +62,32 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	if _, err = c.Exec(ctx, "INSERT INTO relay_callback_cursor(account,lane) VALUES($1,$2) ON CONFLICT DO NOTHING", a.ID, lane); err != nil {
 		return err
 	}
-	var cursor int64
-	var failures, offset int
-	if err = c.QueryRow(ctx, "SELECT last_id,failures,status_offset FROM relay_callback_cursor WHERE account=$1 AND lane=$2 AND next_attempt<=now()", a.ID, lane).Scan(&cursor, &failures, &offset); errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	} else if err != nil {
-		return err
-	}
 	eventLimit := 50
 	if lane == "status" {
 		eventLimit = 500
 	}
-	rows, err := c.Query(ctx, `WITH page AS (SELECT id,payload FROM relay_whatsapp_events WHERE account=$1 AND lane=$2 AND (id>$3 OR (id=$3 AND $4>0)) ORDER BY id LIMIT $5), sized AS (SELECT *,sum(octet_length(payload::text)) OVER(ORDER BY id) bytes,row_number() OVER(ORDER BY id) position FROM page) SELECT id,payload FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id`, a.ID, lane, cursor, offset, eventLimit)
+	rows, err := c.Query(ctx, `WITH page AS (
+ SELECT e.id,e.payload,d.status_offset FROM relay_whatsapp_callback_delivery d
+ JOIN relay_whatsapp_events e ON e.id=d.event_id
+ WHERE e.account=$1 AND d.lane=$2 AND NOT d.acknowledged AND NOT d.quarantined
+ AND d.next_attempt<=now() ORDER BY e.id LIMIT $3
+ ), sized AS (SELECT *,sum(octet_length(payload::text)) OVER(ORDER BY id) bytes,
+ row_number() OVER(ORDER BY id) position FROM page)
+ SELECT id,payload,status_offset FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id`, a.ID, lane, eventLimit)
 	if err != nil {
 		return err
 	}
 	events := []Event{}
+	offsets := map[int64]int{}
 	for rows.Next() {
 		var event Event
-		if err = rows.Scan(&event.ID, &event.Payload); err != nil {
+		var offset int
+		if err = rows.Scan(&event.ID, &event.Payload, &offset); err != nil {
 			rows.Close()
 			return err
 		}
 		events = append(events, event)
+		offsets[event.ID] = offset
 	}
 	err = rows.Err()
 	rows.Close()
@@ -97,18 +99,58 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	endpoint := "/api/method/relay_core.inbound.receive"
 	values := map[string]any{"account": a.ID, "events": events}
 	if lane == "status" {
-		var statuses []CompactStatus
-		statuses, next, err = buildStatusBatch(events, StatusCursor{EventID: cursor, Offset: offset}, statusBatchBytes)
-		if err != nil {
-			return err
+		statuses := []CompactStatus{}
+		size := 2
+		consumed := []Event{}
+		var receiptFailure error
+		for _, event := range events {
+			start := StatusCursor{}
+			if offsets[event.ID] > 0 {
+				start = StatusCursor{EventID: event.ID, Offset: offsets[event.ID]}
+			}
+			budget := statusBatchBytes - size + 2
+			if len(statuses) > 0 {
+				budget--
+			}
+			batch, cursor, buildErr := buildStatusBatchLimit([]Event{event}, start, budget, statusBatchLimit-len(statuses))
+			if buildErr != nil {
+				if errors.Is(buildErr, errStatusBatchFull) && len(statuses) > 0 {
+					break
+				}
+				position := offsets[event.ID]
+				var receiptErr *receiptError
+				if errors.As(buildErr, &receiptErr) {
+					position = receiptErr.Position
+				}
+				if err := callbackFailure(ctx, c, []Event{event}, lane, "Invalid delivery receipt", position); err != nil {
+					return err
+				}
+				receiptFailure = buildErr
+				continue
+			}
+			statuses = append(statuses, batch...)
+			encoded, _ := json.Marshal(statuses)
+			size = len(encoded)
+			next = cursor
+			consumed = append(consumed, event)
+			if cursor.Offset > 0 || len(statuses) == statusBatchLimit || size >= statusBatchBytes {
+				break
+			}
 		}
-		if len(statuses) == 0 {
-			_, err = c.Exec(ctx, "UPDATE relay_callback_cursor SET last_id=$3,status_offset=$4,failures=0,next_attempt=now() WHERE account=$1 AND lane=$2", a.ID, lane, next.EventID, next.Offset)
-			return err
+		if len(consumed) == 0 {
+			return receiptFailure
 		}
+		events = consumed
 		accepted = len(statuses)
 		endpoint = "/api/method/relay_core.inbound.receive_statuses"
 		values = map[string]any{"account": a.ID, "statuses": statuses}
+	} else {
+		for i := range events {
+			events[i].Payload = realtimePayload(events[i].Payload)
+		}
+	}
+	if accepted == 0 {
+		return acknowledgeCallbacks(ctx, c, a.ID, lane, events, next)
 	}
 	payload, err := json.Marshal(values)
 	if err != nil {
@@ -141,13 +183,51 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	saveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if ack {
-		_, err = c.Exec(saveCtx, "UPDATE relay_callback_cursor SET last_id=$3,status_offset=$4,failures=0,next_attempt=now() WHERE account=$1 AND lane=$2", a.ID, lane, next.EventID, next.Offset)
-	} else {
-		delay := time.Second << min(failures, 8)
-		_, err = c.Exec(saveCtx, "UPDATE relay_callback_cursor SET failures=least(failures+1,100),next_attempt=now()+$3::interval WHERE account=$1 AND lane=$2", a.ID, lane, delay.String())
-		if err == nil {
-			err = errors.New("Core did not acknowledge event batch")
+		return acknowledgeCallbacks(saveCtx, c, a.ID, lane, events, next)
+	}
+	if err := callbackFailure(saveCtx, c, events, lane, "Core did not acknowledge event batch", -1); err != nil {
+		return err
+	}
+	return errors.New("Core did not acknowledge event batch")
+}
+
+func acknowledgeCallbacks(ctx context.Context, c *pgx.Conn, account, lane string, events []Event, next StatusCursor) error {
+	tx, err := c.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background())
+	for _, event := range events {
+		offset := 0
+		if event.ID == next.EventID {
+			offset = next.Offset
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO relay_whatsapp_callback_delivery(event_id,lane,acknowledged,status_offset)
+   VALUES($1,$2,$3,$4) ON CONFLICT(event_id,lane) DO UPDATE SET acknowledged=excluded.acknowledged,
+   status_offset=excluded.status_offset,failures=0,error='',error_position=-1,next_attempt=now(),updated_at=now()`, event.ID, lane, offset == 0, offset); err != nil {
+			return err
 		}
 	}
-	return err
+	// Retain the legacy cursor for diagnostics only; never use it to select work.
+	if _, err = tx.Exec(ctx, "UPDATE relay_callback_cursor SET last_id=$3,status_offset=$4,failures=0,next_attempt=now() WHERE account=$1 AND lane=$2", account, lane, next.EventID, next.Offset); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func callbackFailure(ctx context.Context, c *pgx.Conn, events []Event, lane, reason string, position int) error {
+	tx, err := c.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background())
+	for _, event := range events {
+		if _, err = tx.Exec(ctx, `INSERT INTO relay_whatsapp_callback_delivery(event_id,lane,failures,error,error_position,next_attempt)
+   VALUES($1,$2,1,$3,$4,now()+interval '1 second') ON CONFLICT(event_id,lane) DO UPDATE SET
+   failures=least(relay_whatsapp_callback_delivery.failures+1,100),error=excluded.error,error_position=excluded.error_position,
+   next_attempt=now()+power(2,least(relay_whatsapp_callback_delivery.failures,8))*interval '1 second',updated_at=now()`, event.ID, lane, reason, position); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

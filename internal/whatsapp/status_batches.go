@@ -9,6 +9,8 @@ import (
 const statusBatchLimit = 500
 const statusBatchBytes = 512 * 1024
 
+var errStatusBatchFull = errors.New("receipt exceeds status batch byte limit")
+
 // StatusCursor records the last fully consumed event, or the number of raw
 // statuses consumed inside EventID when Offset is nonzero. It is committed
 // only after Core acknowledges the complete batch.
@@ -33,6 +35,13 @@ type CompactStatus struct {
 // Recognized malformed receipts fail closed so the caller cannot acknowledge
 // data it could not faithfully transport.
 func buildStatusBatch(events []Event, start StatusCursor, byteLimit int) ([]CompactStatus, StatusCursor, error) {
+	return buildStatusBatchLimit(events, start, byteLimit, statusBatchLimit)
+}
+
+type receiptError struct{ Position int }
+
+func (e *receiptError) Error() string { return "invalid delivery receipt" }
+func buildStatusBatchLimit(events []Event, start StatusCursor, byteLimit, limit int) ([]CompactStatus, StatusCursor, error) {
 	if byteLimit <= 0 || byteLimit > statusBatchBytes || start.EventID < 0 || start.Offset < 0 {
 		return nil, start, errors.New("invalid status batch boundary")
 	}
@@ -83,7 +92,7 @@ func buildStatusBatch(events []Event, start StatusCursor, byteLimit int) ([]Comp
 				Timestamp     string `json:"timestamp"`
 			}
 			if err := json.Unmarshal(statuses[i], &raw); err != nil {
-				return nil, start, err
+				return nil, start, &receiptError{Position: i}
 			}
 			switch raw.Status {
 			case "sent", "delivered", "read", "failed":
@@ -93,7 +102,7 @@ func buildStatusBatch(events []Event, start StatusCursor, byteLimit int) ([]Comp
 			}
 			stamp, err := strconv.ParseInt(raw.Timestamp, 10, 64)
 			if err != nil || stamp < 0 || len(raw.ID) == 0 || len(raw.ID) > 300 || len(raw.Recipient) == 0 || len(raw.Recipient) > 200 || len(raw.Participant) > 200 || (raw.RecipientType != "" && raw.RecipientType != "group" && raw.RecipientType != "individual") || (raw.Participant != "" && raw.RecipientType != "group") {
-				return nil, start, errors.New("invalid delivery receipt")
+				return nil, start, &receiptError{Position: i}
 			}
 			row := CompactStatus{EventID: event.ID, Position: i, MessageID: raw.ID, Recipient: raw.Recipient, Participant: raw.Participant, RecipientType: raw.RecipientType, Status: raw.Status, Timestamp: stamp}
 			encoded, err := json.Marshal(row)
@@ -104,9 +113,9 @@ func buildStatusBatch(events []Event, start StatusCursor, byteLimit int) ([]Comp
 			if len(out) > 0 {
 				additional++
 			}
-			if len(out) == statusBatchLimit || size+additional > byteLimit {
+			if len(out) == limit || size+additional > byteLimit {
 				if len(out) == 0 {
-					return nil, start, errors.New("receipt exceeds status batch byte limit")
+					return nil, start, errStatusBatchFull
 				}
 				return out, cursor, nil
 			}

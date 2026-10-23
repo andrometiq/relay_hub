@@ -62,22 +62,6 @@ func telegramFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
 		"outcome_unknown": providerError.OutcomeUnknown,
 	}}, nil
 }
-func whatsappCallFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
-	var providerError *whatsapp.ProviderError
-	status := 0
-	unknown := true
-	if errors.As(err, &providerError) {
-		status = providerError.Status
-		unknown = !(status >= 400 && status < 500 && status != 408)
-	} else if errors.Is(err, whatsapp.ErrBusy) {
-		unknown = false
-	} else {
-		return nil, nil, err
-	}
-	result := &mcp.CallToolResult{}
-	result.SetError(err)
-	return result, map[string]any{"provider": "WhatsApp", "error": map[string]any{"http_status": status, "outcome_unknown": unknown}}, nil
-}
 func operationScope(op string) string {
 	switch op {
 	case "messages.flow", "messages.send", "messages.media", "messages.react", "messages.location", "messages.contacts", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
@@ -194,10 +178,13 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			}
 			return mediaResult(file.Data, file.MIME, file.Filename)
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.execute", Description: "Account-scoped WhatsApp templates, groups and call signaling. Mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, input whatsapp.Input) (*mcp.CallToolResult, map[string]any, error) {
+		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.execute", Description: "Account-scoped WhatsApp messages and templates. Mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, input whatsapp.Input) (*mcp.CallToolResult, map[string]any, error) {
 			account, ok := ctx.Value(accountKey{}).(whatsapp.Account)
 			if !ok {
 				return nil, nil, errors.New("an account-scoped credential is required")
+			}
+			if strings.HasPrefix(input.Operation, "groups.") || strings.HasPrefix(input.Operation, "calls.") {
+				return nil, nil, errors.New("WhatsApp groups and calls are disabled in v1")
 			}
 			if !allowed(ctx, operationScope(input.Operation)) || input.Operation == "account.metadata" && !allowed(ctx, "account:read") {
 				return nil, nil, errors.New("token scope does not permit operation")
@@ -209,16 +196,14 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				result, err := wa.Outbox.Submit(ctx, account, input)
 				return nil, result, err
 			}
+			account.Groups, account.Calls = false, false
 			result, err := wa.Execute(ctx, account, input)
-			if err != nil && input.Operation == "calls.action" {
-				return whatsappCallFailure(err)
-			}
 			return nil, result, err
 		})
 	}
 	if wa != nil && wa.Outbox != nil {
-		enqueue := func(ctx context.Context, r *mcp.CallToolRequest, in struct {
-			Messages []whatsapp.Submission `json:"messages"`
+		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.send", Description: "Durably queue one message using a stable request key."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+			Message whatsapp.Submission `json:"message"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)
 			if !ok {
@@ -227,20 +212,14 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("messages:send scope required")
 			}
-			rows, err := wa.Outbox.Enqueue(ctx, a, in.Messages)
-			if err != nil {
-				return nil, nil, errors.New("batch not confirmed; check input and retry with the same keys")
+			if strings.HasPrefix(in.Message.Message.Operation, "groups.") || strings.HasPrefix(in.Message.Message.Operation, "calls.") {
+				return nil, nil, errors.New("only individual WhatsApp sends are available in v1")
 			}
-			return nil, map[string]any{"deliveries": rows}, err
-		}
-		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.enqueue", Description: "Durably queue 1–50 messages using stable request keys."}, enqueue)
-		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.bulk", Description: "Durably queue 1–50 messages using stable request keys."}, enqueue)
-		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.send", Description: "Durably queue one message using a stable request key."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
-			Message whatsapp.Submission `json:"message"`
-		}) (*mcp.CallToolResult, map[string]any, error) {
-			return enqueue(ctx, r, struct {
-				Messages []whatsapp.Submission `json:"messages"`
-			}{Messages: []whatsapp.Submission{in.Message}})
+			rows, err := wa.Outbox.Enqueue(ctx, a, []whatsapp.Submission{in.Message})
+			if err != nil {
+				return nil, nil, errors.New("send not confirmed; check input and retry with the same key")
+			}
+			return nil, map[string]any{"deliveries": rows}, nil
 		})
 
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.resolve", Description: "Record a verified uncertain delivery outcome without resending."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
