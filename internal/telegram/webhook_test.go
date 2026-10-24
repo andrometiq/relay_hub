@@ -20,7 +20,7 @@ func TestWebhookRepairPreservesUpdatesAndRedactsProviderFields(t *testing.T) {
 		body := `{"ok":true,"result":{"url":"https://hub.invalid/hub/webhooks/telegram/local","pending_update_count":7,"last_error_date":123,"last_error_message":"secret-should-not-escape"}}`
 		if strings.HasSuffix(r.URL.Path, "setWebhook") {
 			var input map[string]any
-			if json.NewDecoder(r.Body).Decode(&input) != nil || input["drop_pending_updates"] != false || input["secret_token"] != "local-secret" || input["url"] != "https://hub.invalid/hub/webhooks/telegram/local" {
+			if json.NewDecoder(r.Body).Decode(&input) != nil || input["max_connections"] != float64(1) || input["drop_pending_updates"] != false || input["secret_token"] != "local-secret" || input["url"] != "https://hub.invalid/hub/webhooks/telegram/local" {
 				t.Fatal("invalid registration")
 			}
 			body = `{"ok":true,"result":true}`

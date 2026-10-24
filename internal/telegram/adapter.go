@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -71,6 +72,7 @@ type APIError struct {
 	StatusCode, ErrorCode, RetryAfter int
 	MigrateToChatID                   int64
 	OutcomeUnknown                    bool
+	Retryable                         bool
 }
 
 func (e *APIError) Error() string {
@@ -101,6 +103,11 @@ func (c *Client) perform(req *http.Request) (json.RawMessage, error) {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		var dns *net.DNSError
+		var op *net.OpError
+		if errors.As(err, &dns) || errors.As(err, &op) && op.Op == "dial" {
+			return nil, &APIError{Retryable: true}
+		}
 		return nil, &APIError{OutcomeUnknown: true}
 	}
 	defer resp.Body.Close()
