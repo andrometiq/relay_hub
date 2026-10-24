@@ -25,6 +25,8 @@ After setup, the daily commands are:
 ./relay restart
 ```
 
-Local simulations exercise synthetic provider responses, authentication and isolated databases. They do not establish live-provider eligibility, recipient display or production capacity; see [validation results](docs/simulation-validation.md).
+The connected release checkpoint passes 10/10 WhatsApp, 11/11 Telegram and 13/13 email cases. All three channels support durable sends and incoming callbacks. Telegram reports bot acceptance; email reports SMTP acceptance and trusted DSNs. Core updates use Socket.IO. See [provider support](docs/provider-support.md) for channel limits and [release evidence](docs/simulation-validation.md) for measurements and rerun commands.
+
+The drivers use local fake providers with real Hub/Core services. They do not test browser rendering, live provider eligibility or production capacity. Bulk campaigns are outside this release evidence.
 
 These documents describe the current local working tree, including changes that may not yet be pushed to GitHub. Development takes place on `develop`. The repository owner merges production changes into `main`. Follow [AGENTS.md](AGENTS.md) and keep credentials, local databases and generated reports out of Git.

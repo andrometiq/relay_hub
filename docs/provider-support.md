@@ -1,52 +1,50 @@
-# Provider support matrix
+# Provider support
 
-This matrix describes the local `develop` implementation reviewed on **2026-09-24**. A supported adapter path means it exists and has local simulation coverage; it does not mean the configured provider account has accepted a live request. The working tree can contain changes not yet pushed to GitHub.
+Relay Hub is a Go transport service. Core owns business permissions, conversations and AI. This page describes the source checked on 2026-10-24. Implemented support and connected test evidence are separate.
+
+## Channel capabilities
 
 | Capability | WhatsApp | Telegram | Email |
 | --- | --- | --- | --- |
-| Send text | Direct and group text | Private, group, supergroup and permitted channel destination | Plain-text SMTP with To/CC/BCC |
-| Quoted reply | Original provider message ID | Original message ID, with group/topic routing | In-Reply-To/References headers are supported |
-| Send sticker | Direct/group media operation | File ID; static WebP via public HTTPS URL | Not applicable |
-| Receive/view sticker | Preserved metadata; authenticated WebP proxy | Preserved metadata; authenticated WebP/WebM/TGS proxy | Not implemented |
-| Send location/contact card | Direct messages | Typed location/contact operations | Not applicable |
-| Set/clear reaction | Direct messages | Emoji/custom emoji; explicit clear | Not applicable |
-| Other outbound media | Image, video, audio, document by provider ID or URL | Photo/video/audio/voice/document by file ID or bounded upload | Multipart text/HTML and bounded MIME attachments |
-| Inbound events | Signed messages, statuses, group/template/call event payloads | Verified messages, edits, reactions, member/join/service events | Authenticated normalized ingress and configured IMAP mailbox reader |
-| Durable outgoing intents | PostgreSQL queue, stable-key deduplication, bounded bulk admission | PostgreSQL durable channel outbox with stable request keys | Direct SMTP submission; no equivalent durable outbox yet |
-| Callbacks to Core | Durable realtime/status lanes with batched statuses | Durable channel journal/cursor callback path | Durable channel journal/cursor callback path |
-| Templates | List/create/update/delete/send; provider approval applies | No WhatsApp-style template equivalent | Compose body in Core; no Hub template engine |
-| Group administration | Lifecycle, invitations, join requests, removal, settings, photo | Existing-group settings, members, invitations, pins and forum topics | No group administration adapter |
-| Calls | Capability-gated permission and signaling operations | Not implemented | Not applicable |
-| Server call recording | Not implemented | Not implemented | Not applicable |
+| Send | Text, replies, templates and supported media; typed reactions, locations and contacts | Text, replies, topics, stickers, reactions, locations, contacts and bounded photo/video/audio/voice/document uploads | TLS SMTP, To/CC/BCC, text/HTML alternatives and bounded MIME attachments |
+| Receive | Signed messages and provider events | Account-secret verified messages, edits, reactions, membership and service updates | Account-secret ingress or TLS IMAP; MIME text/HTML, recipients, thread headers and attachments |
+| Status | Provider sent, delivered, read and failure receipts | Bot acceptance, rejection or uncertain outcome; no recipient delivery/read stream | SMTP acceptance; trusted recipient-specific delayed, bounced and delivered DSNs; no read receipts |
+| Durable send | PostgreSQL outbox and stable request keys | PostgreSQL channel outbox and stable request keys | PostgreSQL channel outbox and stable request keys |
+| Retry | Bounded retry for known retryable rejection; uncertain outcomes require review | Bounded 429 retry honors `retry_after`; uncertain outcomes require review | Retryable failures before DATA can retry; ambiguous DATA outcomes require review |
+| Send order | Earlier unresolved sends block the same account/destination | Earlier unresolved sends block the same account/chat | Earlier unresolved sends block overlapping recipient sets within an account |
+| Core callbacks | Separate incoming-event and status workers | Signed callbacks with per-event acknowledgements; separate status workers | Signed callbacks with per-event acknowledgements; separate status/DSN workers |
+| Setup | Account credentials and provider health | Bot identity, webhook registration, supported update subscriptions and health | SMTP/IMAP configuration, connection checks, mailbox health and rejection records |
 
-Message payloads and scopes are in the [API reference](api-reference.md). The [group operation list](group-simulation-coverage.md#supported-group-operations) names each exposed group command; changing a group photo is different from sending image media.
+The send schedulers select work across accounts. A recovered worker can queue a send again when it stopped before the durable submission boundary. A send that crossed that boundary remains uncertain until evidence resolves it. This is not an exactly-once guarantee from a provider.
 
-## WhatsApp group boundaries
+Telegram and email incoming callbacks wake after journal commit. Failed events retry separately. Repeated failures and oversized events enter quarantine for inspection and replay. A late transaction cannot be skipped by a high-water cursor. Status callbacks use a separate pool and batches of at most 500 rows and 512 KiB.
 
-Group functionality is enabled per account and remains subject to Meta eligibility and permissions. Supported group sends are text, media, and supported templates. Relay rejects `groups.react`, `groups.location` and `groups.contacts` because those are not established in the documented supported group message list. No fallback converts them into direct messages.
+Email IMAP IDLE wakes a bounded fetch scheduler. Each fetch reads at most 20 UIDs. EXAMINE and BODY.PEEK keep mailbox messages unread. UID/UIDVALIDITY state supports reconnect and restart. A 30-second recheck also covers servers without IDLE. Slow accounts do not hold all fetch capacity.
 
-Participants join by invitation, with approval when configured. There is no manual `groups.participants.add` operation. Invitations use get/reset; `groups.invite.create` remains a compatibility alias for reset, and invented invite-revoke behavior is rejected. Group deletion, photo and other lifecycle operations may be asynchronous; request acceptance is not proof of provider completion.
+## Connected evidence
 
-Group ownership is checked with bounded pagination and fails closed when ownership cannot be established. The aggregate message delivery state is the highest observed participant state: `Read` does not establish that every member read the message. Original participant receipt events remain stored.
+The 2026-10-24 release checkpoint passes 10/10 WhatsApp, 11/11 Telegram and 13/13 email steps. Single inbound checkpoint p50/p95 values are approximately 270/295 ms, 105/123 ms and 107/119 ms respectively. The WhatsApp storm handles 12,000 receipts at approximately 519 receipts/s with inbound p95 approximately 293 ms. See [release evidence](simulation-validation.md) for report fields, timing boundaries and rerun commands.
 
-Reference contracts and simulated cases are recorded in [WhatsApp group coverage](whatsapp-group-simulation.md) and [rich-message coverage](whatsapp-rich-message-simulation.md). Official Meta references were checked during that implementation pass on 2026-09-23: [Groups reference](https://developers.facebook.com/documentation/business-messaging/whatsapp/groups/reference), [group messaging](https://developers.facebook.com/documentation/business-messaging/whatsapp/groups/groups-messaging), [group webhooks](https://developers.facebook.com/documentation/business-messaging/whatsapp/groups/webhooks). Provider account eligibility requires separate verification.
+| Channel | Proven through the connected local path |
+| --- | --- |
+| WhatsApp | Signed ingress, replay deduplication, Core send idempotency, receipt batches and order, callback failure/restart recovery, templates, Socket.IO, scoped AI/handoff and business-event outage isolation |
+| Telegram | Verified ingress, send/replay, 429 backoff, attachment upload/download, queued restart recovery, uncertain restart without resend, sender choice, scoped AI/handoff and business events |
+| Email | TLS SMTP/IMAP round trip, separate Customer/Supplier threads, To/CC, send replay, sender-authentication rejection, bounce DSN to Core, sender choice, scoped AI/handoff and business events |
 
-## Telegram boundaries
+The reports prove these cases with local fake providers and the real Hub/Core path. Ordering, callback commit order, SMTP failure stages and DSN replay also have focused tests in `internal/channels/*_integration_test.go` and `internal/email/*_test.go`. The connected email driver does not test every SMTP failure stage, BCC or attachment round trip. Telegram/email 12,000-status load acceptance is not established.
 
-Bots operate in existing chats with the required membership/administrator permissions. The adapter does not create or delete groups. Forum topics are separate resources and have supported create/edit/close/reopen/delete operations. A participant ID does not identify a group conversation.
+## Capability boundaries
 
-The typed message tool covers text, sticker, reaction, location and contact only. It does not expose every [Telegram Bot API](https://core.telegram.org/bots/api) method, arbitrary method names, paid reactions, general media upload, message editing/deletion, polls, inline keyboards or arbitrary callback-query responses. Unsupported inbound content can remain in the raw journal without gaining a matching outbound operation. The Bot API reference was checked on 2026-09-23.
+| Area | Boundary |
+| --- | --- |
+| Bulk messaging | Bulk campaigns are outside this release evidence. Bounded admission APIs do not establish campaign delivery support. |
+| Browser | Drivers use real Socket.IO and permission-checked APIs. They do not render the installed UI or measure browser paint. |
+| Live providers | Local success does not prove credentials, account eligibility, public webhooks, recipient rendering or production capacity. |
+| Telegram | Existing chats require bot membership and permissions. No group creation/deletion, calls, polls, inline keyboards, callback-query responses, message editing/deletion or arbitrary Bot API calls are exposed by the typed message tool. Text is plain text, limited to 4,096 characters; captions are limited to 1,024. Migration hints do not change a destination automatically. |
+| Email | SMTP acceptance does not prove inbox delivery. Only trusted structured DSNs supply delivery evidence. Normalized JSON without trusted raw-mail evidence remains unverified. A From address alone does not authenticate a sender. The Hub has no email template engine or universal provider-webhook verifier. |
+| WhatsApp groups | Account capability and provider permission checks apply. Group sends support text, media and supported templates. Group reactions, locations, contacts and manual participant addition are not supported. Aggregate Read means the highest observed participant state, not that all participants read. |
+| Calls | WhatsApp signaling is capability-gated. Server call recording and Telegram calls are not implemented. |
 
-Telegram mutations submit once. Rate-limit and migration metadata are surfaced to callers; automatic retry or destination migration is not implied. Bots must be configured to receive the relevant webhook updates. The Hub does not register bots, infer unrelated chat identities, or bypass provider messaging limits.
+See the [API reference](api-reference.md), [group coverage](group-simulation-coverage.md) and [Telegram/email simulations](connected-channel-simulations.md).
 
-## Email boundaries
-
-The SMTP adapter requires TLS submission and supports To/CC/BCC, text/HTML alternatives, reply-thread headers, Auto-Submitted headers and bounded MIME attachments. The inbound MIME parser retains thread metadata and bounded attachments. The Hub includes configured IMAP polling with UID/UIDVALIDITY cursor handling. Core enforces conversation permissions; the normalized ingress is not a universal email-provider verifier. Local transport tests do not establish inbox delivery.
-
-SMTP acceptance cannot guarantee inbox delivery or read status. Reference protocols are [SMTP](https://www.rfc-editor.org/rfc/rfc5321.html) and [TLS for email submission](https://www.rfc-editor.org/rfc/rfc8314.html); the earlier [provider research](provider-adapter-research.md) records additional planned email work.
-
-## Deployment limits
-
-Local simulation success does not verify live credentials, provider policy approval, real recipient rendering, audio interoperability, public webhook subscriptions or production capacity. WhatsApp adaptive workers scale within a configured process ceiling; there is no automatic machine/Kubernetes scaling supplied here. Opt-in hourly WhatsApp profile/template reconciliation is implemented. Core stores private attachments behind conversation access checks. Live provider acceptance and operational restore/load verification remain separate requirements.
-
-The [configuration reference](configuration.md#current-administration-limits) records outstanding credential-field and account-grant UI gaps. See [testing](testing.md) for reproducible checks and [combined results](simulation-validation.md) for the measured checkpoint. Those gaps and the missing capabilities above must not be hidden behind a claim of full provider API coverage.
+Source: `internal/whatsapp/outbox.go`, `internal/channels/{outbox,callbacks,callback_recovery,status_callbacks,status_journal,registry,mailboxes}.go`, `internal/email/{adapter,mailbox,authentication,status}.go`, `internal/telegram/{messages,uploads,updates,webhook,groups}.go` and `cmd/relay-hub/account_health.go`.
