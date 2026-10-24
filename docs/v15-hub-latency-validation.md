@@ -1,5 +1,7 @@
 # v1.5 Hub ingress and connected-driver validation
 
+Latest results: [lat2 snapshot and MIME follow-up](#2026-10-24-lat2-follow-up-snapshot-scan-and-mime-decoding).
+
 Work is uncommitted on the authorized `tmp/v15-l1` worktree. Core source is
 read-only. All connected runs use yrp.site, loopback fake providers, and isolated
 schemas in `relay_hub_v1_test` at 127.0.0.1:18433. Neither `channel_hub` nor
@@ -128,3 +130,140 @@ observed automation wake failure, then all three drivers must pass together.
 Telegram/email 12,000-status connected load acceptance and installed-browser
 rendering are not established by this change. No production or live-provider
 acceptance is claimed.
+
+## 2026-10-24 lat2 follow-up: Snapshot scan and MIME decoding
+
+This follow-up is uncommitted in `tmp/v15-lat2`. Relay Core is unchanged.
+All six final connected runs passed, sequentially, against yrp.site and the
+isolated driver schemas. No production access, migration, fixture export,
+site configuration change, service restart, commit or push was performed.
+The temporary trace code was removed. Existing report timing fields remain.
+
+### Root causes
+
+The suspected fixed callback wait was a driver observation cost. Both channels
+already use the WhatsApp commit-triggered callback scheduler and small-text
+inline projection. Before the fix, Socket.IO arrived in roughly 100 ms; the
+subsequent snapshot inspected every retained `sim-v1` Hub event payload with
+leading-wildcard `LIKE` filters. Temporary per-query timers measured 419–482 ms
+for that query, versus about 1–2 ms for each other snapshot query. The snapshot
+now first restricts events through the existing unique `event_key` index's
+`sim-v1:Telegram:` or `sim-v1:Email:` prefix. Sender filters, duplicate checks,
+committed message checks, permissions, the Socket.IO gate, the ten samples and
+the strict p95 < 500 ms target are unchanged. Snapshot time still counts.
+The report label now calls this inbound observation latency, not Socket.IO latency.
+
+The email ledger assertion failed on the second reply because `Parser.parsestr`
+misdecoded the captured UTF-8 8bit MIME body: the em dash became literal
+`\u2014` and middle dots became replacement characters. `BytesParser` receives
+the original UTF-8 bytes in both provider-body readers. Assertions still compare
+the complete decoded body, and now explain expected versus actual count/body.
+The regression includes Tamil, rupees, an em dash and a middle dot. Telegram
+passes the same ledger/handoff acceptance through its JSON provider path; both
+channels verify two replies, replay idempotency, permission-scoped ledger reads,
+exactly one assigned business-linked ticket and suppression of paused messages.
+
+### Per-hop evidence
+
+Milliseconds for one small inbound per channel. The first three columns use
+WhatsApp run 1 and the reproduced Telegram/email baselines. The last columns
+use the traced corrected Telegram run 1 and email run 2. These are individual
+samples, not percentile summaries. Inline time is contained within callback
+HTTP time, not an additional sequential hop.
+
+| Measured interval | WhatsApp | Telegram before | Email before | Telegram after | Email after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Provider webhook send → durable Hub acknowledgement | 11.5 | 3.1 | 9.7 | 2.9 | 5.1 |
+| Hub acknowledgement → callback dispatch | 7.3 | 8.9 | 8.1 | 8.6 | 8.3 |
+| Callback HTTP through committed acknowledgement | 136.6 | 91.7 | 83.7 | 137.2 | 148.6 |
+| Inline projection within that callback | 54.7 | 45.3 | 38.2 | 40.5 | 48.3 |
+| Callback dispatch → post-commit Redis publication observed | 114.5 | — | — | 80.5 | 128.9 |
+| Redis publication observed → Socket.IO client | ≤ 0.92 | — | — | 0.21 | 0.17 |
+| Emit → Socket.IO client | ≤ 134.2 | 116.4 | 94.5 | 101.3 | 143.5 |
+| Socket.IO client → snapshot completed | — | 414.4 | 507.8 | 4.4 | 9.6 |
+
+Timing boundaries are explicit: transport ingress includes the local HTTP trip,
+and durable acknowledgement bounds the persistence point. Core's SQL commit
+was not separately instrumented: Redis observation is after commit; HTTP response
+can finish later because other after-commit work still runs. WhatsApp's existing
+realtime step starts just before its emit call, so its Socket.IO figures above
+are upper bounds. No Core source edit was needed or made just to obtain a SQL
+commit timestamp. Redis observations were passive subscriptions, not polling.
+The gap is directly measured after Socket.IO, so it is not explained by a Core
+queue, projection eligibility or realtime debounce.
+
+Evidence: `.runtime/sim-report/hop-evidence.json`, the trace runs' `hub.log` and
+`publish-trace.json`, plus baseline `trace-email/site.log` and
+`before-telegram/site.log`. Only sanitized transport timestamps were added to
+temporary Hub logs; request credentials were not printed.
+
+### Before/after acceptance
+
+All figures below retain each driver's original timing basis. WhatsApp measures
+webhook to Core-row observation (including its test observer interval).
+Telegram/email measure emit to a snapshot gated by real Socket.IO. These are
+not interchangeable browser rendering measurements. The WhatsApp baseline is
+provided by the task; Telegram/email were also reproduced locally.
+
+| Channel / p50, p95 ms | Supplied baseline | Reproduced baseline | Final run 1 | Final run 2 |
+| --- | ---: | ---: | ---: | ---: |
+| WhatsApp | 266, 293 | — | 271.6, 292.0 | 275.3, 300.1 |
+| Telegram | 548, 1026 | 536.6, 576.3 | 107.6, 132.6 | 104.6, 127.6 |
+| Email webhook | 571, 734 | 565.4, 602.4 | 97.8, 119.6 | 105.3, 153.1 |
+
+Both WhatsApp storms processed 12,000 receipts with 23 qualifying overlapping
+inbounds: 519.3 and 520.1 receipts/s, storm p95 292.0 and 300.1 ms. Receipt
+batching, retry/restart, no-polling and permission checks stayed green.
+
+| Channel | Step | Before | Run 1 | Run 2 |
+| --- | --- | --- | --- | --- |
+| WhatsApp | 7: Signed ingress | pass (supplied) | pass | pass |
+| WhatsApp | 8: Journal, Core projection and deduplication | pass (supplied) | pass | pass |
+| WhatsApp | 9: Core send idempotency | pass (supplied) | pass | pass |
+| WhatsApp | 10: 1,251 receipt batch check | pass (supplied) | pass | pass |
+| WhatsApp | 10b: inbound latency under a sustained receipt storm | pass (supplied) | pass | pass |
+| WhatsApp | 11: 503, wrong acknowledgement and restart recovery | pass (supplied) | pass | pass |
+| WhatsApp | 12: Template lifecycle | pass (supplied) | pass | pass |
+| WhatsApp | 13: Supplier AI, scoped ledger and human handoff | pass (supplied) | pass | pass |
+| WhatsApp | 14: Business event delivery and Hub outage isolation | pass (supplied) | pass | pass |
+| WhatsApp | realtime: Authenticated Socket.IO message event without HTTP polling | pass (supplied) | pass | pass |
+| Telegram | preflight_and_fixture | pass | pass | pass |
+| Telegram | signed_ingress_and_deduplication | pass | pass | pass |
+| Telegram | core_send_and_permissions | pass | pass | pass |
+| Telegram | 429_backoff | pass | pass | pass |
+| Telegram | attachment_upload_send_ingress_download | pass | pass | pass |
+| Telegram | queued_send_restart_recovery | pass | pass | pass |
+| Telegram | ambiguous_acceptance_and_restart_no_resend | pass | pass | pass |
+| Telegram | shared_customer_supplier_sender_choice | pass | pass | pass |
+| Telegram | single_inbound_latency | fail | pass | pass |
+| Telegram | supplier_ai_scoped_ledger_and_handoff | pass | pass | pass |
+| Telegram | sales_order_event_and_hub_outage | pass | pass | pass |
+| Email | preflight_and_fixture | pass | pass | pass |
+| Email | smtp_imap_customer_thread_and_recipients | pass | pass | pass |
+| Email | webhook_independent_supplier_thread | pass | pass | pass |
+| Email | smtp_reply_to_cc_idempotency_and_permissions | pass | pass | pass |
+| Email | smtp_to_imap_reply_retains_customer_business | pass | pass | pass |
+| Email | spoofed_sender_and_unsigned_webhook_rejected | pass | pass | pass |
+| Email | single_business_spoofed_sender_rejected | pass | pass | pass |
+| Email | bounce_dsn_reaches_core_status | pass | pass | pass |
+| Email | shared_customer_supplier_sender_choice | pass | pass | pass |
+| Email | single_inbound_latency | fail | pass | pass |
+| Email | supplier_ai_scoped_ledger_and_handoff | fail | pass | pass |
+| Email | sales_order_event_and_hub_outage | pass | pass | pass |
+| Email | email_provider_identity | pass | pass | pass |
+
+### Validation and remaining scope
+
+- Six connected driver runs: **PASS**, every step (10 WhatsApp, 11 Telegram,
+  13 email steps per run). Reports are in `.runtime/sim-report/after-{1,2}-{full,telegram,email}/report.{json,md}`.
+- Driver Python suite: **54 tests PASS** using the bench Python with `-B` and
+  `PYTHONDONTWRITEBYTECODE=1`; `.runtime/driver-tests.log`.
+- `go vet ./...`: **PASS**; `.runtime/go-vet.log`.
+- `go test -p 1 ./... -count=1`: **PASS** with `RELAY_TEST_DATABASE_URL`
+  privately derived for `relay_hub_v1_test` on 127.0.0.1:18433; `.runtime/go-test.log`.
+- Core unit/API/site suites: not applicable; no Core or API changes. The
+  connected drivers exercise the installed site over real HTTP and Socket.IO.
+- No frontend assets changed, so no build was needed. No restart is needed.
+- Not done: a separate Core SQL-commit timestamp and browser rendering
+  measurement; the bounds and actual socket/observation timing are stated above.
+  Changes remain uncommitted for the orchestrator's review.
