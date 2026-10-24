@@ -1,5 +1,9 @@
 # Connected Telegram and email simulations
 
+For the latest item 34 measurements and Core blockers, see
+[Hub latency validation](v15-hub-latency-validation.md). The older results below
+are retained as historical evidence.
+
 The two Hub-owned drivers run the actual `relay-sim` launcher, Hub PostgreSQL
 journals/workers, local fake providers, and the running Core `yrp.site` with its
 real HTTP authentication, projection workers and Socket.IO server. Core source
@@ -37,8 +41,8 @@ artifacts or fixture credentials.
   Each new fake email mailbox has its own UIDVALIDITY, with normal small UIDs;
   restart reuses its persisted state. This prevents old Core deduplication keys
   from suppressing a fresh test without creating enormous mailbox UID gaps.
-- Both drivers serialize their site use through a local file lock. Run them
-  separately from the WhatsApp driver and the Go PostgreSQL integration suite:
+- All three drivers serialize their site use through a local file lock. Run them
+  separately from the Go PostgreSQL integration suite:
   they share the local site settings and the database has limited connections.
 - Fixtures are named `Local simulation ...` / `Local Relay simulation ...`.
   Each run creates a single-Customer contact and a separate person shared by a
@@ -56,7 +60,8 @@ Socket.IO listener, launcher lifecycle and Core authentication helpers.
 `simulation_fixtures.py` shares the filesystem/network guard and fixture-user
 creation. The WhatsApp driver imports these same implementations.
 
-`channel_simulation.py` supplies the isolated-schema lifecycle, reporting,
+`simulation_common.py` also owns the shared isolated-schema lifecycle.
+`channel_simulation.py` supplies reporting,
 provider-state observation and event-driven Core assertions. `channel_sim_site.py`
 creates local fixtures and exposes read-only snapshots for assertions. New
 messages are observed only after real payload-free Socket.IO invalidations;
@@ -79,12 +84,16 @@ envelope fidelity, send replay and permission denial, round-trip business
 ownership, spoof/unsigned ingress rejection, authenticated DSN outcome delivery,
 and a new thread's sender-choice prompt/selection.
 
-AI/automation and handoff are deliberately skipped: Telegram/email support is
-scheduled for the next Core wave. The 12,000-event latency/load acceptance is
-plan item 34, not a claim made by these drivers. Small-sample latency is measured
+Both drivers now exercise the supplier ledger, scoped tool reads, replay, an
+explicit human handoff with one assigned ticket, and Sales Order on_submit
+delivery plus Hub-outage isolation. Their ten-message no-load gate requires
+p95 below 500 ms. A failed gate remains failed while independent cases continue.
+Telegram/email 12,000-status load acceptance remains unimplemented.
+Small-sample latency is measured
 from the local provider injection call to a Core snapshot read after a real
 Socket.IO invalidation;
-email IMAP arrival is reported separately from webhook arrival.
+email IMAP arrival is reported separately from webhook arrival. IDLE now wakes
+the existing bounded UID fetcher, with a 30-second fallback and reconnect backoff.
 
 ## Measured local results (2026-10-24)
 
