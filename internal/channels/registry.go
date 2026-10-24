@@ -236,6 +236,10 @@ func (r *Registry) SendEmailMessage(ctx context.Context, account string, input r
 	if c == nil {
 		return nil, errors.New("email account is not configured")
 	}
+	return sendEmailMessage(ctx, account, input, c)
+}
+
+func sendEmailMessage(ctx context.Context, account string, input EmailInput, c *relayemail.Client) (map[string]any, error) {
 	if input.RequestKey == "" {
 		input.RequestKey = rand.Text()
 	}

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"sort"
@@ -33,19 +34,21 @@ type CallbackDispatcher struct {
 func (d *CallbackDispatcher) Run(ctx context.Context, callbacks []RuntimeCallback) {
 	d.Update(callbacks)
 	d.runStatusCallbacks(ctx)
-	go callbackworker.RunWithWake(ctx, 250*time.Millisecond, 8, func() []callbackworker.Job {
-		d.mu.RLock()
-		current := append([]RuntimeCallback(nil), d.Accounts...)
-		d.mu.RUnlock()
-		sort.Slice(current, func(i, j int) bool { return current[i].Account < current[j].Account })
-		jobs := make([]callbackworker.Job, 0, len(current)*2)
-		for _, a := range current {
-			for _, channel := range []string{"Telegram", "Email"} {
-				jobs = append(jobs, callbackworker.Job{Key: a.Account + ":" + channel, Run: func(jobCtx context.Context) { d.deliverOne(jobCtx, a, channel) }})
+	lifecycle.Go(ctx, func() {
+		callbackworker.RunWithWake(ctx, 250*time.Millisecond, 8, func() []callbackworker.Job {
+			d.mu.RLock()
+			current := append([]RuntimeCallback(nil), d.Accounts...)
+			d.mu.RUnlock()
+			sort.Slice(current, func(i, j int) bool { return current[i].Account < current[j].Account })
+			jobs := make([]callbackworker.Job, 0, len(current)*2)
+			for _, a := range current {
+				for _, channel := range []string{"Telegram", "Email"} {
+					jobs = append(jobs, callbackworker.Job{Key: a.Account + ":" + channel, Run: func(jobCtx context.Context) { d.deliverOne(jobCtx, a, channel) }})
+				}
 			}
-		}
-		return jobs
-	}, d.Wake)
+			return jobs
+		}, d.Wake)
+	})
 }
 
 func (d *CallbackDispatcher) Update(callbacks []RuntimeCallback) {
@@ -79,7 +82,7 @@ func (d *CallbackDispatcher) deliverPending(ctx context.Context, c *pgx.Conn, a 
 	if err := c.QueryRow(ctx, `SELECT e.id,d.failures FROM relay_channel_events e
  JOIN relay_channel_callback_delivery d ON d.event_id=e.id
  WHERE e.account=$1 AND ($2='' OR e.channel=$2) AND NOT d.acknowledged AND NOT d.quarantined
- AND d.next_attempt<=now() ORDER BY e.id LIMIT 1`, a.Account, channel).Scan(&id, &failures); err != nil {
+ AND d.next_attempt<=now() ORDER BY d.replay,e.id LIMIT 1`, a.Account, channel).Scan(&id, &failures); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, nil
 		}
@@ -97,16 +100,16 @@ func (d *CallbackDispatcher) deliverBatch(ctx context.Context, c *pgx.Conn, a Ru
 	// pgx streams rows, while SQL limits both count and aggregate source size.
 	// Always include the first row so an oversized event is surfaced, not skipped.
 	rows, err := c.Query(ctx, `WITH candidates AS (
- SELECT id,account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at,payload,
+ SELECT id,account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at,payload,d.replay,
  octet_length(payload::text)::bigint+octet_length(body)+octet_length(subject)+octet_length(sender)+octet_length(recipient)+octet_length(provider_id)+512 AS bytes
  FROM relay_channel_events e JOIN relay_channel_callback_delivery d ON d.event_id=e.id
  WHERE account=$1 AND ($2='' OR channel=$2) AND ($3::bigint=0 OR id=$3)
  AND NOT d.acknowledged AND NOT d.quarantined AND d.next_attempt<=now()
- AND ($3::bigint<>0 OR d.failures=0) ORDER BY id LIMIT 50
+ AND ($3::bigint<>0 OR d.failures=0) ORDER BY d.replay,id LIMIT 50
  ), bounded AS (
- SELECT *,row_number() OVER (ORDER BY id) AS ordinal,sum(bytes) OVER (ORDER BY id) AS total_bytes FROM candidates
+ SELECT *,row_number() OVER (ORDER BY replay,id) AS ordinal,sum(bytes) OVER (ORDER BY replay,id) AS total_bytes FROM candidates
  ) SELECT id,account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at,payload
- FROM bounded WHERE ordinal=1 OR total_bytes<=2093056 ORDER BY id`, a.Account, channel, through)
+ FROM bounded WHERE ordinal=1 OR total_bytes<=2093056 ORDER BY replay,id`, a.Account, channel, through)
 	if err != nil {
 		return 0, err
 	}

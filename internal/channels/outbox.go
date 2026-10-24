@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"net/mail"
 	"regexp"
 	"slices"
@@ -29,11 +30,13 @@ type Outbox struct {
 	Registry *Registry
 }
 type Delivery struct {
-	ID        int64     `json:"id"`
-	Operation string    `json:"operation"`
-	State     string    `json:"state"`
-	Error     string    `json:"error"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int64          `json:"id"`
+	Operation string         `json:"operation"`
+	State     string         `json:"state"`
+	Error     string         `json:"error"`
+	CreatedAt time.Time      `json:"created_at"`
+	Result    map[string]any `json:"result"`
+	Attempts  int            `json:"attempts"`
 }
 
 var requestKeyRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,120}$`)
@@ -194,9 +197,13 @@ func (o Outbox) send(ctx context.Context, claim channelClaim) (map[string]any, e
 	// Fence stale workers at the durable submission boundary. Preparation and
 	// SMTP envelope exchange cannot submit a message; the adapters mark before
 	// the Telegram request or SMTP DATA command can reach the provider.
+	var messageID string
+	var destinations []string
 	mark := func() error {
-		tag, err := o.DB.Exec(ctx, `UPDATE relay_channel_outbox SET submission_started=true,updated_at=now()
-  WHERE id=$1 AND state='dispatching' AND NOT submission_started AND claim_version=$2`, id, claim.Version)
+		tag, err := o.DB.Exec(ctx, `UPDATE relay_channel_outbox SET submission_started=true,updated_at=now(),
+  result=CASE WHEN $3='' THEN result ELSE jsonb_build_object('message_id',$3::text) END,
+  destinations=coalesce($4::text[],destinations)
+  WHERE id=$1 AND state='dispatching' AND NOT submission_started AND claim_version=$2`, id, claim.Version, messageID, destinations)
 		if err == nil && tag.RowsAffected() != 1 {
 			return errors.New("delivery claim is no longer active")
 		}
@@ -230,11 +237,17 @@ func (o Outbox) send(ctx context.Context, claim channelClaim) (map[string]any, e
 		if err = json.Unmarshal(payload, &input); err == nil {
 			input.RequestKey = fmt.Sprintf("delivery-%d", id)
 			err = input.Validate()
-			if err == nil && (o.Registry == nil || o.Registry.snapshot().email[account] == nil) {
+			var client *relayemail.Client
+			if o.Registry != nil {
+				client = o.Registry.snapshot().email[account]
+			}
+			if err == nil && client == nil {
 				err = errors.New("email account is not configured")
 			}
 			if err == nil {
-				result, err = o.Registry.SendEmailMessage(ctx, account, input)
+				messageID = client.MessageID(input.RequestKey)
+				destinations = sendDestinations(input)
+				result, err = sendEmailMessage(ctx, account, input, client)
 			}
 		}
 	}
@@ -243,6 +256,9 @@ func (o Outbox) send(ctx context.Context, claim channelClaim) (map[string]any, e
 	}
 	state, detail, delay, metadata := channelSendOutcome(err, claim.Attempts, before)
 
+	if result == nil && messageID != "" {
+		result = map[string]any{"message_id": messageID}
+	}
 	raw, _ := json.Marshal(result)
 	// Persist even if the caller went away. A failed final write remains dispatching
 	// and recovery marks it uncertain rather than repeating an external send.
@@ -287,8 +303,19 @@ func (o Outbox) result(ctx context.Context, id int64, account string) (map[strin
 	return result, nil
 }
 
-func (o Outbox) List(ctx context.Context, account string, after int64) ([]Delivery, error) {
-	rows, err := o.DB.Query(ctx, `SELECT id,operation,state,error,created_at FROM relay_channel_outbox WHERE account=$1 AND id>$2 ORDER BY id LIMIT 51`, account, after)
+func (o Outbox) List(ctx context.Context, account string, after int64, channel ...string) ([]Delivery, error) {
+	operation := ""
+	if len(channel) > 0 {
+		switch channel[0] {
+		case "Telegram":
+			operation = "telegram.message"
+		case "Email":
+			operation = "email.send"
+		default:
+			return nil, errors.New("invalid channel")
+		}
+	}
+	rows, err := o.DB.Query(ctx, `SELECT id,operation,state,error,created_at,result,attempts FROM relay_channel_outbox WHERE account=$1 AND id>$2 AND ($3='' OR operation=$3) ORDER BY id LIMIT 51`, account, after, operation)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +323,7 @@ func (o Outbox) List(ctx context.Context, account string, after int64) ([]Delive
 	items := []Delivery{}
 	for rows.Next() {
 		var item Delivery
-		if err = rows.Scan(&item.ID, &item.Operation, &item.State, &item.Error, &item.CreatedAt); err != nil {
+		if err = rows.Scan(&item.ID, &item.Operation, &item.State, &item.Error, &item.CreatedAt, &item.Result, &item.Attempts); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -319,7 +346,7 @@ func (o Outbox) Recover(ctx context.Context) error {
 }
 func (o Outbox) Run(ctx context.Context) {
 	for range 2 {
-		go func() {
+		lifecycle.Go(ctx, func() {
 			ticker := time.NewTicker(500 * time.Millisecond)
 			defer ticker.Stop()
 			for {
@@ -335,7 +362,7 @@ func (o Outbox) Run(ctx context.Context) {
 					cancel()
 				}
 			}
-		}()
+		})
 	}
 }
 
@@ -443,7 +470,7 @@ func channelSendOutcome(err error, attempts int, before bool) (string, string, t
 	if errors.As(err, &tg) {
 		metadata, _ = json.Marshal(tg)
 		known = !tg.OutcomeUnknown
-		retry = known && (tg.StatusCode == 429 || tg.ErrorCode == 429)
+		retry = known && (tg.StatusCode == 429 || tg.ErrorCode == 429 || tg.Retryable)
 	}
 	if errors.As(err, &smtp) {
 		metadata, _ = json.Marshal(smtp)

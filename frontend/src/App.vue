@@ -1,6 +1,7 @@
 <script setup>
+import { subscribeHub } from "./services/liveUpdates";
 import ThemeSwitcher from "./components/ThemeSwitcher.vue";
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { Button, FeatherIcon, ErrorMessage } from "@relay/ui";
 import { useViewRoute } from "./useViewRoute";
 import { useHubData } from "./composables/useHubData";
@@ -33,7 +34,9 @@ function navigate(name) {
   view.value = name;
   mobile.value = false;
 }
-onMounted(refresh);
+let unsubscribe;
+onMounted(() => { refresh(); unsubscribe = subscribeHub(refreshView); });
+onUnmounted(() => unsubscribe?.());
 </script>
 <template>
   <div class="hub-shell" @keydown.esc="mobile=false"><button v-if="mobile" class="hub-nav-backdrop" aria-label="Close navigation" @click="mobile=false"/>

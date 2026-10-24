@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"sort"
@@ -31,20 +32,22 @@ func (d *CallbackDispatcher) Run(ctx context.Context) {
 			interval = time.Second
 			wake = nil
 		}
-		go callbackworker.RunWithWake(ctx, interval, 8, func() []callbackworker.Job {
-			accounts := []Account{}
-			for _, a := range d.Service.AccountsSnapshot() {
-				if a.CoreAPIKey != "" {
-					accounts = append(accounts, a)
+		lifecycle.Go(ctx, func() {
+			callbackworker.RunWithWake(ctx, interval, 8, func() []callbackworker.Job {
+				accounts := []Account{}
+				for _, a := range d.Service.AccountsSnapshot() {
+					if a.CoreAPIKey != "" {
+						accounts = append(accounts, a)
+					}
 				}
-			}
-			sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
-			jobs := make([]callbackworker.Job, 0, len(accounts))
-			for _, a := range accounts {
-				jobs = append(jobs, callbackworker.Job{Key: a.ID, Run: func(jobCtx context.Context) { _ = d.deliver(jobCtx, a, lane) }})
-			}
-			return jobs
-		}, wake)
+				sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
+				jobs := make([]callbackworker.Job, 0, len(accounts))
+				for _, a := range accounts {
+					jobs = append(jobs, callbackworker.Job{Key: a.ID, Run: func(jobCtx context.Context) { _ = d.deliver(jobCtx, a, lane) }})
+				}
+				return jobs
+			}, wake)
+		})
 	}
 }
 

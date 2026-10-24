@@ -46,7 +46,11 @@ func (b hubDeliveryBackend) List(ctx context.Context, account, channel string, a
 		rows, err := b.wa.List(ctx, whatsapp.Account{ID: account}, strconv.FormatInt(after, 10))
 		return deliveryPage{rows, len(rows) == 50}, err
 	}
-	rows, err := b.channels.List(ctx, account, after)
+	var filter []string
+	if channel != "Telegram and email" {
+		filter = []string{channel}
+	}
+	rows, err := b.channels.List(ctx, account, after, filter...)
 	more := len(rows) > 50
 	if more {
 		rows = rows[:50]
@@ -75,6 +79,10 @@ func (b hubDeliveryBackend) Change(ctx context.Context, in deliveryChange) error
 
 var deliveryAccount = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
 
+func validDeliveryChannel(channel string) bool {
+	return channel == "WhatsApp" || channel == "Telegram" || channel == "Email" || channel == "Telegram and email"
+}
+
 func deliveryAdmin(backend deliveryBackend, session func(*http.Request) (auth.User, error), origin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, err := session(r)
@@ -101,7 +109,7 @@ func deliveryAdmin(backend deliveryBackend, session func(*http.Request) (auth.Us
 				return
 			}
 			account, channel = in.Account, in.Channel
-			if !deliveryAccount.MatchString(account) || (channel != "WhatsApp" && channel != "Telegram and email") || (in.Action != "cancel" && in.Action != "resolve") {
+			if !deliveryAccount.MatchString(account) || !validDeliveryChannel(channel) || (in.Action != "cancel" && in.Action != "resolve") {
 				http.Error(w, "invalid delivery action", 400)
 				return
 			}
@@ -117,7 +125,7 @@ func deliveryAdmin(backend deliveryBackend, session func(*http.Request) (auth.Us
 			http.Error(w, "method not allowed", 405)
 			return
 		}
-		if !deliveryAccount.MatchString(account) || (channel != "WhatsApp" && channel != "Telegram and email") {
+		if !deliveryAccount.MatchString(account) || !validDeliveryChannel(channel) {
 			http.Error(w, "select an account and delivery channel", 400)
 			return
 		}

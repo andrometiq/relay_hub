@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from "vue";
 import { Badge, Button, Dialog, ErrorMessage, FeatherIcon } from "@relay/ui";
+import { usePendingRefresh } from "../composables/usePendingRefresh";
 import { hubApi } from "../services/hubApi";
 
 const items = ref([]);
@@ -33,7 +34,7 @@ function scrolled(event) {
 }
 
 onMounted(() => load());
-defineExpose({ refresh: () => load() });
+defineExpose({ refresh: usePendingRefresh(busy, load) });
 </script>
 
 <template>

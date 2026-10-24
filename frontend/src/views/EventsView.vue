@@ -4,6 +4,7 @@ import { Badge, Button, Dialog, ErrorMessage, FeatherIcon, FormControl } from "@
 import AccountPicker from "../components/AccountPicker.vue";
 import AuditEvents from "./AuditEvents.vue";
 import { hubApi } from "../services/hubApi";
+import { usePendingRefresh } from "../composables/usePendingRefresh";
 
 const audit = ref();
 const query = ref("");
@@ -90,7 +91,8 @@ watch(account, () => {
   load();
 });
 onBeforeUnmount(() => { ++generation; ++detailGeneration; });
-defineExpose({ refresh: () => mode.value === "system" ? audit.value?.refresh() : load() });
+const refresh = usePendingRefresh(busy, load);
+defineExpose({ refresh: () => mode.value === "system" ? audit.value?.refresh() : refresh() });
 </script>
 
 <template>

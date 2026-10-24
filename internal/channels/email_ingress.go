@@ -21,8 +21,8 @@ func (s Store) SaveEmail(ctx context.Context, event Event, statuses []relayemail
 		return err
 	}
 	defer tx.Rollback(ctx)
-	inserted, err := tx.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at,payload)
- VALUES($1,'Email','inbound',$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(channel,account,provider_id) DO NOTHING`, event.Account, event.ProviderID, event.Sender, event.Recipient, event.Subject, event.Body, event.OccurredAt, event.Payload)
+	inserted, err := tx.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at,payload,receipt)
+ VALUES($1,'Email','inbound',$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(channel,account,provider_id) DO NOTHING`, event.Account, event.ProviderID, event.Sender, event.Recipient, event.Subject, event.Body, event.OccurredAt, event.Payload, len(statuses) > 0)
 	if err != nil {
 		return err
 	}

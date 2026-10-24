@@ -11,12 +11,15 @@ import {
 import CallbackFailures from "./CallbackFailures.vue";
 import AccountPicker from "../components/AccountPicker.vue";
 import { hubApi } from "../services/hubApi";
+import { usePendingRefresh } from "../composables/usePendingRefresh";
 
 
 const emit = defineEmits(["changed"]);
 const cancelConfirm = ref(false);
 const callbacks = ref();
 const account = ref("");
+const channel = ref("WhatsApp");
+const chatId = ref("");
 const rows = ref([]);
 const deliveries = computed(() => rows.value.reduce((counts, row) => ({...counts, [row.state]: (counts[row.state] || 0) + 1}), {}));
 const more = ref(false);
@@ -40,7 +43,7 @@ async function load(append = false) {
       "delivery-queue?" +
         new URLSearchParams({
           account: account.value,
-          channel: "WhatsApp",
+          channel: channel.value,
           after: cursor,
         }),
     );
@@ -58,8 +61,9 @@ async function load(append = false) {
     if (current === sequence) busy.value = false;
   }
 }
-watch(account, () => {
+watch([account, channel], () => {
   ++sequence;
+  busy.value = false;
   selected.value = null;
   rows.value = [];
   more.value = false;
@@ -82,6 +86,7 @@ function open(row) {
   outcome.value = "submitted";
   note.value = "";
   providerId.value = "";
+  chatId.value = "";
 }
 async function change(action) {
   if (!selected.value || busy.value) return;
@@ -90,7 +95,7 @@ async function change(action) {
   try {
     await hubApi("delivery-queue", {
       account: account.value,
-      channel: "WhatsApp",
+      channel: channel.value,
       action,
       id: String(selected.value.id),
       ...(action === "resolve"
@@ -98,6 +103,7 @@ async function change(action) {
             outcome: outcome.value,
             note: note.value,
             provider_id: providerId.value,
+            ...(channel.value === "Telegram" && outcome.value === "submitted" ? { chat_id: Number(chatId.value) } : {}),
           }
         : {}),
     });
@@ -111,7 +117,8 @@ async function change(action) {
     busy.value = false;
   }
 }
-defineExpose({ refresh: async () => { await load(); await callbacks.value?.refresh(); } });
+const refresh = usePendingRefresh(busy, load);
+defineExpose({ refresh: async () => { await refresh(); await callbacks.value?.refresh(); } });
 </script>
 
 <template>
@@ -119,7 +126,7 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
     <div class="view-heading">
       <div>
         <h2>Deliveries</h2>
-        <p>Inspect queued WhatsApp sends and resolve uncertain outcomes.</p>
+        <p>Inspect queued {{ channel }} sends and resolve uncertain outcomes.</p>
       </div>
       <Button
         label="Refresh"
@@ -143,10 +150,11 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
     </div>
     <div class="entity-toolbar mt-6">
       <AccountPicker v-model="account" :disabled="busy" />
+      <FormControl v-model="channel" type="select" label="Channel" aria-label="Channel" :options="['WhatsApp', 'Telegram', 'Email']" :disabled="busy" />
     </div>
     <ErrorMessage :message="error" />
     <p v-if="!account" class="entity-prompt">
-      Select an account to view its WhatsApp delivery queue.
+      Select an account to view its {{ channel }} delivery queue.
     </p>
     <template v-else>
       <div class="delivery-list-head entity-list-head" aria-hidden="true">
@@ -155,7 +163,7 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
       </div>
       <div
         class="delivery-list infinite-list"
-        aria-label="WhatsApp deliveries"
+        :aria-label="channel + ' deliveries'"
         @scroll.passive="scrolled"
       >
         <button
@@ -172,7 +180,7 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
             /></span>
             <strong>#{{ row.id }}</strong>
           </span>
-          <span class="entity-site">{{ row.operation || "WhatsApp message" }}</span>
+          <span class="entity-site">{{ row.operation || channel + " message" }}</span>
           <span><Badge :label="row.state" /></span>
           <span><Badge :label="row.delivery_status || 'Pending'" /></span>
           <FeatherIcon name="chevron-right" class="h-4 w-4 text-ink-gray-4" />
@@ -184,7 +192,7 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
       </div>
     </template>
 
-    <CallbackFailures ref="callbacks" v-if="account" :key="account" :account="account" @changed="emit('changed')" />
+    <CallbackFailures ref="callbacks" v-if="account" :key="account + channel" :account="account" :channel="channel" @changed="emit('changed')" />
 
     <Dialog
       :model-value="!!selected"
@@ -196,12 +204,12 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
         <div v-if="selected" class="space-y-5">
           <dl class="entity-details">
             <div><dt>Account</dt><dd>{{ account }}</dd></div>
-            <div><dt>Channel</dt><dd>WhatsApp</dd></div>
+            <div><dt>Channel</dt><dd>{{ channel }}</dd></div>
             <div><dt>Message type</dt><dd>{{ selected.operation || "Message" }}</dd></div>
             <div><dt>Queue state</dt><dd>{{ selected.state }}</dd></div>
             <div><dt>Provider status</dt><dd>{{ selected.delivery_status || "Pending" }}</dd></div>
             <div><dt>Attempts</dt><dd>{{ selected.attempts ?? 0 }}</dd></div>
-            <div><dt>Provider ID</dt><dd>{{ selected.result?.messages?.[0]?.id || "Not assigned" }}</dd></div>
+            <div><dt>Provider ID</dt><dd>{{ selected.result?.messages?.[0]?.id || selected.result?.message_id || "Not assigned" }}</dd></div>
             <div v-if="selected.provider_error"><dt>Provider error</dt><dd>{{ selected.provider_error }}</dd></div>
             <div v-if="selected.error"><dt>Issue</dt><dd>{{ selected.error }}</dd></div>
           </dl>
@@ -209,7 +217,7 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
           <p v-if="cancelConfirm" role="alert">Cancel this queued send? The Hub will cancel only if sending has not started.</p>
           <form v-if="resolving" class="space-y-4" @submit.prevent="change('resolve')">
             <p class="text-sm text-ink-gray-6">
-              Record the outcome only after checking it in Meta. This action
+              Record the outcome only after checking it with the provider. This action
               never resends the message.
             </p>
             <label class="block text-xs text-ink-gray-6"
@@ -224,6 +232,7 @@ defineExpose({ refresh: async () => { await load(); await callbacks.value?.refre
               v-model="providerId"
               label="Provider message ID"
             />
+            <FormControl v-if="channel === 'Telegram' && outcome === 'submitted'" v-model="chatId" label="Verified Telegram chat ID" />
             <FormControl
               v-model="note"
               type="textarea"

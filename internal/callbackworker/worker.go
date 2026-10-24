@@ -3,6 +3,7 @@ package callbackworker
 
 import (
 	"context"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"time"
 )
 
@@ -62,7 +63,7 @@ func RunWithWake(ctx context.Context, interval time.Duration, workers int, snaps
 			}
 			delete(queued, key)
 			busy[key] = true
-			go func() {
+			lifecycle.Go(ctx, func() {
 				jobCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				defer cancel()
 				job.Run(jobCtx)
@@ -70,7 +71,7 @@ func RunWithWake(ctx context.Context, interval time.Duration, workers int, snaps
 				case done <- job.Key:
 				case <-ctx.Done():
 				}
-			}()
+			})
 		}
 		pending = remaining
 	}

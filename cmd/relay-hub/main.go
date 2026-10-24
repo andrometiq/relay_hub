@@ -13,6 +13,8 @@ import (
 	"github.com/andrometiq/relay_hub/internal/database"
 	"github.com/andrometiq/relay_hub/internal/envconfig"
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
+	"github.com/andrometiq/relay_hub/internal/live"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -109,7 +111,11 @@ func runtimeWhatsApp(ctx context.Context, store runtimeAccountSource) ([]whatsap
 			}
 			return ""
 		}
-		accounts = append(accounts, whatsapp.Account{
+		rate, err := whatsappRate(row.Config["messages_per_second"])
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, whatsapp.Account{MessagesPerSecond: rate,
 			ID: row.AccountID, Site: row.Site, AccessToken: row.Secret,
 			AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
 			AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
@@ -127,20 +133,23 @@ func boolValue(value any) bool {
 
 func whatsappCandidate(account accountstore.Account, channel accountstore.Channel, secret string, stored accountstore.RuntimeCredential) whatsapp.Account {
 	config := map[string]any{}
-	for key, value := range stored.Config {
+	for key, value := range channel.Config {
 		config[key] = value
 	}
-	for key, value := range channel.Config {
-		if text, ok := value.(string); ok && text == "" {
-			continue
+	for _, key := range []string{"app_secret", "verify_token", "core_token", "core_api_key", "core_api_secret", "callback_secret"} {
+		if config[key] == nil || config[key] == "" {
+			config[key] = stored.Config[key]
 		}
-		config[key] = value
 	}
 	get := func(key string) string { value, _ := config[key].(string); return value }
 	if secret == "" {
 		secret = stored.Secret
 	}
-	return whatsapp.Account{ID: account.ID, Site: account.Site, AccessToken: secret,
+	rate, err := whatsappRate(config["messages_per_second"])
+	if err != nil {
+		rate = -1
+	}
+	return whatsapp.Account{MessagesPerSecond: rate, ID: account.ID, Site: account.Site, AccessToken: secret,
 		AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
 		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
 		CoreAPIKey: get("core_api_key"), CoreAPISecret: get("core_api_secret"), CallbackSecret: get("callback_secret"),
@@ -424,6 +433,9 @@ func run() error {
 				if channel.Channel != "WhatsApp" {
 					continue
 				}
+				if channel.Config == nil {
+					channel.Config = map[string]any{}
+				}
 				delete(channel.Config, "connection_status")
 				delete(channel.Config, "verified_at")
 				if !in.Account.Enabled || !channel.Enabled {
@@ -435,6 +447,10 @@ func run() error {
 					stored = current
 				} else if !errors.Is(credentialErr, pgx.ErrNoRows) {
 					http.Error(w, "account validation unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				if err := validateWhatsAppConfig(channel.Config); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
 				candidate := whatsappCandidate(in.Account, *channel, in.Secrets["WhatsApp"], stored)
@@ -687,6 +703,9 @@ func run() error {
 			}
 			json.NewEncoder(w).Encode(map[string]string{"status": "ready", "database": "PostgreSQL 18", "instance": os.Getenv("RELAY_INSTANCE")})
 		})
+		liveUpdates := live.New(browserAuth.Origin, browserAuth.Session)
+		defer liveUpdates.Close()
+		mux.Handle("/socket.io/", liveUpdates)
 		mux.Handle("GET /", browserAuth.Protect(http.FileServer(http.Dir(ui))))
 		server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
 		mailboxPool, err := channels.NewMailboxPool(context.Background(), authPool.Config())
@@ -696,6 +715,9 @@ func run() error {
 		defer mailboxPool.Close()
 		shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		shutdown, runtimeWorkers := lifecycle.WithWorkers(shutdown)
+		server.BaseContext = func(net.Listener) context.Context { return shutdown }
+		lifecycle.Go(shutdown, func() { liveUpdates.Run(shutdown, authPool.Config().ConnConfig) })
 		wa.Metadata = &whatsapp.MetadataSync{DB: authPool, Service: wa}
 		wa.Metadata.Run(shutdown)
 		wa.Outbox.Run(shutdown)
@@ -703,14 +725,29 @@ func run() error {
 		channels.MailboxPoller{DB: mailboxPool, Registry: channelRegistry, Wake: channelWake}.Run(shutdown)
 		callbacks.Run(shutdown)
 		channelCallbacksDispatcher.Run(shutdown, channelCallbacks)
+		serverDone := make(chan error, 1)
 		go func() {
 			<-shutdown.Done()
 			c, done := context.WithTimeout(context.Background(), 10*time.Second)
 			defer done()
-			server.Shutdown(c)
+			serverDone <- server.Shutdown(c)
 		}()
 		log.Printf("Relay Hub listening on %s", addr)
 		err = server.ListenAndServe()
+		stop()
+		drain, cancelDrain := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancelDrain()
+		select {
+		case shutdownErr := <-serverDone:
+			if shutdownErr != nil {
+				err = shutdownErr
+			}
+		case <-drain.Done():
+			return drain.Err()
+		}
+		if e := runtimeWorkers.Wait(drain); e != nil {
+			return e
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
