@@ -37,7 +37,7 @@ func (c *Client) RegisterWebhook(ctx context.Context, address, secret string) er
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || secret == "" {
 		return errors.New("invalid webhook configuration")
 	}
-	raw, err := c.call(ctx, "setWebhook", map[string]any{"url": address, "secret_token": secret, "drop_pending_updates": false, "allowed_updates": supportedUpdates})
+	raw, err := c.call(ctx, "setWebhook", map[string]any{"url": address, "secret_token": secret, "max_connections": 1, "drop_pending_updates": false, "allowed_updates": supportedUpdates})
 	if err != nil {
 		return err
 	}
