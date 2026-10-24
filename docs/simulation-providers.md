@@ -96,6 +96,7 @@ acceptance faults, media round trips, pending-fault persistence, TLS trust and
 hostname rejection, SMTP stage classifications, MIME/BCC fidelity, mailbox
 paging/UID gaps, malformed/oversized messages and denied external dialing.
 
-These are local provider/Hub integration tests. Connected Telegram/email
-Core/browser drivers and the 12,000-event latency acceptance remain separate
-plan items 32–34; this work does not claim those release proofs.
+These are local provider/Hub integration tests. The connected Telegram/email
+Core and Socket.IO drivers are documented in [Connected channel simulations](connected-channel-simulations.md),
+including their current Core defects. Browser rendering and the 12,000-event
+latency acceptance remain separate release proofs.
