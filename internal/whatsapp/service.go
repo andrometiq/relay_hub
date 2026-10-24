@@ -84,7 +84,28 @@ func (s *Service) ValidateCredentials(ctx context.Context, account Account) erro
 	if err != nil || strings.TrimSpace(stringValue(business["id"])) != account.WABAID {
 		return errors.New("business account identity could not be verified")
 	}
-	return nil
+	query := url.Values{"fields": {"id"}, "limit": {"100"}}
+	for page := 0; page < 100; page++ {
+		result, err := s.graph(ctx, account, http.MethodGet, account.WABAID+"/phone_numbers", query, nil)
+		if err != nil {
+			break
+		}
+		rows, _ := result["data"].([]any)
+		for _, row := range rows {
+			phone, _ := row.(map[string]any)
+			if stringValue(phone["id"]) == account.PhoneID {
+				return nil
+			}
+		}
+		paging, _ := result["paging"].(map[string]any)
+		cursors, _ := paging["cursors"].(map[string]any)
+		next := stringValue(cursors["after"])
+		if paging["has_more"] != true || next == "" || next == query.Get("after") {
+			break
+		}
+		query.Set("after", next)
+	}
+	return errors.New("phone number identity could not be verified")
 }
 
 func stringValue(value any) string {
@@ -722,17 +743,24 @@ func (s *Service) graphSubmission(ctx context.Context, a Account, method, path s
 func (s *Service) request(req *http.Request) (map[string]any, error) {
 	response, e := s.client.Do(req)
 	if e != nil {
-		return nil, errors.New("provider unavailable; outcome may be unknown, do not blindly retry")
+		err := errors.New("provider unavailable; outcome may be unknown, do not blindly retry")
+		if req.Method == http.MethodGet {
+			return nil, &deferredError{err}
+		}
+		return nil, err
 	}
 	defer response.Body.Close()
 	data, e := io.ReadAll(io.LimitReader(response.Body, 1<<20+1))
+	if e != nil && req.Method == http.MethodGet {
+		return nil, &deferredError{errors.New("provider response interrupted")}
+	}
 	if (e != nil || len(data) > 1<<20) && response.StatusCode < 300 {
 		return nil, errors.New("provider response invalid or too large")
 	}
 	var result map[string]any
 	decodeErr := json.Unmarshal(data, &result)
 	if response.StatusCode >= 300 || result["error"] != nil {
-		rejection := &ProviderError{Status: response.StatusCode}
+		rejection := &ProviderError{Status: response.StatusCode, Transient: req.Method == http.MethodGet && (response.StatusCode >= 500 || response.StatusCode == 408)}
 		var envelope struct {
 			Error struct {
 				Code      int  `json:"code"`
@@ -741,7 +769,8 @@ func (s *Service) request(req *http.Request) (map[string]any, error) {
 			} `json:"error"`
 		}
 		if json.Unmarshal(data, &envelope) == nil {
-			rejection.Code, rejection.Subcode, rejection.Transient = envelope.Error.Code, envelope.Error.Subcode, envelope.Error.Transient
+			rejection.Code, rejection.Subcode = envelope.Error.Code, envelope.Error.Subcode
+			rejection.Transient = rejection.Transient || envelope.Error.Transient
 		}
 		if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil {
 			rejection.RetryAfter = max(0, min(seconds, 3600))
