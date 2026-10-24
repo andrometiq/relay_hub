@@ -2,7 +2,7 @@
 import json
 import time
 from email import policy
-from email.parser import Parser
+from email.parser import BytesParser
 from simulate_whatsapp_e2e import assert_handoff, assert_ledger_reply
 from whatsapp_sim_acceptance import provider_identity
 
@@ -33,7 +33,7 @@ class ChannelAcceptance:
                 for m in state.get('messages') or [] if str(m['request'].get('chat_id')) == endpoint]
         replies = []
         for row in state.get('sent') or []:
-            parsed = Parser(policy=policy.default).parsestr(row['raw'])
+            parsed = BytesParser(policy=policy.default).parsebytes(row['raw'].encode('utf-8'))
             if parsed['To'] == endpoint:
                 replies.append(dict(body=parsed.get_body(preferencelist=('plain',)).get_content().strip(),
                     provider=str(parsed['Message-ID']), parent=str(parsed['In-Reply-To']),
@@ -48,7 +48,9 @@ class ChannelAcceptance:
         assert action['status'] == 'Submitted'
         assert (outgoing['business_doctype'], outgoing['business_name']) == ('Supplier', fixture['supplier'])
         replies = self.accepted_replies(fixture['endpoint'])
-        assert len(replies) == expected and replies[-1]['body'] == outgoing['content'].strip()
+        assert len(replies) == expected, f'Expected {expected} provider replies, got {len(replies)}'
+        assert replies[-1]['body'] == outgoing['content'].strip(), (
+            f"Expected provider body {outgoing['content'].strip()!r}, got {replies[-1]['body']!r}")
         assert replies[-1]['provider'] == provider_identity(outgoing)
         self.check_email_identity(outgoing)
         if self.medium == 'Email':
