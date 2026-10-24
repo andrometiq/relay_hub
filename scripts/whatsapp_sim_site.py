@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import sys
 import time
-from simulation_fixtures import confine_writes, fixture_user
+from simulation_fixtures import (available_run, confine_writes, fixture_channel,
+                                 fixture_endpoint, fixture_user)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,38 +52,39 @@ def require_worker_isolation(workers):
 
 
 def fixture_contact(frappe, insert, channel, run):
+    phone = fixture_endpoint('WhatsApp', run)
     endpoint = frappe.db.get_value('Relay Contact Endpoint',
-        {'channel': channel.name, 'endpoint': '919999999999'}, 'name')
+        {'channel': channel.name, 'endpoint': phone}, 'name')
     binding = frappe.get_doc('Relay Contact Endpoint', endpoint) if endpoint else None
     if binding:
-        assert (frappe.db.get_value('Relay Contact', binding.relay_contact, 'display_name') or '').startswith('Local simulation '), 'Endpoint belongs to non-simulation data'
+        assert (frappe.db.get_value('Relay Contact', binding.relay_contact, 'display_name') or '').startswith('Sim Customer '), 'Endpoint belongs to non-simulation data'
     routed = frappe.db.get_value('Relay Business Routing',
-        {'channel': channel.name, 'endpoint': '919999999999'}, 'relay_contact')
+        {'channel': channel.name, 'endpoint': phone}, 'relay_contact')
     existing = routed or (binding.relay_contact if binding else None)
     if existing:
         contact = frappe.get_doc('Relay Contact', existing)
-        assert contact.display_name.startswith('Local simulation ') and contact.automation_paused, 'Contact is not a paused simulation fixture'
+        assert contact.display_name.startswith('Sim Customer ') and contact.automation_paused, 'Contact is not a paused simulation fixture'
         person = frappe.get_doc('Contact', contact.contact)
         links = [(link.link_doctype, link.link_name) for link in person.links]
         assert len(links) == 1 and links[0][0] == 'Customer', 'Simulation contact must link to one Customer'
         customer = frappe.get_doc(*links[0])
-        assert customer.customer_name.startswith('Local Relay simulation '), 'Customer belongs to non-simulation data'
+        assert customer.customer_name.startswith('Sim Customer '), 'Customer belongs to non-simulation data'
     else:
         group = frappe.db.get_value('Customer Group', {'is_group': 0}, 'name')
         territory = frappe.db.get_value('Territory', {'is_group': 0}, 'name')
         assert group and territory, 'Customer Group and Territory fixtures are required'
-        customer = insert('Customer', customer_name=f'Local Relay simulation {run}', customer_type='Company',
+        customer = insert('Customer', customer_name=f'Sim Customer {run}', customer_type='Company',
                           customer_group=group, territory=territory)
-        person = insert('Contact', first_name=f'Local Relay simulation {run}',
-            phone_nos=[dict(phone='919999999999', is_primary_mobile_no=1)],
+        person = insert('Contact', first_name=f'Sim Customer {run}',
+            phone_nos=[dict(phone=phone, is_primary_mobile_no=1)],
             links=[dict(link_doctype='Customer', link_name=customer.name)])
-        contact = insert('Relay Contact', contact=person.name, display_name=f'Local simulation {run}', automation_paused=1)
+        contact = insert('Relay Contact', contact=person.name, display_name=f'Sim Customer {run}', automation_paused=1)
     if binding:
         if binding.relay_contact != contact.name or not binding.verified:
             binding.relay_contact, binding.verified = contact.name, 1
             binding.save(ignore_permissions=True)
     else:
-        insert('Relay Contact Endpoint', channel=channel.name, endpoint='919999999999', relay_contact=contact.name, verified=1)
+        insert('Relay Contact Endpoint', channel=channel.name, endpoint=phone, relay_contact=contact.name, verified=1)
     return contact, person, customer
 
 
@@ -120,8 +122,8 @@ def main():
         for i in range(count):
             provider = f'wamid.sim.{group}.{run}.{i}'
             doc = frappe.get_doc(dict(doctype='Relay Message', relay_contact=fixture['contact'], channel=fixture['channel'],
-                direction='Outgoing', status='Sent', provider_id=provider, sender_endpoint='919999999999',
-                provider_message_key=provider_key(fixture['channel'], '919999999999', provider),
+                direction='Outgoing', status='Sent', provider_id=provider, sender_endpoint=fixture['endpoint'],
+                provider_message_key=provider_key(fixture['channel'], fixture['endpoint'], provider),
                 source_key=f'sim-{group}-{run}-{i}', message_type='text', content=f'Local simulation {group} {i+1}',
                 business_doctype='Customer', business_name=fixture['customer'], sent_at=frappe.utils.now_datetime(),
                 provider_context=json.dumps({'provider': 'WhatsApp', 'message_id': provider})))
@@ -169,6 +171,8 @@ def main():
                     assert not frappe.get_all(doctype, filters={'enabled': 1, field: ['in', ['Sales Order', 'Supplier', 'GL Entry', 'Item', 'Price List']]}, limit_page_length=1), 'Disable external fixture webhooks/notifications first'
             return {'canonical_origin': frappe.utils.get_url().rstrip('/'), 'version': frappe.__version__,
                     'site': site, 'developer_mode': bool(frappe.conf.developer_mode)}
+        if action == 'run_label':
+            return available_run(frappe, req['used'])
         if action == 'provision':
             run = req['run']
             fixture['service'] = user('service', ['Relay Hub Service'], run)
@@ -179,12 +183,10 @@ def main():
                 assert frappe.db.get_value('Relay Contact Type', contact_type, 'enabled'), 'Customer contact type is disabled'
             else:
                 insert('Relay Contact Type', business_doctype='Customer', enabled=1, label='Local simulation customers')
-            channels = frappe.get_all('Relay Channel', filters={'account': 'sim-v1', 'channel': 'WhatsApp'}, pluck='name')
-            assert len(channels) <= 1, 'Simulation account has multiple channels'
-            channel = frappe.get_doc('Relay Channel', channels[0]) if channels else insert('Relay Channel', channel='WhatsApp', account='sim-v1', enabled=1)
-            assert channel.enabled, 'Simulation channel is disabled'
+            channel = fixture_channel(frappe, insert, 'WhatsApp', run)
             contact, person, customer = fixture_contact(frappe, insert, channel, run)
-            fixture.update(contact=contact.name, channel=channel.name, customer=customer.name, person=person.name)
+            fixture.update(contact=contact.name, channel=channel.name, customer=customer.name, person=person.name,
+                           endpoint=fixture_endpoint('WhatsApp', run))
             seed_messages('historical', run, 417)
             return fixture
         if action == 'seed_storm':

@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from simulation_fixtures import run_label
 from simulation_common import (ROOT, BENCH, loopback_origin, address, NoRedirect, request,
                                percentile, read_env, Site, Realtime, SimulationRunner)
 STEPS = {'7': 'Signed ingress', '8': 'Journal, Core projection and deduplication',
@@ -58,16 +59,16 @@ def assert_handoff(state, fixture):
     assert not state['actions'] and not state['outgoing'], 'Handoff must not send an automatic reply'
 
 
-def receipt_storm(ids, count=None):
+def receipt_storm(ids, count=None, endpoint='919999999999'):
     stamp = int(time.time())
     statuses = [
-        {'id': provider, 'recipient_id': '919999999999', 'status': status, 'timestamp': str(stamp + offset)}
+        {'id': provider, 'recipient_id': endpoint, 'status': status, 'timestamp': str(stamp + offset)}
         for provider in ids for offset, status in enumerate(('sent', 'delivered', 'read'))]
     return envelope({'metadata': {'phone_number_id': '110'}, 'statuses': statuses[-count:] if count else statuses})
 
 
-def sustained_storm(ids, count):
-    statuses = receipt_storm(ids, count)['entry'][0]['changes'][0]['value']['statuses']
+def sustained_storm(ids, count, endpoint='919999999999'):
+    statuses = receipt_storm(ids, count, endpoint)['entry'][0]['changes'][0]['value']['statuses']
     # Keep signed ingress envelopes below Hub's 1 MiB limit.
     for offset in range(0, len(statuses), 3000):
         yield envelope({'metadata': {'phone_number_id': '110'}, 'statuses': statuses[offset:offset + 3000]})
@@ -111,7 +112,8 @@ class Runner(SimulationRunner):
         self.hub = 'http://' + args.hub_addr
         self.meta = 'http://' + args.meta_addr
         self.control_token = secrets.token_urlsafe(32)
-        self.run_id = str(time.time_ns())
+        self.run_id = run_label()
+        self.run_epoch_ns = time.time_ns()
         self.report = {'run': self.run_id, 'mode': 'dry-run' if args.dry_run else 'connected', 'site': args.site,
             'steps': {k: {'name': v, 'status': 'not_run'} for k, v in STEPS.items()}, 'latencies_ms': [],
             'batch_sizes': [], 'inbound_samples': [],
@@ -156,7 +158,7 @@ class Runner(SimulationRunner):
             started_ns=result['monotonic_ns'], observed_ns=observed['observed_ns']))
 
     def observe_inbound(self, provider, payload=None, phase='held'):
-        result = self.emit(payload or inbound(provider))
+        result = self.emit(payload or inbound(provider, self.fixture['endpoint']))
         observed = self.site.call('wait', kind='message', id=provider, timeout=5, group='storm' if phase == 'processing' else 'historical')
         # Both clocks are CLOCK_MONOTONIC on this host; control overhead is separately visible.
         self.record_inbound(provider, result, observed, phase)
@@ -258,7 +260,7 @@ class Runner(SimulationRunner):
         template = self.report['steps']['12'].get('template_id')
         assert template, 'Step 12 must provide an approved template'
         self.site.call('acceptance_seed_event', run=self.run_id, template_id=template)
-        before = len(provider_posts(self.control('state'), '919999999999'))
+        before = len(provider_posts(self.control('state'), self.fixture['endpoint']))
         submitted = self.site.call('acceptance_submit_event')
         state = self.site.call('acceptance_wait_event', source=submitted['source'])
         assert len(state['deliveries']) == len(state['actions']) == len(state['messages']) == 1
@@ -266,7 +268,7 @@ class Runner(SimulationRunner):
         assert state['deliveries'][0]['business_name'] == self.fixture['customer'] and state['docstatus'] == 1
         message = state['messages'][0]
         hub = self.control('state')
-        posts = provider_posts(hub, '919999999999')
+        posts = provider_posts(hub, self.fixture['endpoint'])
         assert len(posts) == before + 1 and posts[-1]['status'] == 200
         assert posts[-1]['body']['type'] == 'template'
         assert posts[-1]['body']['template']['name'] == json.loads(state['deliveries'][0]['payload'])['name']
@@ -305,6 +307,7 @@ class Runner(SimulationRunner):
         parsed = urllib.parse.urlsplit(self.canonical)
         assert parsed.scheme == 'http' and parsed.hostname == self.args.site and parsed.port == urllib.parse.urlsplit(self.args.core_origin).port, 'Core canonical origin must match site and local HTTP port'
         self.lock_site()
+        self.select_run()
         self.prepare_database()
         self.build_launcher()
         self.start()
@@ -312,17 +315,17 @@ class Runner(SimulationRunner):
         self.fixture = self.site.call('provision', run=self.run_id)
         self.callback_secret = secrets.token_urlsafe(32)
         self.configure()
-        self.report['fixture'] = {key: self.fixture[key] for key in ('contact', 'channel', 'customer', 'person')}
+        self.report['fixture'] = {key: self.fixture[key] for key in ('contact', 'channel', 'customer', 'person', 'endpoint')}
         with self.step('realtime', continue_on_error=True):
             self.realtime = Realtime(self.args.socketio_origin, self.canonical, self.args.site, self.fixture['operator'], self.fixture['contact'])
             self.denied = Realtime(self.args.socketio_origin, self.canonical, self.args.site, self.fixture['unauthorized'], self.fixture['contact'])
         first = f'wamid.sim.in.{self.run_id}'
-        first_payload = inbound(first)
+        first_payload = inbound(first, self.fixture['endpoint'])
         row = emitted = None
         started = time.monotonic_ns()
         with self.step('7', continue_on_error=True):
-            self.emit(inbound(first), invalid_signature=True)
-            wrong = inbound(first)
+            self.emit(inbound(first, self.fixture['endpoint']), invalid_signature=True)
+            wrong = inbound(first, self.fixture['endpoint'])
             wrong['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'] = '999'
             rejected = self.control('emit', {'payload': wrong})
             assert rejected['status'] == 403, 'Wrong-account webhook accepted'
@@ -365,7 +368,7 @@ class Runner(SimulationRunner):
             posts = [r for r in state['records'] if r['kind'] == 'graph' and r['method'] == 'POST' and r['path'].endswith('/messages')]
             assert [p['status'] for p in posts] == [200], 'Expected exactly one fake Meta POST'
             post = posts[-1]
-            assert post['body']['to'] == '919999999999' and post['body']['messaging_product'] == 'whatsapp'
+            assert post['body']['to'] == self.fixture['endpoint'] and post['body']['messaging_product'] == 'whatsapp'
             assert post['body']['context']['message_id'] == first and post['body']['text']['body'] == 'Simulation reply'
             assert post['body']['biz_opaque_callback_data'] == 'relay-outbox:' + str(deliveries[0]['id'])
             outgoing = self.site.call('wait', kind='message', id=deliveries[0]['provider_message_id'])
@@ -373,7 +376,7 @@ class Runner(SimulationRunner):
             assert len([a for a in self.site.call('snapshot')['actions'] if a['request_key'] == key]) == 1
             evidence.update(action=first_send['action'], outbox_id=deliveries[0]['id'], accepted_provider_posts=1)
         # Hold only receipts so a fresh inbound exercises the independent realtime lane.
-        storm = receipt_storm(self.fixture['historical'])
+        storm = receipt_storm(self.fixture['historical'], endpoint=self.fixture['endpoint'])
         failed = None
         fast_errors = []
         with self.step('10', continue_on_error=True):
@@ -414,7 +417,7 @@ class Runner(SimulationRunner):
             assert not fast_errors, 'Concurrent inbound projection failed'
             self.emit(storm)
             # Late delivered must not regress Read.
-            late = receipt_storm(self.fixture['historical'][:1])
+            late = receipt_storm(self.fixture['historical'][:1], endpoint=self.fixture['endpoint'])
             late['entry'][0]['changes'][0]['value']['statuses'] = late['entry'][0]['changes'][0]['value']['statuses'][1:2]
             self.emit(late)
             late_state = self.wait_control(lambda s: all(c['acknowledged'] for c in s['callbacks'] if c['lane'] == 'status'))
@@ -427,7 +430,7 @@ class Runner(SimulationRunner):
             count = self.args.storm_receipts
             providers = self.site.call('seed_storm', run=self.run_id, count=math.ceil(count / 3))
             previous_ids = {e['id'] for e in self.control('state')['events']}
-            for payload in sustained_storm(providers, count):
+            for payload in sustained_storm(providers, count, self.fixture['endpoint']):
                 self.emit(payload)
             committed = self.control('state')
             storm_ids = [e['id'] for e in committed['events'] if e['lane'] == 'status' and e['id'] not in previous_ids]
@@ -443,7 +446,7 @@ class Runner(SimulationRunner):
                             processing_inbound_samples=processing_samples, event_ids=storm_ids)
             assert self.report['storm_latency_ms']['passed'], 'Storm p95 must be < 500 ms with at least five samples overlapping actual receipt projection'
         with self.step('12', continue_on_error=True) as evidence:
-            template = {'name': 'sim_v1_update_' + self.run_id, 'language': 'en_US', 'category': 'UTILITY',
+            template = {'name': 'sim_update_' + self.run_id.lower().replace('-', '_'), 'language': 'en_US', 'category': 'UTILITY',
                         'components': [{'type': 'BODY', 'text': 'Local simulation order {{1}}'}]}
             result = self.core('relay_core.whatsapp.execute', {'operation': 'templates.create', 'arguments': template})
             assert result['status'] == 'PENDING'

@@ -23,6 +23,24 @@ Run one driver at a time. Both default to `yrp.site`, Core at `http://127.0.0.1:
 
 Read [release evidence](simulation-validation.md#rerun) for prerequisites and local writes. Each driver uses a unique temporary schema in `relay_hub_v1_test`, restores prior Hub settings on cleanup and retains Core fixtures. The driver does not migrate Core or edit site configuration. Runtime artifacts can contain private fixture data.
 
+## Fixture names
+
+All three connected drivers share a UTC run label such as `R0425-0051`
+(April 25, 00:51). A retained Core service user or provider state directory
+causes a two-character suffix, such as `R0425-0051-00`, to be added. Reports
+record the selected label. Run one driver at a time as above.
+
+Fixtures use names such as `Sim Customer R0425-0051`,
+`Sim Supplier R0425-0051`, `Sim WhatsApp R0425-0051`, and
+`sim-operator-r0425-0051@example.invalid`. Existing `sim-v1` channels keep
+their record identities and receive the current run's readable title; newly
+created channels, AI skills and event rules receive titles before insertion.
+Each run has separate customer, shared-contact, supplier and fault endpoints.
+WhatsApp numbers have country code `91` plus ten digits; Telegram chat IDs
+have ten digits. Numeric provider identities and database sequence seeds stay
+separate from display names. Receipt counts, latency gates and acceptance
+assertions are unchanged.
+
 ## Evidence limits
 
 | Area | Boundary |

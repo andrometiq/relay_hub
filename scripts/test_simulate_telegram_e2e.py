@@ -98,7 +98,7 @@ class ChannelAcceptanceTests(unittest.TestCase):
     def runner(self, medium):
         from channel_sim_acceptance import ChannelAcceptance
         runner = ChannelAcceptance()
-        runner.medium, runner.run_id, runner.report = medium, '1792805488467037716', {}
+        runner.medium, runner.run_id, runner.report = medium, 'R0425-0051', {}
         runner.emit = Mock()
         return runner
 
@@ -112,7 +112,7 @@ class ChannelAcceptanceTests(unittest.TestCase):
         call = runner.emit.call_args
         self.assertEqual(provider,call.kwargs['identifier'])
         message = Parser(policy=policy.default).parsestr(call.args[0])
-        self.assertEqual(message['In-Reply-To'], '<ledger-1792805488467037716-1@example.invalid>')
+        self.assertEqual(message['In-Reply-To'], '<ledger-R0425-0051-1@example.invalid>')
         self.assertEqual(message['References'],message['In-Reply-To'])
 
     def test_email_blank_provider_field_remains_a_reported_defect(self):

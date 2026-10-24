@@ -2,7 +2,8 @@
 import json
 import os
 import sys
-from simulation_fixtures import confine_writes, fixture_user
+from simulation_fixtures import (available_run, confine_writes, fixture_channel,
+                                 fixture_email, fixture_endpoint, fixture_user)
 
 
 def snapshot(frappe, fixture):
@@ -61,6 +62,8 @@ def main():
                     assert not frappe.get_all(dt, filters={'enabled': 1, field: ['in', doctypes]}, limit_page_length=1), 'Disable external fixture notifications first'
             return dict(canonical_origin=frappe.utils.get_url().rstrip('/'), version=frappe.__version__,
                         apps=frappe.get_installed_apps(), developer_mode=True)
+        if action == 'run_label':
+            return available_run(frappe, req['used'])
         if action == 'provision':
             run, medium = req['run'], req['medium']
             assert medium in ('Telegram', 'Email')
@@ -74,35 +77,32 @@ def main():
                     insert('Relay Contact Type', business_doctype=dt, enabled=1, label='Local simulation '+dt)
                 else:
                     assert frappe.db.get_value('Relay Contact Type', existing, 'enabled')
-            customer = insert('Customer', customer_name='Local Relay simulation '+run, customer_type='Company',
+            customer = insert('Customer', customer_name='Sim Customer '+run, customer_type='Company',
                 customer_group=frappe.db.get_value('Customer Group', {'is_group': 0}, 'name'),
                 territory=frappe.db.get_value('Territory', {'is_group': 0}, 'name'))
-            supplier = insert('Supplier', supplier_name='Local Relay simulation '+run, supplier_type='Company',
+            supplier = insert('Supplier', supplier_name='Sim Supplier '+run, supplier_type='Company',
                 supplier_group=frappe.db.get_value('Supplier Group', {'is_group': 0}, 'name'))
-            person = insert('Contact', first_name='Local simulation '+run, links=[
+            person = insert('Contact', first_name='Sim Customer '+run, links=[
                 dict(link_doctype='Customer', link_name=customer.name)])
-            contact = insert('Relay Contact', contact=person.name, display_name='Local simulation '+run, automation_paused=1)
+            contact = insert('Relay Contact', contact=person.name, display_name='Sim Customer '+run, automation_paused=1)
             channels = {}
-            endpoints = {'Telegram': str(int(run[-12:])+100000), 'Email': 'sim-'+run+'@example.invalid', 'WhatsApp': '91'+run[-10:]}
+            endpoints = {kind: fixture_endpoint(kind, run) for kind in ('Telegram', 'Email', 'WhatsApp')}
             for kind in endpoints:
-                names = frappe.get_all('Relay Channel', filters={'account':'sim-v1','channel':kind}, pluck='name')
-                assert len(names) <= 1, 'Ambiguous simulation channel'
-                channel = frappe.get_doc('Relay Channel', names[0]) if names else insert('Relay Channel', channel=kind, account='sim-v1', enabled=1)
-                assert channel.enabled
+                channel = fixture_channel(frappe, insert, kind, run)
                 insert('Relay Contact Endpoint', channel=channel.name, endpoint=endpoints[kind], relay_contact=contact.name, verified=1)
                 channels[kind] = channel.name
-            shared_person = insert('Contact', first_name='Local simulation shared '+run, links=[
+            shared_person = insert('Contact', first_name='Sim Shared Contact '+run, links=[
                 dict(link_doctype='Customer', link_name=customer.name), dict(link_doctype='Supplier', link_name=supplier.name)])
-            shared = insert('Relay Contact', contact=shared_person.name, display_name='Local simulation shared '+run, automation_paused=1)
-            shared_endpoints = dict(Telegram=str(int(endpoints['Telegram'])+1), Email='shared-'+endpoints['Email'], WhatsApp=str(int(endpoints['WhatsApp'])+1))
+            shared = insert('Relay Contact', contact=shared_person.name, display_name='Sim Shared Contact '+run, automation_paused=1)
+            shared_endpoints = {kind: fixture_endpoint(kind, run, 'shared') for kind in endpoints}
             for kind, endpoint in shared_endpoints.items():
                 insert('Relay Contact Endpoint', channel=channels[kind], endpoint=endpoint, relay_contact=shared.name, verified=1)
-            fault_endpoint = str(int(endpoints['Telegram']) + 300000)
+            fault_endpoint = fixture_endpoint('Telegram', run, 'fault')
             insert('Relay Contact Endpoint', channel=channels['Telegram'], endpoint=fault_endpoint,
                 relay_contact=contact.name, verified=1)
             fixture['fault_endpoint'] = fault_endpoint
             fixture.update(shared_contact=shared.name, shared_person=shared_person.name, shared_endpoints=shared_endpoints)
-            cc = 'sim-cc-'+run+'@example.invalid'
+            cc = fixture_email('cc', run)
             insert('Relay Contact Endpoint', channel=channels['Email'], endpoint=cc, relay_contact=contact.name, verified=1)
             fixture.update(medium=medium, contact=contact.name, person=person.name, customer=customer.name, supplier=supplier.name,
                 channels=channels, channel=channels[medium], endpoints=endpoints, endpoint=endpoints[medium], cc=cc)

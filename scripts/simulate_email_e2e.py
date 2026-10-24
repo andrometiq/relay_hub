@@ -34,9 +34,10 @@ def parsed_sent(state, body):
 
 class EmailRunner(ChannelRunner):
     def emit(self, raw, *, webhook=False, identifier=None, authentication='pass', **values):
+        self.email_events = getattr(self, 'email_events', 0) + 1
         self.last_ingress='email_webhook' if webhook else 'email_imap'
         result=self.control('email/emit',dict(raw=raw,authentication=authentication,
-            webhook=webhook,id=identifier or 'event_'+str(time.time_ns()),**values))
+            webhook=webhook,id=identifier or f'event_{self.run_id}_{self.email_events}',**values))
         if webhook:
             assert result['status']==(400 if values.get('invalid_signature') else 200), result
         return result
