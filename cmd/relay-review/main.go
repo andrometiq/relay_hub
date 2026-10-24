@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const reviewWriteTimeout = 35 * time.Second
+
 func main() {
 	if e := envconfig.Load(".env"); e != nil {
 		log.Fatal(e)
@@ -33,7 +35,7 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
-	srv := &http.Server{Addr: "127.0.0.1:18084", Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	srv := &http.Server{Addr: "127.0.0.1:18084", Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: reviewWriteTimeout, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	go func() {
 		<-ctx.Done()
 		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
