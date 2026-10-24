@@ -96,7 +96,8 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, checkpo
 								return cursor, e
 							}
 							cursor.UID = uint32(uid)
-							return cursor, fail
+							cursor.Backlog = cursor.UID < ceiling
+							return cursor, nil
 						}
 						raw, err = io.ReadAll(value.Literal)
 						if err != nil || int64(len(raw)) != value.Literal.Size() {

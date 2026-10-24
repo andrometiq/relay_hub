@@ -119,8 +119,14 @@ func (c *Client) compose(in Message) ([]byte, []string, error) {
 	}
 	var content bytes.Buffer
 	if len(in.Attachments) == 0 && in.HTML == "" {
-		headers = append(headers, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit")
-		content.WriteString(in.Body)
+		headers = append(headers, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: quoted-printable")
+		q := quotedprintable.NewWriter(&content)
+		if _, err := q.Write([]byte(in.Body)); err != nil {
+			return nil, nil, err
+		}
+		if err := q.Close(); err != nil {
+			return nil, nil, err
+		}
 	} else {
 		mixed := multipart.NewWriter(&content)
 		headers = append(headers, "Content-Type: multipart/mixed; boundary="+mixed.Boundary())
@@ -158,7 +164,9 @@ func (c *Client) compose(in Message) ([]byte, []string, error) {
 			q.Close()
 		}
 		for _, a := range in.Attachments {
-			writer, err := mixed.CreatePart(textproto.MIMEHeader{"Content-Type": {mime.FormatMediaType(a.ContentType, map[string]string{"name": a.Filename})}, "Content-Disposition": {mime.FormatMediaType("attachment", map[string]string{"filename": a.Filename})}, "Content-Transfer-Encoding": {"base64"}})
+			base, params, _ := mime.ParseMediaType(a.ContentType)
+			params["name"] = a.Filename
+			writer, err := mixed.CreatePart(textproto.MIMEHeader{"Content-Type": {mime.FormatMediaType(base, params)}, "Content-Disposition": {mime.FormatMediaType("attachment", map[string]string{"filename": a.Filename})}, "Content-Transfer-Encoding": {"base64"}})
 			if err != nil {
 				return nil, nil, err
 			}
