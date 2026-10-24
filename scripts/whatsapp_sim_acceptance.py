@@ -40,6 +40,7 @@ class Acceptance:
         from relay_core.ai.samples import install_samples, LEDGER_TOOL
         install_samples()
         sample = f.get_doc('Relay AI Skill', {'sample_key': 'supplier_ledger'})
+        assert json.loads(sample.allowed_tools) == [LEDGER_TOOL], 'Sample read tools were customized; review before simulation'
         # Channel-specific fixture copies preserve the installed sample's scope.
         skill = f.copy_doc(sample)
         skill.sample_key = None
@@ -47,7 +48,6 @@ class Acceptance:
         skill.channel = fixture['channel']
         skill.enabled = 0
         skill.insert(ignore_permissions=True)
-        assert json.loads(skill.allowed_tools) == [LEDGER_TOOL], 'Sample read tools were customized; review before simulation'
         assert not skill.channel or skill.channel == fixture['channel'], 'Sample belongs to another channel'
         assert not f.get_all('Relay AI Skill', filters={'channel': fixture['channel'], 'business_doctype': 'Supplier',
             'enabled': 1, 'name': ['!=', skill.name]}, limit_page_length=1), 'Another supplier skill owns this channel'

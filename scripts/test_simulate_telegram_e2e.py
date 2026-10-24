@@ -121,6 +121,16 @@ class ChannelAcceptanceTests(unittest.TestCase):
             provider_context='{"provider":"Email","message_id":"<accepted@example.invalid>"}'))
         self.assertEqual(runner.report['email_identity_defects'],['outgoing'])
 
+    def test_email_latency_probe_has_no_unsent_ledger_parent(self):
+        from email import policy
+        from email.parser import Parser
+        runner = self.runner('Email')
+        _, emit = runner.ai_payload({'endpoint':'customer@example.invalid'}, 1000, 'Latency probe', threaded=False)
+        emit()
+        message = Parser(policy=policy.default).parsestr(runner.emit.call_args.args[0])
+        self.assertIsNone(message['In-Reply-To'])
+        self.assertIsNone(message['References'])
+
     def test_latency_gate_keeps_failure_and_all_ten_samples(self):
         runner = object.__new__(ChannelRunner)
         runner.run_id, runner.fixture, runner.report = 'run', {}, {'latency_samples':[]}
@@ -130,6 +140,8 @@ class ChannelAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError,'500 ms'): runner.latency_acceptance()
         self.assertEqual(runner.report['single_inbound_latency_ms']['samples'],10)
         self.assertFalse(runner.report['single_inbound_latency_ms']['passed'])
+        self.assertEqual(runner.ai_payload.call_count,10)
+        self.assertTrue(all(call.kwargs == {'threaded':False} for call in runner.ai_payload.call_args_list))
 
 
 if __name__=='__main__':unittest.main()

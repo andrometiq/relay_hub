@@ -149,7 +149,7 @@ class ChannelRunner(SimulationRunner, ChannelAcceptance):
         values = []
         for number in range(10):
             body = f'Local simulation latency {self.run_id} {number}'
-            _, emit = self.ai_payload(self.fixture, 1000 + number, body)
+            _, emit = self.ai_payload(self.fixture, 1000 + number, body, threaded=False)
             self.message(body, emit)
             values.append(self.report['latency_samples'][-1]['milliseconds'])
         result = dict(samples=len(values), p50=percentile(values,50), p95=percentile(values,95), target_ms=500)

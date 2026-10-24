@@ -13,7 +13,7 @@ class ChannelAcceptance:
         if self.medium == 'Email' and message.get('provider_id') != provider_identity(message):
             self.report.setdefault('email_identity_defects', []).append(message['name'])
 
-    def ai_payload(self, fixture, number, body):
+    def ai_payload(self, fixture, number, body, *, threaded=True):
         if self.medium == 'Telegram':
             from simulate_telegram_e2e import update
             identifier = run_number(self.run_id) * 2048 + 100 + number
@@ -23,12 +23,14 @@ class ChannelAcceptance:
         identifier = f'<ledger-{self.run_id}-{number}@example.invalid>'
         root = f'<ledger-{self.run_id}-1@example.invalid>'
         payload = mail(fixture['endpoint'], identifier, body,
-            parent=root if number > 1 else None, references=[root] if number > 1 else [])
+            parent=root if threaded and number > 1 else None,
+            references=[root] if threaded and number > 1 else [])
         provider = 'ledger_'+self.run_id+'_'+str(number)
         return provider, lambda: self.emit(payload, webhook=True, identifier=provider)
 
-    def accepted_replies(self, endpoint):
-        state = self.providers()
+    def accepted_replies(self, endpoint, state=None):
+        if state is None:
+            state = self.providers()
         if self.medium == 'Telegram':
             return [dict(body=m['request'].get('text'), provider=str(m['result']['message_id']))
                 for m in state.get('messages') or [] if str(m['request'].get('chat_id')) == endpoint]

@@ -144,12 +144,21 @@ class EmailRunner(ChannelRunner):
             choices=json.loads(routing['choices'])
             assert {c['doctype'] for c in choices}=={'Customer','Supplier'}
             evidence['prompt_action']=routing['prompt_action']
+            assert not routing['business_doctype'] and not routing['business_name'], 'Business was guessed before sender choice'
+            shared=self.fixture['shared_endpoints']['Email']
+            prompts=self.wait_provider(lambda s:any('Which business' in m['body'] for m in self.accepted_replies(shared,s)),timeout=10)
+            prompt=next(m for m in self.accepted_replies(shared,prompts) if 'Which business' in m['body'])
+            assert 'relay-business:' not in prompt['body']
+            assert prompt['parent']==f'<ask-{self.run_id}@example.invalid>'
+            for number, item in enumerate(choices, 1):
+                assert f"{number}. {item['doctype']}: {item['title']}" in prompt['body']
             choice=next(c for c in choices if c['doctype']=='Supplier')
-            self.wait_provider(lambda s:any(choice['id'] in m['raw'] for m in s.get('sent') or []),timeout=10)
-            selected=self.message(choice['id'],lambda:self.emit(mail(self.fixture['shared_endpoints']['Email'],
-                f'<ask-choice-{self.run_id}@example.invalid>',choice['id'],parent=f'<ask-{self.run_id}@example.invalid>',
-                references=[f'<ask-{self.run_id}@example.invalid>']),webhook=True))
+            answer=str(choices.index(choice)+1)
+            selected=self.message('Chose: Supplier — '+choice['title'],lambda:self.emit(mail(self.fixture['shared_endpoints']['Email'],
+                f'<ask-choice-{self.run_id}@example.invalid>',answer,parent=prompt['provider'],
+                references=[f'<ask-{self.run_id}@example.invalid>',prompt['provider']]),webhook=True))
             assert selected['business_name']==self.fixture['supplier']
+            assert 'relay-business:' not in selected['content']
 
         with self.step('single_inbound_latency', continue_on_error=True) as evidence:
             evidence.update(self.latency_acceptance())
