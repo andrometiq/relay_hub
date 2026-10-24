@@ -4,9 +4,9 @@ GL rows are identifiable read-contract fixtures, not posted accounting vouchers.
 The actual worker reads them through permission-checked GL Entry get_list/get_doc.
 Sales Orders use the normal insert/submit lifecycle.
 """
-import hashlib
 import json
 import time
+from simulation_fixtures import fixture_endpoint
 
 
 def fixture_origin(value):
@@ -43,7 +43,7 @@ class Acceptance:
         # Channel-specific fixture copies preserve the installed sample's scope.
         skill = f.copy_doc(sample)
         skill.sample_key = None
-        skill.title = f'Local simulation {medium} supplier ledger {run}'
+        skill.title = f'Sim {medium} Supplier Ledger {run}'
         skill.channel = fixture['channel']
         skill.enabled = 0
         skill.insert(ignore_permissions=True)
@@ -53,21 +53,19 @@ class Acceptance:
             'enabled': 1, 'name': ['!=', skill.name]}, limit_page_length=1), 'Another supplier skill owns this channel'
         group = f.db.get_value('Supplier Group', {'is_group': 0}, 'name')
         assert group, 'Supplier Group fixture is required'
-        suppliers = [self.insert('Supplier', supplier_name=f'Local Relay simulation {label} {run}',
-            supplier_type='Company', supplier_group=group) for label in ('supplier', 'excluded supplier')]
-        endpoint = '9198' + str(int(hashlib.sha256(run.encode()).hexdigest()[:12], 16) % 100000000).zfill(8)
-        if medium == 'Telegram': endpoint = str(int(run[-12:]) + 200000)
-        elif medium == 'Email': endpoint = 'ledger-' + run + '@example.invalid'
+        suppliers = [self.insert('Supplier', supplier_name=f'Sim {label} {run}',
+            supplier_type='Company', supplier_group=group) for label in ('Ledger Supplier', 'Excluded Supplier')]
+        endpoint = fixture_endpoint(medium, run, 'supplier')
         assert not f.db.exists('Relay Contact Endpoint', {'channel': fixture['channel'], 'endpoint': endpoint}), 'Fixture endpoint collision'
         kind = f.db.get_value('Relay Contact Type', {'business_doctype': 'Supplier'}, 'name')
         if not kind:
             self.insert('Relay Contact Type', business_doctype='Supplier', enabled=1, label='Local simulation suppliers')
         else:
             assert f.db.get_value('Relay Contact Type', kind, 'enabled'), 'Supplier contact type is disabled'
-        person = self.insert('Contact', first_name=f'Local Relay simulation supplier {run}',
+        person = self.insert('Contact', first_name=f'Sim Ledger Supplier {run}',
             phone_nos=[dict(phone=endpoint, is_primary_mobile_no=1)] if medium == 'WhatsApp' else [],
             links=[dict(link_doctype='Supplier', link_name=suppliers[0].name)])
-        contact = self.insert('Relay Contact', contact=person.name, display_name=f'Local simulation supplier {run}', automation_paused=0)
+        contact = self.insert('Relay Contact', contact=person.name, display_name=f'Sim Ledger Supplier {run}', automation_paused=0)
         self.insert('Relay Contact Endpoint', channel=fixture['channel'], endpoint=endpoint, relay_contact=contact.name, verified=1)
         company = f.db.get_value('Company', {}, 'name')
         account = f.db.get_value('Account', {'company': company, 'is_group': 0, 'account_type': 'Payable'}, 'name')
@@ -85,9 +83,9 @@ class Acceptance:
                 debit=debit, credit=credit, remarks=marker, docstatus=1, is_cancelled=cancelled))
             doc.db_insert()
             entries.append(doc.name)
-        provider = self.insert('AI Provider Account', account_name=f'Local Relay simulation AI {run}',
+        provider = self.insert('AI Provider Account', account_name=f'Sim AI Provider {run}',
             provider='OpenRouter', auth_type='API Key', enabled=1, api_key='relay-sim-ai-only', base_url=origin + '/ai')
-        model = self.insert('AI Model', model_label=f'Local Relay simulation ledger {run}', enabled=1,
+        model = self.insert('AI Model', model_label=f'Sim Ledger Model {run}', enabled=1,
             account=provider.name, model_id='relay-sim-ledger', temperature=0, max_tokens=1200)
         skill.update(dict(enabled=1, mode='Automatic', channel=fixture['channel'], ai_model=model.name,
             run_as_user=fixture['operator']['name'], handoff_owner=fixture['operator']['name']))
@@ -163,9 +161,9 @@ class Acceptance:
         if f.get_meta('Item').has_field('gst_hsn_code'):
             assert f.db.exists('GST HSN Code', '998313'), 'IT consulting SAC 998313 is required'
             tax_fields['gst_hsn_code'] = '998313'
-        item = self.insert('Item', item_code=f'RELAY-SIM-SERVICE-{run}', item_name='Local Relay simulation IT consulting service',
+        item = self.insert('Item', item_code=f'Sim Service {run}', item_name=f'Sim IT Consulting {run}',
             item_group=item_group, stock_uom=uom, is_stock_item=0, is_sales_item=1, **tax_fields)
-        price_list = self.insert('Price List', price_list_name=f'Local Relay simulation {run}',
+        price_list = self.insert('Price List', price_list_name=f'Sim Price List {run}',
             enabled=1, selling=1, buying=0, currency=currency)
         if medium != 'WhatsApp':
             binding = f.db.get_value('Relay Contact Endpoint', {'channel': fixture['channel'],
@@ -174,7 +172,7 @@ class Acceptance:
             self.insert('Relay Channel Preference', contact=fixture['person'],
                 business_doctype='Customer', business_name=fixture['customer'],
                 endpoint=binding, consent='Granted', priority=1)
-        rule = self.insert('Relay Business Event Rule', title=f'Local Relay simulation order {run}', enabled=1,
+        rule = self.insert('Relay Business Event Rule', title=f'Sim Order Notice {run}', enabled=1,
             source_doctype='Sales Order', event='on_submit', recipient_field='customer', business_doctype='Customer', contact=fixture['person'],
             channel=fixture['channel'], run_as_user=fixture['operator']['name'], template=template,
             parameter_mapping=json.dumps(['name']),

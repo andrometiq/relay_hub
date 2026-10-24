@@ -1,4 +1,5 @@
 """Connected AI and source-document acceptance shared by Telegram and email."""
+from simulation_fixtures import run_number
 import json
 import time
 from email import policy
@@ -15,7 +16,7 @@ class ChannelAcceptance:
     def ai_payload(self, fixture, number, body):
         if self.medium == 'Telegram':
             from simulate_telegram_e2e import update
-            identifier = int(self.run_id[-12:]) + 100 + number
+            identifier = run_number(self.run_id) * 2048 + 100 + number
             payload = update(fixture['endpoint'], identifier, body)
             return str(identifier), lambda: self.emit(payload)
         from simulate_email_e2e import mail

@@ -337,27 +337,27 @@ class RunnerTests(unittest.TestCase):
     def test_fixture_reruns_preserve_conversation_contact(self):
         from whatsapp_sim_site import fixture_contact
         contact = SimpleNamespace(name='contact-1', contact='person-1',
-                                  display_name='Local simulation original', automation_paused=1)
+                                  display_name='Sim Customer R0425-0051', automation_paused=1)
         person = SimpleNamespace(name='person-1', links=[SimpleNamespace(link_doctype='Customer', link_name='customer-1')])
-        customer = SimpleNamespace(name='customer-1', customer_name='Local Relay simulation original')
+        customer = SimpleNamespace(name='customer-1', customer_name='Sim Customer R0425-0051')
         binding = SimpleNamespace(relay_contact='contact-2', verified=1, save=Mock())
         docs = {('Relay Contact Endpoint', 'endpoint'): binding, ('Relay Contact', 'contact-1'): contact,
                 ('Contact', 'person-1'): person, ('Customer', 'customer-1'): customer}
         def get_value(doctype, filters, field):
-            return {'Relay Contact Endpoint': 'endpoint', 'Relay Contact': 'Local simulation previous',
+            return {'Relay Contact Endpoint': 'endpoint', 'Relay Contact': 'Sim Customer R0425-0051',
                     'Relay Business Routing': 'contact-1'}[doctype]
         frappe = Mock()
         frappe.db.get_value.side_effect = get_value
         frappe.get_doc.side_effect = lambda *args: docs[args]
         insert = Mock(side_effect=AssertionError('Existing conversation must be reused'))
-        for run in ('rerun-1', 'rerun-2'):
+        for run in ('R0425-0051', 'R0425-0051'):
             self.assertEqual(fixture_contact(frappe, insert, SimpleNamespace(name='channel'), run),
                              (contact, person, customer))
         self.assertEqual(binding.relay_contact, 'contact-1')
         binding.save.assert_called_once_with(ignore_permissions=True)
         contact.display_name = 'Non-simulation contact'
         with self.assertRaisesRegex(AssertionError, 'paused simulation fixture'):
-            fixture_contact(frappe, insert, SimpleNamespace(name='channel'), 'rerun-3')
+            fixture_contact(frappe, insert, SimpleNamespace(name='channel'), 'R0425-0051')
 
     def test_ai_assertions_reject_cross_supplier_data_model_arithmetic_and_duplicate_handoffs(self):
         good = 'SIM-OWN-DEBIT SIM-OWN-CREDIT Debit: 100.10 Credit: 40.05 Net debit: 60.05'

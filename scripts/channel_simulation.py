@@ -7,6 +7,7 @@ import secrets
 import time
 import traceback
 import urllib.parse
+from simulation_fixtures import run_label
 from simulation_common import (ROOT, BENCH, Site, Realtime, SimulationRunner, address,
                                loopback_origin, percentile, validate_test_database)
 
@@ -16,7 +17,8 @@ from channel_sim_acceptance import ChannelAcceptance
 class ChannelRunner(SimulationRunner, ChannelAcceptance):
     def __init__(self, args, medium):
         self.args, self.medium = args, medium
-        self.run_id = str(time.time_ns())
+        self.run_id = run_label()
+        self.run_epoch_ns = time.time_ns()
         self.hub, self.meta = 'http://'+args.hub_addr, 'http://'+args.meta_addr
         self.control_token, self.callback_secret = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         self.process = self.site = self.realtime = self.denied = self.database = self.run_lock = None
@@ -59,6 +61,7 @@ class ChannelRunner(SimulationRunner, ChannelAcceptance):
         self.site = Site(self.args, self.open_log('site.log'), 'channel_sim_site.py')
         self.report['preflight'] = self.site.call('preflight')
         self.canonical = self.report['preflight']['canonical_origin']
+        self.select_run()
         self.prepare_database()
         self.build_launcher()
         self.start()

@@ -43,7 +43,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = map[string]any{"error": "invalid fake provider token"}
 	case r.Method == "POST" && r.URL.Path == "/v25.0/110/messages":
 		m.messages++
-		result = map[string]any{"messages": []any{map[string]any{"id": fmt.Sprintf("wamid.sim.%d.%d", m.records.start.UnixNano(), m.messages)}}}
+		result = map[string]any{"messages": []any{map[string]any{"id": providerID("wamid.sim")}}}
 	case r.Method == "POST" && r.URL.Path == "/v25.0/220/message_templates":
 		var row map[string]any
 		if json.Unmarshal(body, &row) != nil || row["name"] == nil {

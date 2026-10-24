@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real Hub/Core Telegram acceptance against the local fake Bot API."""
+from simulation_fixtures import run_number
 import base64
 import json
 import sys
@@ -32,7 +33,7 @@ class TelegramRunner(ChannelRunner):
 
     def execute(self):
         chat=self.fixture['endpoint']
-        identifier=int(self.run_id[-12:])
+        identifier=run_number(self.run_id) * 2048
         with self.step('signed_ingress_and_deduplication') as evidence:
             first='Local simulation Telegram '+self.run_id
             initial=update(chat,identifier,first)

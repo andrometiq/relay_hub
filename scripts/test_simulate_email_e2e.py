@@ -51,12 +51,12 @@ class EmailDriverTests(unittest.TestCase):
             automatic='auto-replied')])
 
     def test_webhook_ingress_failure_is_not_treated_as_acceptance(self):
-        runner=object.__new__(EmailRunner);runner.control=Mock(return_value={'status':400})
+        runner=object.__new__(EmailRunner);runner.run_id='R0425-0051';runner.control=Mock(return_value={'status':400})
         with self.assertRaises(AssertionError):runner.emit('raw',webhook=True)
         runner.emit('raw',webhook=True,invalid_signature=True)
 
     def test_imap_injection_does_not_require_fake_webhook_ack(self):
-        runner=object.__new__(EmailRunner);runner.run_id='1792800000000000000';runner.control=Mock(return_value={'uid':42})
+        runner=object.__new__(EmailRunner);runner.run_id='R0425-0051';runner.control=Mock(return_value={'uid':42})
         self.assertEqual(runner.emit('raw'),{'uid':42})
         self.assertFalse(runner.control.call_args.args[1]['webhook'])
 

@@ -1,4 +1,5 @@
 """Shared local-only HTTP, fixture process and Socket.IO simulation transports."""
+from simulation_fixtures import run_number
 import fcntl
 import ipaddress
 import json
@@ -193,6 +194,11 @@ class Realtime:
 
 
 class SimulationRunner:
+    def select_run(self):
+        used = [path.name.removeprefix('provider-') for path in self.args.report_dir.glob('provider-*')]
+        self.run_id = self.site.call('run_label', used=used)
+        self.report['run'] = self.run_id
+
     def lock_site(self):
         self.run_lock = open(ROOT / '.runtime/channel-simulation.lock', 'a')
         try:
@@ -205,7 +211,7 @@ class SimulationRunner:
         from psycopg2 import sql
         self.database = psycopg2.connect(test_database_url(), connect_timeout=5)
         self.database.autocommit = True
-        schema = 'relay_sim_test_'+self.run_id
+        schema = 'relay_sim_test_'+self.run_id.lower().replace('-', '_')
         with self.database.cursor() as cur:
             cur.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
         self.schema = schema
@@ -218,7 +224,7 @@ class SimulationRunner:
         self.state_dir.mkdir(mode=0o700)
         # A fresh fake mailbox must have a new UIDVALIDITY: Core retains its old provider IDs.
         with (self.state_dir / 'email.json').open('x') as state:
-            json.dump(dict(uid_validity=int(self.run_id)//1000000000, uid_next=1,
+            json.dump(dict(uid_validity=run_number(self.run_id) + 1, uid_next=1,
                            sent=[], inbox=[], faults={}), state)
         (self.state_dir / 'email.json').chmod(0o600)
         subprocess.run(['go','test','-c','-o',str(self.binary),'./cmd/relay-sim'], cwd=ROOT,
@@ -231,7 +237,7 @@ class SimulationRunner:
             cur.execute('SELECT sequencename FROM pg_sequences WHERE schemaname=%s', (self.schema,))
             for (sequence,) in cur.fetchall():
                 cur.execute('SELECT setval(%s::regclass,%s,false)',
-                    (self.schema+'.'+sequence, int(self.run_id)//1000))
+                    (self.schema+'.'+sequence, self.run_epoch_ns//1000))
 
     def close_database(self):
         if getattr(self, 'database', None):
@@ -284,7 +290,8 @@ class SimulationRunner:
 
     def launch(self, command, extra_env=None):
         self.process = subprocess.Popen(command, cwd=ROOT,
-            env={**os.environ, **self.db_env, 'RELAY_SIM_CONTROL_TOKEN': self.control_token, **(extra_env or {})},
+            env={**os.environ, **self.db_env, 'RELAY_SIM_CONTROL_TOKEN': self.control_token,
+                 'RELAY_SIM_RUN_LABEL': self.run_id, **(extra_env or {})},
             stdout=self.open_log('hub.log'), stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:

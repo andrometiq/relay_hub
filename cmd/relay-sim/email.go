@@ -582,7 +582,7 @@ func bounceMail(messageID, recipient string) (string, error) {
 		return "", err
 	}
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "From: postmaster@sim.invalid\r\nTo: inbox@sim.invalid\r\nMessage-ID: <dsn-%d@sim.invalid>\r\nSubject: Delivery failed\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=sim-dsn\r\n\r\n", time.Now().UnixNano())
+	fmt.Fprintf(&b, "From: postmaster@sim.invalid\r\nTo: inbox@sim.invalid\r\nMessage-ID: <%s@sim.invalid>\r\nSubject: Delivery failed\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=sim-dsn\r\n\r\n", providerID("dsn"))
 	fmt.Fprintf(&b, "--sim-dsn\r\nContent-Type: text/plain\r\n\r\nLocal simulation bounce.\r\n--sim-dsn\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mx.sim.invalid\r\nOriginal-Message-ID: %s\r\n\r\nFinal-Recipient: rfc822; %s\r\nAction: failed\r\nStatus: 5.1.1\r\n\r\n--sim-dsn--\r\n", messageID, address.Address)
 	return authenticatedMail(b.String(), simulationAuthserv, "pass")
 }
