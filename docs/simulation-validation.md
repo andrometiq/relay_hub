@@ -1,5 +1,8 @@
 # Connected WhatsApp simulation
 
+For Telegram/email drivers, isolation, measured results and current Core defects,
+see [Connected channel simulations](connected-channel-simulations.md).
+
 The Hub-owned runner connects `cmd/relay-sim` to an **already running** local
 Relay Core, its real background workers and Frappe Socket.IO. Only Meta and
 injected callback failures are simulated. Hub authentication, MCP, PostgreSQL
