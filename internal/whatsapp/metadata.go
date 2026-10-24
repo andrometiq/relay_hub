@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"sync/atomic"
@@ -20,7 +21,7 @@ type MetadataSync struct {
 }
 
 func (m *MetadataSync) Run(ctx context.Context) {
-	go func() {
+	lifecycle.Go(ctx, func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -31,7 +32,7 @@ func (m *MetadataSync) Run(ctx context.Context) {
 			case <-ticker.C:
 			}
 		}
-	}()
+	})
 }
 func (m *MetadataSync) Tick(ctx context.Context) {
 	accounts := m.Service.AccountsSnapshot()

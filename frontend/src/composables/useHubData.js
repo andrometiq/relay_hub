@@ -38,6 +38,7 @@ export function useHubData() {
       error.value = e.message;
     } finally {
       accountPage.busy = false;
+      if (refreshPending) await refresh();
     }
   }
   const searchAccounts = (query) => fetchAccounts(query, "", []);
@@ -54,8 +55,10 @@ export function useHubData() {
         accountPage.previous.slice(0, -1),
       );
   }
+  let refreshPending = false;
   async function refresh() {
-    if (busy.value || accountPage.busy) return;
+    if (busy.value || accountPage.busy) { refreshPending = true; return; }
+    refreshPending = false;
     busy.value = true;
     error.value = "";
     const results = await Promise.allSettled(
@@ -77,6 +80,7 @@ export function useHubData() {
     updated.value = new Date().toLocaleTimeString();
     revision.value++;
     busy.value = false;
+    if (refreshPending) await refresh();
   }
   return {
     updated, revision,

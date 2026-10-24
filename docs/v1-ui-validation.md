@@ -1,6 +1,10 @@
 # Hub v1 UI review
 
-Changes are local to the Hub worktree on `feat/v1-ui`, uncommitted. No dependencies,
+The initial review below covered local changes on `feat/v1-ui`. The findings
+follow-up is uncommitted on `tmp/fix-hub`. The initial review used no new
+dependencies or live transport; the follow-up adds authenticated Socket.IO.
+
+Initial review scope: No dependencies,
 provider requests, production writes, migrations, commits or pushes were performed.
 The shared `frontend/node_modules` symlink was used only for existing tooling.
 
@@ -27,8 +31,9 @@ The shared `frontend/node_modules` symlink was used only for existing tooling.
 
 Navigation uses a persistent desktop sidebar and mobile drawer at <=640px. Status
 and notifications remain visible in both layouts. Lists become cards on mobile;
-mobile virtual-list clipping is removed. Refresh occurs on mount, explicit actions
-and mutations; there is no polling or new realtime transport. Notifications report
+mobile virtual-list clipping is removed. Refresh occurs on mount, explicit actions,
+mutations, Socket.IO invalidations and reconnect. Invalidations during existing
+reads retain a follow-up refresh; there is no polling. Notifications report
 latest request health, not a durable backend notification feed.
 
 ## Review corrections
@@ -82,20 +87,19 @@ states; they do not call Meta or a Frappe site. They are not full release valida
 
 ## Remaining gaps
 
-1. No isolated Hub database, `.env`, local runtime or test DSN is configured in this
-   worktree. Real Go + PostgreSQL + provider/Core mock integration and sustained
-   load/failure validation remain outstanding. No migration was attempted under the
-   task's approval restriction. Do not treat this change as release-ready yet.
-2. `messages_per_second` is an allowed stored account property, but
-   `runtimeWhatsApp` does not copy it into the runtime account. The UI shows the
-   configured value read-only and explains that runtime defaults apply. Fixing its
-   behavior requires a backend change outside the permitted read-only additions.
+1. The findings follow-up runs Go integration tests in isolated schemas in
+   `relay_hub_v1_test` at `127.0.0.1:18433`, including test-only migrations and
+   local provider/Core mocks. Connected simulations remain the orchestrator's
+   post-merge validation; this report does not establish release readiness.
+2. Resolved by the Hub findings follow-up: `messages_per_second` now loads into
+   runtime accounts and is editable. Values must be integers from 0 to 1000;
+   zero retains the default of 50 messages per second.
 3. Runtime reports only an aggregate WhatsApp account count, not per-account loaded
    identity. The UI labels account enablement as configuration and separately shows
    observed webhook/Core evidence; it does not equate these with end-to-end readiness.
 4. Event search is limited to loaded records; there is no server-side full-history
    search. Callback backlog counts cover tracked receipts, not unscheduled events.
    Metadata sync has no administrator trigger in the existing browser API.
-5. Notifications summarize request failures and last-check time. No backend durable
-   notification/acknowledgement feed or socket exists. Explicit Refresh remains the
-   supported update mechanism.
+5. Notifications summarize request failures and last-check time. Authenticated
+   Socket.IO invalidations refresh operational views. This is not a durable
+   notification/acknowledgement feed.

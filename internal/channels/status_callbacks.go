@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"strings"
@@ -18,20 +19,22 @@ import (
 // Separate worker slots prevent slow status acknowledgements from occupying
 // the realtime callback worker pool.
 func (d *CallbackDispatcher) runStatusCallbacks(ctx context.Context) {
-	go callbackworker.Run(ctx, time.Second, 8, func() []callbackworker.Job {
-		d.mu.RLock()
-		accounts := append([]RuntimeCallback(nil), d.Accounts...)
-		d.mu.RUnlock()
-		jobs := []callbackworker.Job{}
-		seen := map[string]bool{}
-		for _, a := range accounts {
-			if seen[a.Account] {
-				continue
+	lifecycle.Go(ctx, func() {
+		callbackworker.Run(ctx, time.Second, 8, func() []callbackworker.Job {
+			d.mu.RLock()
+			accounts := append([]RuntimeCallback(nil), d.Accounts...)
+			d.mu.RUnlock()
+			jobs := []callbackworker.Job{}
+			seen := map[string]bool{}
+			for _, a := range accounts {
+				if seen[a.Account] {
+					continue
+				}
+				seen[a.Account] = true
+				jobs = append(jobs, callbackworker.Job{Key: a.Account + ":statuses", Run: func(jobCtx context.Context) { _ = d.deliverStatuses(jobCtx, a) }})
 			}
-			seen[a.Account] = true
-			jobs = append(jobs, callbackworker.Job{Key: a.Account + ":statuses", Run: func(jobCtx context.Context) { _ = d.deliverStatuses(jobCtx, a) }})
-		}
-		return jobs
+			return jobs
+		})
 	})
 }
 func (d *CallbackDispatcher) deliverStatuses(ctx context.Context, a RuntimeCallback) error {

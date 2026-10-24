@@ -282,8 +282,19 @@ func TestMailboxPopulatedUpgradeDoesNotReplayAcknowledgedMail(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				_, err = conn.Exec(ctx, string(raw))
-				return err
+				if _, err = conn.Exec(ctx, string(raw)); err != nil {
+					return err
+				}
+				for _, name := range []string{"0034_channel_health.sql", "0035_channel_callback_lanes.sql", "0036_live_invalidations.sql"} {
+					raw, err = database.Files.ReadFile("migrations/" + name)
+					if err != nil {
+						return err
+					}
+					if _, err = conn.Exec(ctx, string(raw)); err != nil {
+						return err
+					}
+				}
+				return nil
 			})
 			p := MailboxPoller{DB: pool}
 			m := &pagedMailbox{key: key, epoch: 1, messages: messages}

@@ -18,7 +18,7 @@ Values are literal `KEY=value` lines, with optional surrounding quotes. There is
 | `GOMAXPROCS`, `GOFLAGS` | Launcher defaults are `2` and `-p=2` to bound local build/runtime concurrency. |
 | `RELAY_WHATSAPP_CONFIG` | Optional private JSON account-registry path; empty disables this file source. Database-backed accounts are loaded separately. |
 | `RELAY_TELEGRAM_WEBHOOK_SECRET` | Private master, at least 32 characters, for deriving a different ingress secret per Telegram account. Never register the master with Telegram. |
-| `RELAY_EMAIL_WEBHOOK_SECRET` | Secret checked by the normalized email ingress adapter's `X-Relay-Email-Secret` header. This is not SMTP authentication or a universal email-provider webhook verifier. |
+| `RELAY_EMAIL_WEBHOOK_SECRET` | Server-only master of at least 32 bytes, used to derive a different ingress secret per email account. Never send the master. Retrieve `secret_token` from `GET /api/accounts/{account}/email/webhook` and send it as `X-Relay-Email-Secret`. This is not SMTP authentication or a universal provider webhook verifier. |
 | `RELAY_MCP_TOKEN` | Legacy fixture configuration only. The running service accepts database-backed user API tokens instead. |
 
 `RELAY_REVIEW_ORIGIN`, `RELAY_REVIEW_USER`, `RELAY_REVIEW_SALT` and `RELAY_REVIEW_PASSWORD_HASH` belong to the separate [review harness](review-access.md), not Hub account authentication. `./relay config` displays nonsensitive effective startup settings.
@@ -84,3 +84,10 @@ For Telegram, an authenticated Hub administrator retrieves `{path, secret_token}
 Re-register bots that used the old shared secret. Rotating `RELAY_TELEGRAM_WEBHOOK_SECRET` changes all derived tokens and requires re-registration. The response is `no-store` and does not expose the master or bot token. Inbound updates are persisted and deduplicated before success is acknowledged.
 
 See the [provider matrix](provider-support.md) for ingress limits and [operations](operations.md) for troubleshooting.
+
+The Hub admin UI receives account invalidations over authenticated Socket.IO at
+`/socket.io/` (or `/hub/socket.io/` behind the prefix proxy), using WebSocket only.
+Proxies must forward WebSocket upgrades and preserve Host and Origin. The Go
+listener uses PostgreSQL LISTEN/NOTIFY; the UI re-reads authorized endpoints on
+invalidation and reconnect, without polling. Apply new numbered Hub migrations
+before starting this build, then rebuild the frontend and restart the Hub.

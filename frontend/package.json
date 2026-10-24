@@ -10,6 +10,7 @@
     "@lucide/vue": "^1.48.0",
     "hyperlist": "1.0.0",
     "primevue": "^4.5.5",
+    "socket.io-client": "4.8.3",
     "vue": "^3.5.13",
     "vue-router": "^4.2.2"
   },

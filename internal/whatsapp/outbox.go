@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/andrometiq/relay_hub/internal/deliverypolicy"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strconv"
@@ -161,7 +162,7 @@ func (o *Outbox) Run(ctx context.Context) {
 		maximum = 4
 	}
 	o.active.Store(1)
-	go func() {
+	lifecycle.Go(ctx, func() {
 		timer := time.NewTicker(500 * time.Millisecond)
 		defer timer.Stop()
 		for {
@@ -182,9 +183,11 @@ func (o *Outbox) Run(ctx context.Context) {
 				cancel()
 			}
 		}
-	}()
+	})
 	for worker := 0; worker < maximum; worker++ {
-		go func(index int) {
+		lifecycle.Go(ctx, func() {
+			index := worker
+
 			for {
 				delay := 10 * time.Millisecond
 				if o.pending.Load() == 0 || index >= int(o.active.Load()) {
@@ -204,7 +207,7 @@ func (o *Outbox) Run(ctx context.Context) {
 				o.process(jobCtx)
 				cancel()
 			}
-		}(worker)
+		})
 	}
 }
 func workerTarget(pending int64, maximum int) int { return min(maximum, max(1, int((pending+24)/25))) }

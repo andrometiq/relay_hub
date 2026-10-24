@@ -181,8 +181,8 @@ async function copyCallback() {
 
       <template v-else-if="section === 'features'">
         <div class="setup-pane-heading"><div><h4>WhatsApp business features</h4><p>Choose which Meta resources Relay should manage for this channel.</p></div></div>
-        <FormControl label="Messages per second" type="number" disabled :model-value="config?.messages_per_second ?? 0" @update:model-value="updateConfig({ messages_per_second: Number($event) })" />
-        <p class="text-sm text-ink-gray-6 my-2">The account send rate is read-only: this Hub build does not load saved pacing into its runtime. Runtime defaults and provider limits apply. One-to-one messages and approved templates are supported.</p>
+        <FormControl label="Messages per second" type="number" :model-value="config?.messages_per_second ?? 0" @update:model-value="updateConfig({ messages_per_second: Number($event) })" />
+        <p class="text-sm text-ink-gray-6 my-2">Set 1–1000 messages per second, or 0 for the default of 50. Provider limits also apply. One-to-one messages and approved templates are supported.</p>
         <ErrorMessage :message="errors.messages_per_second" />
         <div class="feature-options">
           <div><span class="feature-options__icon"><FeatherIcon name="file-text" /></span><span><strong>Message templates</strong><small>Create, sync and use approved Meta templates.</small></span><FormControl type="checkbox" aria-label="Manage message templates" :model-value="!!config?.templates" @update:model-value="updateConfig({ templates: $event })" /></div>

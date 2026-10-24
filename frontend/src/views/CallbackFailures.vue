@@ -2,7 +2,8 @@
 import { onMounted, ref } from 'vue';
 import { Badge, Button, Dialog, ErrorMessage, FormControl } from '@relay/ui';
 import { hubApi } from '../services/hubApi';
-const props = defineProps({ account: String });
+import { usePendingRefresh } from '../composables/usePendingRefresh';
+const props = defineProps({ account: String, channel: { type: String, default: "WhatsApp" } });
 const emit = defineEmits(['changed']);
 const items = ref([]), more = ref(false), busy = ref(false), error = ref('');
 const selected = ref(null), action = ref('replay'), note = ref('');
@@ -10,7 +11,7 @@ async function load(append = false) {
   if (busy.value) return;
   busy.value = true; error.value = '';
   try {
-    const data = await hubApi('callback-failures?' + new URLSearchParams({ account: props.account, channel: 'WhatsApp', ...(append ? { before: items.value.at(-1).id } : {}) }));
+    const data = await hubApi('callback-failures?' + new URLSearchParams({ account: props.account, channel: props.channel, ...(append ? { before: items.value.at(-1).id } : {}) }));
     items.value = append ? [...items.value, ...data.items] : data.items || [];
     more.value = !!data.more;
   } catch (e) { error.value = e.message; } finally { busy.value = false; }
@@ -20,12 +21,12 @@ async function recover() {
   if (busy.value) return;
   busy.value = true; error.value = '';
   try {
-    await hubApi('callback-failures/retry', { account: props.account, channel: 'WhatsApp', id: String(selected.value.id), lane: selected.value.lane, action: action.value, note: note.value });
+    await hubApi('callback-failures/retry', { account: props.account, channel: props.channel, id: String(selected.value.id), lane: selected.value.lane, action: action.value, note: note.value });
     selected.value = null; busy.value = false; await load(); emit('changed');
   } catch (e) { error.value = e.message; } finally { busy.value = false; }
 }
 onMounted(load);
-defineExpose({ refresh: load });
+defineExpose({ refresh: usePendingRefresh(busy, load) });
 </script>
 <template>
   <section class="mt-6" aria-label="Callback failures">
@@ -41,7 +42,7 @@ defineExpose({ refresh: load });
       <template #body-content><div v-if="selected" class="space-y-4">
         <dl class="entity-details"><div><dt>Event / lane</dt><dd>#{{ selected.id }} / {{ selected.lane }}</dd></div><div><dt>Failure</dt><dd>{{ selected.reason }}</dd></div><div><dt>Failures</dt><dd>{{ selected.failures }}</dd></div><div><dt>Next attempt</dt><dd>{{ selected.next_attempt || 'Not scheduled' }}</dd></div><div><dt>Updated</dt><dd>{{ selected.created_at }}</dd></div></dl>
         <FormControl v-model="action" type="select" label="Recovery action" :options="[{ label: 'Replay callback to Core', value: 'replay' }, { label: 'Quarantine callback', value: 'quarantine' }]" />
-        <p class="text-sm text-ink-gray-6">Replay schedules this event for Core again; it does not resend the WhatsApp message. Quarantine pauses this callback for review. Record the reason before confirming.</p>
+        <p class="text-sm text-ink-gray-6">Replay schedules this event for Core again; it does not resend the {{ channel }} message. Quarantine pauses this callback for review. Record the reason before confirming.</p>
         <FormControl v-model="note" type="textarea" label="Recovery reason" />
         <ErrorMessage :message="error" />
       </div></template>

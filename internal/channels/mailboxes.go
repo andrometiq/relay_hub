@@ -7,6 +7,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
 	"github.com/andrometiq/relay_hub/internal/deliverypolicy"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
@@ -33,19 +34,21 @@ func NewMailboxPool(ctx context.Context, config *pgxpool.Config) (*pgxpool.Pool,
 }
 
 func (p MailboxPoller) Run(ctx context.Context) {
-	go p.run(ctx, time.Second, func() map[string]MailboxReader {
-		readers := map[string]MailboxReader{}
-		for account, client := range p.Registry.snapshot().email {
-			if client.MailboxConfigured() {
-				readers[account] = client
+	lifecycle.Go(ctx, func() {
+		p.run(ctx, time.Second, func() map[string]MailboxReader {
+			readers := map[string]MailboxReader{}
+			for account, client := range p.Registry.snapshot().email {
+				if client.MailboxConfigured() {
+					readers[account] = client
+				}
 			}
-		}
-		return readers
+			return readers
+		})
 	})
 }
 func (p MailboxPoller) run(ctx context.Context, interval time.Duration, readers func() map[string]MailboxReader) {
 	wake := make(chan struct{}, 1)
-	go p.watchMailboxes(ctx, interval, readers, wake)
+	lifecycle.Go(ctx, func() { p.watchMailboxes(ctx, interval, readers, wake) })
 	callbackworker.RunWithWake(ctx, interval, 8, func() []callbackworker.Job {
 		jobs := []callbackworker.Job{}
 		for account, client := range readers() {
@@ -162,7 +165,7 @@ func saveMailboxMessage(ctx context.Context, tx pgx.Tx, account, key string, val
 	if err != nil {
 		return err
 	}
-	inserted, err := tx.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,sender,recipient,subject,body,payload) VALUES($1,'Email','inbound',$2,$3,$4,$5,$6,$7) ON CONFLICT(channel,account,provider_id) DO NOTHING`, account, providerID, message.From, strings.Join(message.To, ","), message.Subject, message.Body, payload)
+	inserted, err := tx.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,sender,recipient,subject,body,payload,receipt) VALUES($1,'Email','inbound',$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(channel,account,provider_id) DO NOTHING`, account, providerID, message.From, strings.Join(message.To, ","), message.Subject, message.Body, payload, len(message.DeliveryStatuses) > 0)
 	if err != nil {
 		return err
 	}
@@ -270,7 +273,7 @@ func (p MailboxPoller) watchMailboxes(ctx context.Context, interval time.Duratio
 			}
 			watchCtx, cancel := context.WithCancel(ctx)
 			running[account] = active{reader, cancel}
-			go func() {
+			lifecycle.Go(ctx, func() {
 				failures := 0
 				for watchCtx.Err() == nil {
 					err := client.WatchMailbox(watchCtx, func() {
@@ -296,7 +299,7 @@ func (p MailboxPoller) watchMailboxes(ctx context.Context, interval time.Duratio
 					case <-timer.C:
 					}
 				}
-			}()
+			})
 		}
 		select {
 		case <-ctx.Done():
