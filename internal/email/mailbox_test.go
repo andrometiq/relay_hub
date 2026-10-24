@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
@@ -219,4 +220,52 @@ func (s *interruptedMailboxSession) Fetch(w *imapserver.FetchWriter, nums imap.N
 	_, _ = literal.Write(make([]byte, 4096))
 	_ = s.conn.NetConn().Close()
 	return io.ErrUnexpectedEOF
+}
+
+func TestMailboxWatchBoundedRecheckWithAndWithoutIDLE(t *testing.T) {
+	for _, idle := range []bool{false, true} {
+		t.Run(fmt.Sprint(idle), func(t *testing.T) {
+			certificate, roots := smtpCertificate(t, false)
+			memory := imapmemserver.New()
+			user := imapmemserver.NewUser("fixture", "synthetic-password")
+			memory.AddUser(user)
+			if err := user.Create("INBOX", nil); err != nil {
+				t.Fatal(err)
+			}
+			caps := imap.CapSet{imap.CapIMAP4rev1: {}}
+			if idle {
+				caps[imap.CapIdle] = struct{}{}
+			}
+			server := imapserver.New(&imapserver.Options{Caps: caps, NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+				return memory.NewSession(), nil, nil
+			}})
+			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
+			if err != nil {
+				t.Fatal(err)
+			}
+			go server.Serve(listener)
+			defer server.Close()
+			client, err := New(Config{AccountID: "fixture", Host: "smtp.invalid", Port: 587, From: "sender@example.invalid", Enabled: true, IMAPHost: "127.0.0.1", IMAPPort: 993, IMAPUsername: "fixture", IMAPPassword: "synthetic-password"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.tlsRoots = roots
+			client.dialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, listener.Addr().String())
+			}
+			notifications := 0
+			for range 2 {
+				started := time.Now()
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				err := client.watchMailbox(ctx, func() { notifications++ }, 30*time.Millisecond)
+				cancel()
+				if err != nil || time.Since(started) >= time.Second {
+					t.Fatal("fallback did not reconnect cleanly", err)
+				}
+			}
+			if notifications < 2 {
+				t.Fatal("missing bounded mailbox re-check", notifications)
+			}
+		})
+	}
 }

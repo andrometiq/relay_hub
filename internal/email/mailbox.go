@@ -143,6 +143,10 @@ func (c *Client) MailboxKey() string {
 }
 
 func (c *Client) connectMailbox(ctx context.Context) (*imapclient.Client, *imap.SelectData, func(), error) {
+	return c.connectMailboxUpdates(ctx, nil)
+}
+
+func (c *Client) connectMailboxUpdates(ctx context.Context, updates *imapclient.UnilateralDataHandler) (*imapclient.Client, *imap.SelectData, func(), error) {
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 
 	cleanup := func() { cancel() }
@@ -161,7 +165,7 @@ func (c *Client) connectMailbox(ctx context.Context) (*imapclient.Client, *imap.
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	cleanup = func() { stop(); conn.Close(); cancel() }
 
-	options := &imapclient.Options{TLSConfig: &tls.Config{ServerName: c.cfg.IMAPHost, MinVersion: tls.VersionTLS12, RootCAs: c.tlsRoots}}
+	options := &imapclient.Options{UnilateralDataHandler: updates, TLSConfig: &tls.Config{ServerName: c.cfg.IMAPHost, MinVersion: tls.VersionTLS12, RootCAs: c.tlsRoots}}
 	var client *imapclient.Client
 	if c.cfg.IMAPPort == 143 {
 		client, err = imapclient.NewStartTLS(conn, options)
@@ -193,4 +197,59 @@ func (c *Client) TestMailbox(ctx context.Context) error {
 	_, _, closeConnection, err := c.connectMailbox(ctx)
 	defer closeConnection()
 	return err
+}
+
+// WatchMailbox holds no database connection or fetch worker while waiting for
+// EXISTS. Reopening every 30 seconds bounds missed notifications and supports
+// servers without IDLE; ingestion still uses the durable UID/UIDVALIDITY cursor.
+func (c *Client) WatchMailbox(ctx context.Context, notify func()) error {
+	return c.watchMailbox(ctx, notify, 30*time.Second)
+}
+
+func (c *Client) watchMailbox(ctx context.Context, notify func(), recheck time.Duration) error {
+	updates := make(chan struct{}, 1)
+	client, _, closeConnection, err := c.connectMailboxUpdates(ctx, &imapclient.UnilateralDataHandler{
+		Mailbox: func(data *imapclient.UnilateralDataMailbox) {
+			if data.NumMessages != nil {
+				select {
+				case updates <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	defer closeConnection()
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	// Close the gap between the last fetch and EXAMINE, even without an EXISTS.
+	notify()
+	timer := time.NewTimer(recheck)
+	defer timer.Stop()
+	if !client.Caps().Has(imap.CapIdle) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	}
+	idle, err := client.Idle()
+	if err != nil {
+		return err
+	}
+	defer idle.Close()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-client.Closed():
+			return errors.New("mailbox IDLE disconnected")
+		case <-timer.C:
+			return nil
+		case <-updates:
+			notify()
+		}
+	}
 }

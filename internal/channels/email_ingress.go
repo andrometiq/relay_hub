@@ -42,7 +42,10 @@ func (s Store) SaveEmail(ctx context.Context, event Event, statuses []relayemail
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err == nil {
+		WakeCallbacks(s.Wake)
+	}
+	return err
 }
 
 func saveEmailAttachments(ctx context.Context, tx pgx.Tx, account, providerID string, files []relayemail.Attachment) ([]map[string]any, error) {

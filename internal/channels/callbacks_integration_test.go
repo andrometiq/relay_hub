@@ -322,3 +322,32 @@ func TestChannelCallbacksCommitOrderRestartAndIsolation(t *testing.T) {
 	}
 
 }
+
+func TestIngressWakeIsCommittedAndFailureDoesNotWake(t *testing.T) {
+	pool, _ := channelTestDB(t)
+	wake := make(chan struct{}, 1)
+	store := Store{DB: pool, Wake: wake}
+	event := Event{Account: "wake", Channel: "Telegram", Direction: "inbound", ProviderID: "1", Sender: "42", Body: "Amount 125.50", OccurredAt: time.Now(), Payload: json.RawMessage(`{}`)}
+	if err := store.Save(t.Context(), event); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-wake:
+	default:
+		t.Fatal("committed inbound did not wake")
+	}
+	var count int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM relay_channel_callback_delivery`).Scan(&count); err != nil || count != 1 {
+		t.Fatal("wake preceded durable delivery", count, err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := store.Save(cancelled, event); err == nil {
+		t.Fatal("expected failed write")
+	}
+	select {
+	case <-wake:
+		t.Fatal("failed write woke dispatcher")
+	default:
+	}
+}

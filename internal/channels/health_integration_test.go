@@ -110,14 +110,14 @@ func TestHealthUsesHubReceptionForTelegramEdits(t *testing.T) {
 	ctx := t.Context()
 	message := []byte(`{"update_id":1,"message":{"message_id":7,"date":946684800,"chat":{"id":42},"text":"Original"}}`)
 	edit := []byte(`{"update_id":2,"edited_message":{"message_id":7,"date":946684800,"edit_date":1790000000,"chat":{"id":42},"text":"Edited"}}`)
-	if err = r.TelegramWebhook(ctx, Store{db}, "local-edit", master, []byte(secret), message); err != nil {
+	if err = r.TelegramWebhook(ctx, Store{DB: db}, "local-edit", master, []byte(secret), message); err != nil {
 		t.Fatal(err)
 	}
 	first, err := AccountHealth(ctx, db, "local-edit", "Telegram")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = r.TelegramWebhook(ctx, Store{db}, "local-edit", master, []byte(secret), edit); err != nil {
+	if err = r.TelegramWebhook(ctx, Store{DB: db}, "local-edit", master, []byte(secret), edit); err != nil {
 		t.Fatal(err)
 	}
 	after, err := AccountHealth(ctx, db, "local-edit", "Telegram")
@@ -131,7 +131,7 @@ func TestHealthUsesHubReceptionForTelegramEdits(t *testing.T) {
 	if err = db.QueryRow(ctx, `SELECT bool_and(occurred_at=to_timestamp(946684800) AND received_at>now()-interval '1 minute') FROM relay_channel_events WHERE account='local-edit'`).Scan(&current); err != nil || !current {
 		t.Fatal("provider and reception timestamps not preserved", err)
 	}
-	if err = r.TelegramWebhook(ctx, Store{db}, "local-edit", master, []byte(secret), edit); err != nil {
+	if err = r.TelegramWebhook(ctx, Store{DB: db}, "local-edit", master, []byte(secret), edit); err != nil {
 		t.Fatal(err)
 	}
 	duplicate, err := AccountHealth(ctx, db, "local-edit", "Telegram")

@@ -61,7 +61,7 @@ func (s *simulation) channelWebhook(channel string) http.HandlerFunc {
 			http.Error(w, "invalid body", 400)
 			return
 		}
-		store := channels.Store{DB: s.db}
+		store := channels.Store{DB: s.db, Wake: s.channelWake}
 		if channel == "telegram" {
 			err = s.registry.TelegramWebhook(r.Context(), store, r.PathValue("account"), s.token, []byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), raw)
 		} else {

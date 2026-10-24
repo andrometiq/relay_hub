@@ -68,6 +68,7 @@ type simulation struct {
 	credentialKey string
 	registry      *channels.Registry
 	callbacks     *channels.CallbackDispatcher
+	channelWake   chan struct{}
 	telegram      *fakeTelegram
 	email         *fakeEmail
 }
@@ -403,7 +404,8 @@ func runSimulation(validateDatabase func(string) error) error {
 	if err != nil {
 		return err
 	}
-	handler, err := hubmcp.NewAuthenticatedChannels(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool})
+	channelWake := make(chan struct{}, 1)
+	handler, err := hubmcp.NewAuthenticatedChannels(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake})
 	if err != nil {
 		return err
 	}
@@ -423,7 +425,7 @@ func runSimulation(validateDatabase func(string) error) error {
 		writeJSON(w, map[string]bool{"ready": true})
 	})
 	fake := &fakeMeta{records: records, pageSize: 1}
-	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, callbacks: &channels.CallbackDispatcher{URL: dsn}}
+	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, channelWake: channelWake, callbacks: &channels.CallbackDispatcher{URL: dsn, Wake: channelWake}}
 	sim.callbacks.Run(ctx, nil)
 	mux.HandleFunc("POST /webhooks/telegram/{account}", sim.channelWebhook("telegram"))
 	mux.HandleFunc("POST /webhooks/email/{account}", sim.channelWebhook("email"))
@@ -467,7 +469,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	}
 	defer mailboxPool.Close()
 	channels.Outbox{DB: pool, Registry: registry}.Run(ctx)
-	channels.MailboxPoller{DB: mailboxPool, Registry: registry}.Run(ctx)
+	channels.MailboxPoller{DB: mailboxPool, Registry: registry, Wake: channelWake}.Run(ctx)
 	wa.Outbox.Run(ctx)
 	(&whatsapp.CallbackDispatcher{URL: dsn, Service: wa}).Run(ctx)
 	fmt.Println("relay-sim ready (loopback only)")
