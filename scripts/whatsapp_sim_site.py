@@ -126,9 +126,14 @@ def main():
 
     def user(label, roles, run):
         key, secret = frappe.generate_hash(length=20), frappe.generate_hash(length=32)
-        doc = insert('User', email=f'relay-sim-{label}-{run}@example.invalid', first_name=f'Local simulation {label}',
-                     enabled=1, user_type='System User', send_welcome_email=0,
-                     roles=[{'role': role} for role in roles], api_key=key, api_secret=secret)
+        # Repeated local runs exceed Frappe's hourly user-creation throttle.
+        frappe.flags.in_import = True
+        try:
+            doc = insert('User', email=f'relay-sim-{label}-{run}@example.invalid', first_name=f'Local simulation {label}',
+                         enabled=1, user_type='System User', send_welcome_email=0,
+                         roles=[{'role': role} for role in roles], api_key=key, api_secret=secret)
+        finally:
+            frappe.flags.in_import = False
         return {'name': doc.name, 'api_key': key, 'api_secret': secret}
 
     def seed_messages(group, run, count):
