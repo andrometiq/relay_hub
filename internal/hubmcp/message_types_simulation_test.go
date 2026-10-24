@@ -19,6 +19,7 @@ import (
 
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
+	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 )
@@ -134,6 +135,21 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 	wa.Events = whatsapp.PostgresEvents{URL: dsn}
+	wa.Outbox, err = whatsapp.NewOutbox(ctx, dsn, wa, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wa.Outbox.Close()
+	workerCtx, workers := lifecycle.WithWorkers(ctx)
+	wa.Outbox.Run(workerCtx)
+	defer func() {
+		cancel()
+		drain, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if err := workers.Wait(drain); err != nil {
+			t.Error(err)
+		}
+	}()
 	channelStore := channels.Store{DB: db}
 	if err = channelStore.Save(ctx, channels.Event{Account: "types-a", Channel: "Telegram", Direction: "inbound", ProviderID: "1", Sender: "-1001", OccurredAt: time.Now(), Payload: json.RawMessage(`{"message":{"sticker":{"file_id":"received_sticker"}}}`)}); err != nil {
 		t.Fatal(err)
@@ -198,7 +214,7 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 		}
 	})
 	t.Run("WhatsApp-location-contact-and-reaction-replies", func(t *testing.T) {
-		for _, args := range []map[string]any{
+		for index, args := range []map[string]any{
 			{"operation": "messages.location", "location": map[string]any{"latitude": 12.97, "longitude": 77.59, "name": "Office", "address": "Bengaluru"}},
 			{"operation": "messages.contacts", "contacts": []any{map[string]any{"name": map[string]any{"formatted_name": "சக்தி", "first_name": "சக்தி"}, "phones": []any{map[string]any{"phone": "+919999999999"}}}}},
 			{"operation": "messages.react", "emoji": "👍"},
@@ -207,6 +223,8 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 			args["to"] = "919999999999"
 			args["reply_to"] = "wamid.original"
 			call(read, "whatsapp.execute", args, true)
+			call(send, "whatsapp.execute", args, true)
+			args["request_key"] = fmt.Sprintf("typed-%d", index)
 			call(send, "whatsapp.execute", args, false)
 		}
 		mu.Lock()

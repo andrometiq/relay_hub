@@ -60,7 +60,7 @@ Scopes authorize Hub account operations; they do not grant access to Frappe busi
 
 ## WhatsApp messages
 
-Use the durable outbox for delivery intents. `key` is a caller-generated stable request key: an identical submission returns its existing intent; the same key with different content is rejected. Acceptance means queued, not delivered or read. Batches are atomic and bounded to 50 items. `whatsapp.execute` performs direct operations and does not provide this queue's deduplication guarantee.
+Use the durable outbox for delivery intents. `key` is a caller-generated stable request key: an identical submission returns its existing intent; the same key with different content is rejected. Acceptance means queued, not delivered or read. Batches are atomic and bounded to 50 items. `whatsapp.execute` requires `request_key` for sends and routes them through the durable outbox. Read and management operations can execute directly.
 
 The following is the `arguments` object for `whatsapp.send`:
 
@@ -231,3 +231,5 @@ The MCP tool `account.get` takes an empty argument object and requires
 `account:read`. It returns `{account, site, enabled}` for the token's granted
 account. Disabled/missing accounts are rejected; no credential values are returned.
 Core uses this tool to verify connection settings before saving them.
+
+Telegram/email delivery reads require both `deliveries:read` and `messages:read`, since stored provider results can contain message text and replies. Cancellation additionally requires `deliveries:cancel`. Resolution requires `deliveries:read` and `deliveries:cancel`. Message-only tokens no longer authorize delivery administration. `channels.resolve` requires `provider_id` for accepted messages and `chat_id` for accepted Telegram messages. Rejections require neither provider field.
