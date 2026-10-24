@@ -5,6 +5,23 @@ import sys
 from simulation_fixtures import confine_writes, fixture_user
 
 
+def snapshot(frappe, fixture):
+    """Bound payload inspection by the indexed channel event identity."""
+    frappe.db.rollback()
+    return dict(events=frappe.get_all('Relay Hub Event', filters={'account':'sim-v1',
+        'event_key':['like', 'sim-v1:'+fixture['medium']+':%']},
+        or_filters=[['payload','like','%'+fixture['endpoint']+'%'],
+                    ['payload','like','%'+fixture['shared_endpoints'][fixture['medium']]+'%']],
+        fields=['name','hub_event_id','projection_status','routing_decisions'], limit_page_length=100),
+        messages=frappe.get_all('Relay Message', filters={'relay_contact':['in',[fixture['contact'],fixture['shared_contact']]]},
+        fields=['name','provider_id','provider_context','message_data','content','direction','status','business_doctype','business_name','channel','relay_contact'], limit_page_length=0),
+        routing=frappe.get_all('Relay Business Routing', filters={'relay_contact':['in',[fixture['contact'],fixture['shared_contact']]]},
+            fields=['name','choices','rule','prompt_action','prompt_message_id','business_doctype','business_name','conversation_key','relay_contact']),
+        actions=frappe.get_all('Relay Message Action', or_filters={'start_contact':['in',[fixture['contact'],fixture['shared_contact']]],
+                        'owner':['in',[fixture['operator']['name'],fixture['service']['name']]]},
+            fields=['name','status','operation','outbound_message','owner']))
+
+
 def main():
     site, sites = sys.argv[1:3]
     assert site == 'yrp.site', 'Only yrp.site is approved for connected fixtures'
@@ -107,18 +124,7 @@ def main():
                 previous_settings.clear()
             return True
         if action == 'snapshot':
-            frappe.db.rollback()
-            return dict(events=frappe.get_all('Relay Hub Event', filters={'account':'sim-v1'},
-                or_filters=[['payload','like','%'+fixture['endpoint']+'%'],
-                            ['payload','like','%'+fixture['shared_endpoints'][fixture['medium']]+'%']],
-                fields=['name','hub_event_id','projection_status','routing_decisions'], limit_page_length=100),
-                messages=frappe.get_all('Relay Message', filters={'relay_contact':['in',[fixture['contact'],fixture['shared_contact']]]},
-                fields=['name','provider_id','provider_context','message_data','content','direction','status','business_doctype','business_name','channel','relay_contact'], limit_page_length=0),
-                routing=frappe.get_all('Relay Business Routing', filters={'relay_contact':['in',[fixture['contact'],fixture['shared_contact']]]},
-                    fields=['name','choices','rule','prompt_action','prompt_message_id','business_doctype','business_name','conversation_key','relay_contact']),
-                actions=frappe.get_all('Relay Message Action', or_filters={'start_contact':['in',[fixture['contact'],fixture['shared_contact']]],
-                                'owner':['in',[fixture['operator']['name'],fixture['service']['name']]]},
-                    fields=['name','status','operation','outbound_message','owner']))
+            return snapshot(frappe, fixture)
         raise ValueError('Unknown fixture action')
 
     try:

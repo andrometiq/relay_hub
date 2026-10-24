@@ -9,6 +9,23 @@ from simulation_fixtures import fixture_user
 
 
 class TelegramDriverTests(unittest.TestCase):
+    def test_snapshot_bounds_payload_scan_by_indexed_channel_identity(self):
+        from channel_sim_site import snapshot
+        for medium in ('Telegram', 'Email'):
+            with self.subTest(medium=medium):
+                frappe = Mock()
+                frappe.get_all.return_value = []
+                fixture = dict(medium=medium, endpoint='one', contact='contact', shared_contact='shared',
+                    shared_endpoints={medium:'two'}, operator={'name':'operator'}, service={'name':'service'})
+                self.assertEqual(snapshot(frappe, fixture), dict(events=[], messages=[], routing=[], actions=[]))
+                frappe.db.rollback.assert_called_once()
+                query = frappe.get_all.call_args_list[0]
+                self.assertEqual(query.args, ('Relay Hub Event',))
+                self.assertEqual(query.kwargs['filters'], dict(account='sim-v1',
+                    event_key=['like', 'sim-v1:'+medium+':%']))
+                self.assertEqual(query.kwargs['or_filters'], [
+                    ['payload','like','%one%'], ['payload','like','%two%']])
+
     def test_database_guard_excludes_existing_simulation_and_production(self):
         validate_test_database('postgresql://user:secret@127.0.0.1:18433/relay_hub_v1_test')
         for dsn in ['postgresql://127.0.0.1:18433/'+db for db in ('channel_hub','relay_hub_sim','postgres')]+[
@@ -48,11 +65,14 @@ class TelegramDriverTests(unittest.TestCase):
         runner.realtime=Mock()
         runner.realtime.wait.side_effect=lambda *args: (calls.append('event') or {'monotonic_ns':20})
         runner.snapshot=Mock(side_effect=lambda: (calls.append('read') or {'ready':True}))
-        with patch('channel_simulation.time.monotonic_ns',side_effect=[10,20]):
+        with patch('channel_simulation.time.monotonic_ns',side_effect=[10,40]):
             result=runner.observe(lambda:calls.append('emit'),lambda s:s['ready'])
         self.assertTrue(result)
         self.assertEqual(calls,['emit','event','read'])
-        self.assertEqual(runner.report['latencies_ms'],[.00001])
+        self.assertEqual(runner.report['latencies_ms'],[.00003])
+        sample = runner.report['latency_samples'][0]
+        self.assertEqual(sample['realtime_ms'], .00001)
+        self.assertAlmostEqual(sample['snapshot_ms'], .00002)
 
     def test_realtime_timeout_never_falls_back_to_snapshot_polling(self):
         runner=object.__new__(ChannelRunner)
