@@ -41,13 +41,12 @@ class Acceptance:
         install_samples()
         sample = f.get_doc('Relay AI Skill', {'sample_key': 'supplier_ledger'})
         # Channel-specific fixture copies preserve the installed sample's scope.
-        skill = sample if medium == 'WhatsApp' else f.copy_doc(sample)
-        if medium != 'WhatsApp':
-            skill.sample_key = None
-            skill.title = f'Local simulation {medium} supplier ledger {run}'
-            skill.channel = fixture['channel']
-            skill.enabled = 0
-            skill.insert(ignore_permissions=True)
+        skill = f.copy_doc(sample)
+        skill.sample_key = None
+        skill.title = f'Local simulation {medium} supplier ledger {run}'
+        skill.channel = fixture['channel']
+        skill.enabled = 0
+        skill.insert(ignore_permissions=True)
         assert json.loads(skill.allowed_tools) == [LEDGER_TOOL], 'Sample read tools were customized; review before simulation'
         assert not skill.channel or skill.channel == fixture['channel'], 'Sample belongs to another channel'
         assert not f.get_all('Relay AI Skill', filters={'channel': fixture['channel'], 'business_doctype': 'Supplier',
