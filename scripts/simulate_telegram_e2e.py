@@ -116,10 +116,17 @@ class TelegramRunner(ChannelRunner):
             choices=json.loads(routing['choices'])
             assert {c['doctype'] for c in choices}=={'Customer','Supplier'}
             evidence.update(prompt_action=routing['prompt_action'],person=self.fixture['shared_person'])
-            self.wait_provider(lambda s:any('Which business' in m['request'].get('text','') for m in s.get('messages') or []),timeout=10)
+            prompts=self.wait_provider(lambda s:any('Which business' in m['request'].get('text','') for m in s.get('messages') or []),timeout=10)
+            prompt=next(m['request']['text'] for m in prompts['messages'] if 'Which business' in m['request'].get('text',''))
+            assert 'relay-business:' not in prompt
+            assert not routing['business_doctype'] and not routing['business_name'], 'Business was guessed before sender choice'
+            for number, item in enumerate(choices, 1):
+                assert f"{number}. {item['doctype']}: {item['title']}" in prompt
             choice=next(c for c in choices if c['doctype']=='Supplier')
-            chosen=self.message(choice['id'],lambda:self.emit(update(shared,identifier+11,choice['id'])))
+            answer=str(choices.index(choice)+1)
+            chosen=self.message('Chose: Supplier — '+choice['title'],lambda:self.emit(update(shared,identifier+11,answer)))
             assert chosen['business_name']==self.fixture['supplier']
+            assert 'relay-business:' not in chosen['content']
 
         with self.step('single_inbound_latency', continue_on_error=True) as evidence:
             evidence.update(self.latency_acceptance())
