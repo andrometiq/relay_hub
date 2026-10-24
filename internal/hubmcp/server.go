@@ -190,6 +190,9 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if !allowed(ctx, operationScope(input.Operation)) || input.Operation == "account.metadata" && !allowed(ctx, "account:read") {
 				return nil, nil, errors.New("token scope does not permit operation")
 			}
+			if operationScope(input.Operation) == "messages:send" && input.RequestKey == "" {
+				return nil, nil, errors.New("request_key required for sends")
+			}
 			if input.RequestKey != "" {
 				if wa.Outbox == nil {
 					return nil, nil, errors.New("durable delivery unavailable")
@@ -469,8 +472,8 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				CancelID   int64  `json:"cancel_id,omitempty"`
 			}) (*mcp.CallToolResult, map[string]any, error) {
 				p, ok := ctx.Value(principalKey{}).(auth.Principal)
-				if !ok || !allowed(ctx, "messages:read") {
-					return nil, nil, errors.New("messages:read required")
+				if !ok || !allowed(ctx, "deliveries:read") || !allowed(ctx, "messages:read") {
+					return nil, nil, errors.New("deliveries:read and messages:read required")
 				}
 				queue := channels.Outbox{DB: mediaStore.DB, Registry: registry}
 				if in.RequestKey != "" {
@@ -488,8 +491,8 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 					return nil, map[string]any{"deliveries": rows}, nil
 				}
 				if in.CancelID > 0 {
-					if !allowed(ctx, "messages:send") {
-						return nil, nil, errors.New("messages:send required")
+					if !allowed(ctx, "deliveries:cancel") {
+						return nil, nil, errors.New("deliveries:cancel required")
 					}
 					if err := queue.Cancel(ctx, p.Account, in.CancelID); err != nil {
 						return nil, nil, err
@@ -506,16 +509,18 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				return nil, map[string]any{"deliveries": rows, "more": more}, nil
 			})
 			mcp.AddTool(server, &mcp.Tool{Name: "channels.resolve", Description: "Record an externally verified outcome for an uncertain delivery; never resends."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
-				ID      int64  `json:"id"`
-				Outcome string `json:"outcome"`
-				Note    string `json:"note"`
+				ID         int64  `json:"id"`
+				Outcome    string `json:"outcome"`
+				Note       string `json:"note"`
+				ProviderID string `json:"provider_id,omitempty"`
+				ChatID     int64  `json:"chat_id,omitempty"`
 			}) (*mcp.CallToolResult, map[string]any, error) {
 				p, ok := ctx.Value(principalKey{}).(auth.Principal)
-				if !ok || !allowed(ctx, "messages:send") || !allowed(ctx, "messages:read") {
-					return nil, nil, errors.New("messages:read and messages:send required")
+				if !ok || !allowed(ctx, "deliveries:cancel") || !allowed(ctx, "deliveries:read") {
+					return nil, nil, errors.New("deliveries:read and deliveries:cancel required")
 				}
 				queue := channels.Outbox{DB: mediaStore.DB, Registry: registry}
-				if err := queue.Resolve(ctx, p.Account, in.ID, in.Outcome, in.Note); err != nil {
+				if err := queue.Resolve(ctx, p.Account, in.ID, in.Outcome, in.Note, channels.Resolution{ProviderID: in.ProviderID, ChatID: in.ChatID}); err != nil {
 					return nil, nil, err
 				}
 				return nil, map[string]any{"resolved": true}, nil
