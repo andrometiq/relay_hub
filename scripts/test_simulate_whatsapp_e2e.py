@@ -397,7 +397,7 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
             runner.binary, runner.db_env = Path('/tmp/relay-sim-test'), {}
-            with patch.object(sim.subprocess, 'Popen') as popen, patch.object(sim, 'request', return_value={'ready': True}):
+            with patch.object(sim.subprocess, 'Popen') as popen, patch('simulation_common.request', return_value={'ready': True}):
                 popen.return_value.poll.return_value = None
                 runner.start(resume=True)
                 command = popen.call_args.args[0]
