@@ -2,7 +2,7 @@
 """Real TLS SMTP/IMAP and authenticated email ingress through Hub and Core."""
 from email import policy
 from email.message import EmailMessage
-from email.parser import Parser
+from email.parser import BytesParser
 import json
 import sys
 import time
@@ -25,7 +25,7 @@ def mail(sender, identifier, body, *, parent=None, references=(), cc=None):
 def parsed_sent(state, body):
     found=[]
     for row in state.get('sent') or []:
-        parsed=Parser(policy=policy.default).parsestr(row['raw'])
+        parsed=BytesParser(policy=policy.default).parsebytes(row['raw'].encode('utf-8'))
         part=parsed.get_body(preferencelist=('plain',))
         if part and part.get_content().strip()==body:
             found.append((row,parsed))
