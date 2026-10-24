@@ -153,7 +153,7 @@ def main():
         action = req['action']
         if action.startswith('acceptance_'):
             method = action.removeprefix('acceptance_')
-            assert method in {'seed_ai', 'set_ai_identity', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable', 'diagnostics'}
+            assert method in {'seed_ai', 'set_ai_identity', 'check_identity', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable', 'diagnostics'}
             return getattr(acceptance, method)(**{key: value for key, value in req.items() if key != 'action'})
         if action == 'preflight':
             assert frappe.conf.developer_mode, 'Target must be a development site'

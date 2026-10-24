@@ -103,10 +103,10 @@ class AIIdentityAcceptanceTests(unittest.TestCase):
     def runner(self, tool_result):
         runner = SimulationRunner()
         runner.site = Mock()
-        runner.core = Mock(return_value={'handoff': True, 'reply': '', 'mode': 'Shadow'})
+        runner.site.call.return_value = {'handoff': True, 'reply': '', 'reads': []}
         runner.control = Mock(side_effect=[{'records': []}, {'records': [
             {'kind': 'ai', 'status': 200, 'response': {'choices': [{'message': {'tool_calls': [
-                {'function': {'name': 'supplier_ledger'}}]}}]}},
+                {'function': {'name': 'SEARCH', 'arguments': json.dumps({'reference': 'supplier_ledger'})}}]}}]}},
             {'kind': 'ai', 'status': 200, 'body': {'messages': [
                 {'role': 'tool', 'content': json.dumps(tool_result)}]}}]}])
         return runner
@@ -114,20 +114,20 @@ class AIIdentityAcceptanceTests(unittest.TestCase):
     def test_rejected_read_reaches_model_without_ledger_data(self):
         runner = self.runner({'error': 'Business data is unavailable'})
         self.assertTrue(runner.assert_identity_mismatch({'skill': 'sim-skill'}, 'sim-message'))
-        runner.core.assert_called_once_with('relay_core.ai.configuration.test_skill',
-            {'name': 'sim-skill', 'message': 'sim-message'})
         self.assertEqual(runner.site.call.call_args_list, [
-            call('acceptance_set_ai_identity', matched=False), call('acceptance_set_ai_identity', matched=True)])
+            call('acceptance_set_ai_identity', matched=False),
+            call('acceptance_check_identity', message='sim-message'),
+            call('acceptance_set_ai_identity', matched=True)])
 
     def test_rejects_tool_data_even_if_api_reports_handoff(self):
         runner = self.runner({'rows': [{'remarks': 'SIM-OWN-DEBIT'}]})
         with self.assertRaisesRegex(AssertionError, 'exposed a ledger tool result'):
             runner.assert_identity_mismatch({'skill': 'sim-skill'}, 'sim-message')
 
-    def test_restores_identity_when_preview_fails(self):
+    def test_restores_identity_when_confirmed_search_check_fails(self):
         runner = self.runner({})
-        runner.core.side_effect = RuntimeError('Preview unavailable')
-        with self.assertRaisesRegex(RuntimeError, 'Preview unavailable'):
+        runner.site.call.side_effect = [{}, RuntimeError('Search check unavailable'), {}]
+        with self.assertRaisesRegex(RuntimeError, 'Search check unavailable'):
             runner.assert_identity_mismatch({'skill': 'sim-skill'}, 'sim-message')
         runner.site.call.assert_called_with('acceptance_set_ai_identity', matched=True)
 
