@@ -194,6 +194,27 @@ class Realtime:
 
 
 class SimulationRunner:
+    def assert_identity_mismatch(self, fixture, message):
+        before = len([r for r in self.control('state')['records'] if r['kind'] == 'ai'])
+        try:
+            self.site.call('acceptance_set_ai_identity', matched=False)
+            result = self.core('relay_core.ai.configuration.test_skill',
+                dict(name=fixture['skill'], message=message))
+            assert result['handoff'] and not result['reply'] and not result.get('reads'), (
+                'A sender with a mismatched Supplier identity received ledger data')
+        finally:
+            self.site.call('acceptance_set_ai_identity', matched=True)
+        calls = [r for r in self.control('state')['records'] if r['kind'] == 'ai'][before:]
+        assert len(calls) == 2 and all(r['status'] == 200 for r in calls), 'Expected a ledger tool request and denial'
+        tool = calls[0]['response']['choices'][0]['message']['tool_calls'][0]['function']
+        assert tool['name'] == 'supplier_ledger', 'Identity check did not attempt a ledger read'
+        results = [m for m in calls[1]['body']['messages'] if m['role'] == 'tool']
+        assert len(results) == 1 and set(json.loads(results[0]['content'])) == {'error'}, (
+            'Mismatched identity exposed a ledger tool result')
+        assert all(marker not in json.dumps(calls) for marker in (
+            'SIM-OWN-DEBIT', 'SIM-OWN-CREDIT', 'SIM-OTHER-SUPPLIER-SECRET', 'SIM-OUTSIDE-RANGE', 'SIM-CANCELLED'))
+        return True
+
     def select_run(self):
         used = [path.name.removeprefix('provider-') for path in self.args.report_dir.glob('provider-*')]
         self.run_id = self.site.call('run_label', used=used)
