@@ -234,6 +234,7 @@ class Runner(SimulationRunner):
         result = self.check_ai_reply(confirmed, fixture, 2)
         assert_ledger_reply(result['outgoing'][0]['content'])
         assert len(json.loads(result['runs'][0]['decision'])['reads']) == 1, 'Expected scoped tool evidence'
+        confirmed_message = result['incoming'][0]['name']
         self.emit(payload)
         self.wait_control(lambda state: all(row['acknowledged'] for row in state['callbacks'] if row['lane'] == 'realtime'))
         assert len(provider_posts(self.control('state'), fixture['endpoint'])) == 2, 'Replay resent AI reply'
@@ -253,8 +254,10 @@ class Runner(SimulationRunner):
         ai_calls = [row for row in state['records'] if row['kind'] == 'ai']
         assert len(ai_calls) == 4 and all(row['status'] == 200 for row in ai_calls), 'Expected offer, tool request, tool result and handoff through fake AI'
         assert all(marker not in json.dumps(ai_calls) for marker in ('SIM-OTHER-SUPPLIER-SECRET', 'SIM-OUTSIDE-RANGE', 'SIM-CANCELLED'))
+        identity_denied = self.assert_identity_mismatch(fixture, confirmed_message)
         return dict(supplier=fixture['supplier'], accepted_provider_posts=2, fake_ai_calls=len(ai_calls),
-                    ticket=result['tickets'][0]['name'], statuses=['Sent', 'Delivered', 'Read'], automation_paused=True)
+                    ticket=result['tickets'][0]['name'], statuses=['Sent', 'Delivered', 'Read'], automation_paused=True,
+                    mismatched_identity_denied=identity_denied)
 
     def business_event_acceptance(self):
         template = self.report['steps']['12'].get('template_id')

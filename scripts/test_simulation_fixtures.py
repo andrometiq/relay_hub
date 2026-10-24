@@ -1,13 +1,16 @@
 """Readable naming must preserve retained-run and endpoint isolation."""
+import json
 from datetime import datetime, timedelta, timezone
 from itertools import product
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from unittest.mock import patch
 
 from simulation_fixtures import (SUFFIXES, available_run, fixture_channel,
                                  fixture_email, fixture_endpoint, run_label, run_number)
+from whatsapp_sim_acceptance import configure_ai_channel
+from simulation_common import SimulationRunner
 
 
 class FixtureNamingTests(unittest.TestCase):
@@ -63,6 +66,70 @@ class FixtureNamingTests(unittest.TestCase):
         self.assertIs(fixture_channel(frappe, insert, 'WhatsApp', 'R0425-0051-00'), existing)
         self.assertEqual(existing.name, 'legacy-channel')
         self.assertEqual(existing.title, 'Sim WhatsApp R0425-0051-00')
+
+
+class AIChannelFixtureTests(unittest.TestCase):
+    def test_uses_existing_channel_company_or_deterministic_payable_company(self):
+        for company in ('Sim Ledger Company', None):
+            with self.subTest(company=company):
+                frappe = Mock()
+                channel = SimpleNamespace(company=company, save=Mock())
+                frappe.get_doc.return_value = channel
+                frappe.get_all.return_value = [SimpleNamespace(name='Sim Payable', company='Sim Ledger Company')]
+                self.assertEqual(configure_ai_channel(frappe, 'sim-channel', 'sim-owner'),
+                    ('Sim Ledger Company', 'Sim Payable'))
+                query = frappe.get_all.call_args.kwargs
+                self.assertEqual(query['filters'].get('company'), company)
+                self.assertEqual(query['filters']['account_type'], 'Payable')
+                self.assertEqual(query['filters']['is_group'], 0)
+                self.assertEqual(query['filters']['disabled'], 0)
+                self.assertEqual(query['order_by'], 'company asc, name asc')
+                self.assertEqual(channel.company, 'Sim Ledger Company')
+                self.assertEqual(channel.triage_owner, 'sim-owner')
+                channel.save.assert_called_once_with(ignore_permissions=True)
+
+    def test_does_not_replace_configured_company_without_payable_account(self):
+        frappe = Mock()
+        channel = SimpleNamespace(company='Sim Empty Company', save=Mock())
+        frappe.get_doc.return_value = channel
+        frappe.get_all.return_value = []
+        with self.assertRaisesRegex(AssertionError, 'payable account'):
+            configure_ai_channel(frappe, 'sim-channel', 'sim-owner')
+        self.assertEqual(frappe.get_all.call_args.kwargs['filters']['company'], 'Sim Empty Company')
+        channel.save.assert_not_called()
+
+
+class AIIdentityAcceptanceTests(unittest.TestCase):
+    def runner(self, tool_result):
+        runner = SimulationRunner()
+        runner.site = Mock()
+        runner.core = Mock(return_value={'handoff': True, 'reply': '', 'mode': 'Shadow'})
+        runner.control = Mock(side_effect=[{'records': []}, {'records': [
+            {'kind': 'ai', 'status': 200, 'response': {'choices': [{'message': {'tool_calls': [
+                {'function': {'name': 'supplier_ledger'}}]}}]}},
+            {'kind': 'ai', 'status': 200, 'body': {'messages': [
+                {'role': 'tool', 'content': json.dumps(tool_result)}]}}]}])
+        return runner
+
+    def test_rejected_read_reaches_model_without_ledger_data(self):
+        runner = self.runner({'error': 'Business data is unavailable'})
+        self.assertTrue(runner.assert_identity_mismatch({'skill': 'sim-skill'}, 'sim-message'))
+        runner.core.assert_called_once_with('relay_core.ai.configuration.test_skill',
+            {'name': 'sim-skill', 'message': 'sim-message'})
+        self.assertEqual(runner.site.call.call_args_list, [
+            call('acceptance_set_ai_identity', matched=False), call('acceptance_set_ai_identity', matched=True)])
+
+    def test_rejects_tool_data_even_if_api_reports_handoff(self):
+        runner = self.runner({'rows': [{'remarks': 'SIM-OWN-DEBIT'}]})
+        with self.assertRaisesRegex(AssertionError, 'exposed a ledger tool result'):
+            runner.assert_identity_mismatch({'skill': 'sim-skill'}, 'sim-message')
+
+    def test_restores_identity_when_preview_fails(self):
+        runner = self.runner({})
+        runner.core.side_effect = RuntimeError('Preview unavailable')
+        with self.assertRaisesRegex(RuntimeError, 'Preview unavailable'):
+            runner.assert_identity_mismatch({'skill': 'sim-skill'}, 'sim-message')
+        runner.site.call.assert_called_with('acceptance_set_ai_identity', matched=True)
 
 
 if __name__ == '__main__':

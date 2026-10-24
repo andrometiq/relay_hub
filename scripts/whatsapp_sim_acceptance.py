@@ -19,6 +19,21 @@ def provider_identity(message):
     return context.get('message_id') if context.get('provider') == 'Email' else message.get('provider_id')
 
 
+def configure_ai_channel(frappe, name, owner):
+    channel = frappe.get_doc('Relay Channel', name)
+    filters = {'is_group': 0, 'account_type': 'Payable', 'disabled': 0}
+    if channel.company:
+        filters['company'] = channel.company
+    accounts = frappe.get_all('Account', filters=filters, fields=['name', 'company'],
+        order_by='company asc, name asc', limit_page_length=1)
+    assert accounts, 'The simulation channel requires a company with a payable account'
+    account = accounts[0]
+    channel.company = account.company
+    channel.triage_owner = owner
+    channel.save(ignore_permissions=True)
+    return account.company, account.name
+
+
 class Acceptance:
     def __init__(self, frappe, fixture, insert):
         self.f, self.fixture, self.insert = frappe, fixture, insert
@@ -37,7 +52,7 @@ class Acceptance:
         origin = fixture_origin(origin)
         assert f.conf.developer_mode and f.local.site == 'yrp.site'
         assert f.db.has_column('Relay AI Skill', 'sample_key'), 'Reload Relay AI Skill before the connected run'
-        from relay_core.ai.samples import install_samples, LEDGER_TOOL
+        from relay_core.ai.samples import install_samples, LEDGER_TOOL, TARGET
         install_samples()
         sample = f.get_doc('Relay AI Skill', {'sample_key': 'supplier_ledger'})
         assert json.loads(sample.allowed_tools) == [LEDGER_TOOL], 'Sample read tools were customized; review before simulation'
@@ -56,6 +71,10 @@ class Acceptance:
         suppliers = [self.insert('Supplier', supplier_name=f'Sim {label} {run}',
             supplier_type='Company', supplier_group=group) for label in ('Ledger Supplier', 'Excluded Supplier')]
         endpoint = fixture_endpoint(medium, run, 'supplier')
+        # Supplier.mobile_no/email_id are Read Only fields on this site. Use its
+        # existing alias Data field as the declared identity for each local fixture.
+        identity_field = 'alias'
+        suppliers[0].db_set(identity_field, endpoint)
         assert not f.db.exists('Relay Contact Endpoint', {'channel': fixture['channel'], 'endpoint': endpoint}), 'Fixture endpoint collision'
         kind = f.db.get_value('Relay Contact Type', {'business_doctype': 'Supplier'}, 'name')
         if not kind:
@@ -67,9 +86,7 @@ class Acceptance:
             links=[dict(link_doctype='Supplier', link_name=suppliers[0].name)])
         contact = self.insert('Relay Contact', contact=person.name, display_name=f'Sim Ledger Supplier {run}', automation_paused=0)
         self.insert('Relay Contact Endpoint', channel=fixture['channel'], endpoint=endpoint, relay_contact=contact.name, verified=1)
-        company = f.db.get_value('Company', {}, 'name')
-        account = f.db.get_value('Account', {'company': company, 'is_group': 0, 'account_type': 'Payable'}, 'name')
-        assert company and account, 'A company and payable account are required for GL fixtures'
+        company, account = configure_ai_channel(f, fixture['channel'], fixture['operator']['name'])
         entries = []
         for index, (party, debit, credit, date, marker, cancelled) in enumerate([
             (suppliers[0].name, 1250, 0, '2026-10-02', 'SIM-CANCELLED', 1),
@@ -88,12 +105,22 @@ class Acceptance:
         model = self.insert('AI Model', model_label=f'Sim Ledger Model {run}', enabled=1,
             account=provider.name, model_id='relay-sim-ledger', temperature=0, max_tokens=1200)
         skill.update(dict(enabled=1, mode='Automatic', channel=fixture['channel'], ai_model=model.name,
-            run_as_user=fixture['operator']['name'], handoff_owner=fixture['operator']['name']))
+            run_as_user=fixture['operator']['name'], handoff_owner=fixture['operator']['name'],
+            target=TARGET, allowed_tools=json.dumps([{**LEDGER_TOOL, 'identity_anchor': 'Supplier',
+                'identity_fields': {medium: identity_field}, 'company_field': 'company'}])))
         skill.save(ignore_permissions=True)
         f.db.commit()
         self.ai = dict(supplier=suppliers[0].name, excluded_supplier=suppliers[1].name, contact=contact.name,
-            endpoint=endpoint, skill=skill.name, handoff_owner=skill.handoff_owner, entries=entries)
+            endpoint=endpoint, skill=skill.name, handoff_owner=skill.handoff_owner, entries=entries,
+            identity_field=identity_field, unmatched_endpoint=fixture_endpoint(medium, run, 'shared'))
         return self.ai
+
+    def set_ai_identity(self, matched):
+        assert type(matched) is bool
+        endpoint = self.ai['endpoint' if matched else 'unmatched_endpoint']
+        self.f.db.set_value('Supplier', self.ai['supplier'], self.ai['identity_field'], endpoint)
+        self.f.db.commit()
+        return {'matched': matched}
 
     def ai_state(self, provider):
         f = self.f

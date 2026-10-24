@@ -116,7 +116,7 @@ class RunnerTests(unittest.TestCase):
             runner.check_ai_reply = Mock(side_effect=[
                 dict(outgoing=[{'content': 'Confirm 2026-10-01 to 2026-10-31'}], runs=[{'decision': '{"reads":[]}'}]),
                 dict(outgoing=[{'content': 'SIM-OWN-DEBIT SIM-OWN-CREDIT Debit: 100.10 Credit: 40.05 Net debit: 60.05'}],
-                     runs=[{'decision': '{"reads":[{}]}'}])])
+                     runs=[{'decision': '{"reads":[{}]}'}], incoming=[{'name': 'CONFIRMED-MESSAGE'}])])
             with patch.object(sim, 'provider_posts', return_value=[{}, {}]), \
                     self.assertRaisesRegex(AssertionError, 'Paused message created an automation run'):
                 runner.ai_acceptance()
@@ -577,7 +577,7 @@ class AcceptanceIsolationTests(unittest.TestCase):
             conf = SimpleNamespace(developer_mode=True)
             fake = SimpleNamespace(conf=conf, local=SimpleNamespace(site='yrp.site'),
                 db=SimpleNamespace(has_column=lambda *args: True), get_doc=lambda *args: sample, copy_doc=copy_doc)
-            installed = SimpleNamespace(install_samples=lambda: None, LEDGER_TOOL='ledger')
+            installed = SimpleNamespace(install_samples=lambda: None, LEDGER_TOOL='ledger', TARGET='Explain the supplier ledger')
             acceptance = Acceptance(fake, {'channel': 'local-fixture'}, None)
             with patch.object(acceptance, 'preflight'), patch.dict(sys.modules, {'relay_core.ai.samples': installed}):
                 with self.assertRaises(StopAfterCopy):

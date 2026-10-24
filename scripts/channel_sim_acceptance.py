@@ -81,6 +81,7 @@ class ChannelAcceptance:
         result = self.check_channel_ai(provider, fixture, 2)
         assert_ledger_reply(result['outgoing'][0]['content'])
         assert len(json.loads(result['runs'][0]['decision'])['reads']) == 1
+        confirmed_message = result['incoming'][0]['name']
         replay()
         person, replay = self.ai_payload(fixture, 3, 'talk to a human')
         replay()
@@ -95,7 +96,9 @@ class ChannelAcceptance:
         calls = [r for r in self.control('state')['records'] if r['kind'] == 'ai']
         assert len(calls) == 3 and all(r['status'] == 200 for r in calls), 'Human request must bypass the model'
         assert all(marker not in json.dumps(calls) for marker in ('SIM-OTHER-SUPPLIER-SECRET','SIM-OUTSIDE-RANGE','SIM-CANCELLED'))
-        return dict(supplier=fixture['supplier'], ticket=result['tickets'][0]['name'], replies=2, ai_calls=len(calls))
+        identity_denied = self.assert_identity_mismatch(fixture, confirmed_message)
+        return dict(supplier=fixture['supplier'], ticket=result['tickets'][0]['name'], replies=2, ai_calls=len(calls),
+            mismatched_identity_denied=identity_denied)
 
     def channel_business_acceptance(self):
         self.site.call('acceptance_seed_event', run=self.run_id, medium=self.medium)
