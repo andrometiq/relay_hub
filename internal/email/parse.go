@@ -65,6 +65,14 @@ func parse(raw []byte, trustedServer string) (Received, error) {
 		}
 	}
 	decoder := mime.WordDecoder{CharsetReader: decodeCharset}
+	for _, values := range message.Header {
+		for _, value := range values {
+			decoded, e := decoder.DecodeHeader(value)
+			if e != nil || strings.ContainsRune(decoded, 0) || !utf8.ValidString(decoded) {
+				return result, errors.New("invalid email header")
+			}
+		}
+	}
 	result.Subject, err = decoder.DecodeHeader(message.Header.Get("Subject"))
 	if err != nil || len(result.Subject) > 998 {
 		return result, errors.New("invalid email subject")
@@ -188,7 +196,7 @@ func parse(raw []byte, trustedServer string) (Received, error) {
 			limit = 200000
 		}
 		raw, err := io.ReadAll(io.LimitReader(reader, int64(limit+1)))
-		if err != nil || len(raw) > limit || !utf8.Valid(raw) {
+		if err != nil || len(raw) > limit || !utf8.Valid(raw) || bytes.IndexByte(raw, 0) >= 0 {
 			return errors.New("email text exceeds limit or has invalid encoding")
 		}
 		if kind == "text/plain" {

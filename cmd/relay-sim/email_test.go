@@ -227,7 +227,7 @@ func TestMailboxOversizedRecord(t *testing.T) {
 		rejected = uid == 1 && r == nil && reason != ""
 		return nil
 	})
-	if err == nil || !rejected || cursor.UID != 1 {
+	if err != nil || !rejected || cursor.UID != 1 {
 		t.Fatal("oversized body did not produce a bounded rejection")
 	}
 }

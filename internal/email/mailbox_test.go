@@ -81,7 +81,7 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 		rejected = true
 		return nil
 	})
-	if err == nil || !rejected || large.UID != 1 {
+	if err != nil || !rejected || large.UID != 1 || !large.Backlog {
 		t.Fatal("oversized literal blocked checkpoint", large, err)
 	}
 	cut.Store(true)
@@ -171,6 +171,25 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 	})
 	if err != nil || progress.UID != 4 || rejections != 1 || reports != 1 {
 		t.Fatal(progress, rejections, reports, err)
+	}
+
+	poison := "From: sender@example.invalid\r\nContent-Transfer-Encoding: base64\r\n\r\nSGkA"
+	if _, err := user.Append("INBOX", strings.NewReader(poison), &imap.AppendOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	appendMessage(102)
+	poisonRejected, goodAfter := false, false
+	progress, err = client.FetchMailbox(t.Context(), progress, checkpoint, func(_, uid uint32, message *Received, reason string) error {
+		if uid == 5 {
+			poisonRejected = message == nil && reason != ""
+		}
+		if uid == 6 {
+			goodAfter = message != nil && reason == ""
+		}
+		return nil
+	})
+	if err != nil || progress.UID != 6 || !poisonRejected || !goodAfter {
+		t.Fatal("NUL blocked mailbox", progress, err)
 	}
 
 	// Empty resets also establish a boundary, before subsequent arrivals.
