@@ -98,6 +98,7 @@ def main():
     frappe.flags.mute_emails = True
     frappe.flags.in_test = True
     fixture = {}
+    previous_settings = {}
     observed_providers = set()
 
     def insert(doctype, **values):
@@ -144,7 +145,7 @@ def main():
         action = req['action']
         if action.startswith('acceptance_'):
             method = action.removeprefix('acceptance_')
-            assert method in {'seed_ai', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable'}
+            assert method in {'seed_ai', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable', 'diagnostics'}
             return getattr(acceptance, method)(**{key: value for key, value in req.items() if key != 'action'})
         if action == 'preflight':
             assert frappe.conf.developer_mode, 'Target must be a development site'
@@ -182,8 +183,18 @@ def main():
             return fixture
         if action == 'seed_storm':
             return seed_messages('storm', req['run'], req['count'])
+        if action == 'restore':
+            if previous_settings:
+                settings = frappe.get_single('Relay Settings')
+                settings.update(previous_settings)
+                settings.save(ignore_permissions=True)
+                frappe.db.commit()
+            return True
         if action == 'settings':
             settings = frappe.get_single('Relay Settings')
+            if not previous_settings:
+                for field in ('hub_url', 'hub_account', 'hub_token', 'callback_secret'):
+                    previous_settings[field] = settings.get_password(field, raise_exception=False) if field in ('hub_token', 'callback_secret') else settings.get(field)
             settings.update({'hub_url': req['hub_url'], 'hub_account': 'sim-v1',
                              'hub_token': req['token'], 'callback_secret': req['secret']})
             settings.save(ignore_permissions=True)
@@ -212,6 +223,25 @@ def main():
                     'projection_timings': timings,
                     'routing_decisions_column': frappe.db.has_column('Relay Hub Event', 'routing_decisions'),
                     'workers': workers}
+        if action == 'receipt_window':
+            # Read diagnostic worker timings only; do not hold or alter receipt jobs.
+            from frappe.utils.background_jobs import get_queue
+            from rq.job import Job
+            from rq.exceptions import NoSuchJobError
+            queue = get_queue('long')
+            wanted = set(map(str, req['event_ids']))
+            windows = []
+            for identifier in queue.finished_job_registry.get_job_ids(start=-8, cleanup=False):
+                try:
+                    job = Job.fetch(identifier, connection=queue.connection)
+                except NoSuchJobError:
+                    continue
+                name = (job.kwargs.get('kwargs') or {}).get('name')
+                timing = job.meta.get('relay_timing')
+                if job.kwargs.get('site') == site and name and timing and str(frappe.db.get_value('Relay Hub Event', name, 'hub_event_id')) in wanted:
+                    windows.append(timing)
+            frappe.db.rollback()
+            return max(windows, key=lambda row: row['started_ns']) if windows else None
         if action == 'snapshot':
             return snapshot()
         if action == 'wait':

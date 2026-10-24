@@ -150,6 +150,16 @@ class EmailRunner(ChannelRunner):
                 references=[f'<ask-{self.run_id}@example.invalid>']),webhook=True))
             assert selected['business_name']==self.fixture['supplier']
 
+        with self.step('single_inbound_latency', continue_on_error=True) as evidence:
+            evidence.update(self.latency_acceptance())
+        with self.step('supplier_ai_scoped_ledger_and_handoff', continue_on_error=True) as evidence:
+            evidence.update(self.channel_ai_acceptance())
+        with self.step('sales_order_event_and_hub_outage', continue_on_error=True) as evidence:
+            evidence.update(self.channel_business_acceptance())
+        with self.step('email_provider_identity', continue_on_error=True) as evidence:
+            evidence['messages'] = self.report.get('email_identity_defects', [])
+            assert not evidence['messages'], 'Core stripped RFC Message-ID from provider_id; canonical provider_context remains intact'
+
 
 if __name__=='__main__':
     sys.exit(run(EmailRunner,'Email'))

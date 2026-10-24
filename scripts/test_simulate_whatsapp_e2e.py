@@ -54,7 +54,7 @@ class RunnerTests(unittest.TestCase):
         f.get_meta.return_value.has_field.return_value = True
         f.db.exists.return_value = True
         insert = Mock(side_effect=lambda dt, **values: SimpleNamespace(name=dt))
-        acceptance = Acceptance(f, {'channel': 'channel', 'operator': {'name': 'operator'}, 'customer': 'customer'}, insert)
+        acceptance = Acceptance(f, {'channel': 'channel', 'operator': {'name': 'operator'}, 'customer': 'customer', 'person': 'person'}, insert)
         acceptance.seed_event('run', 'template-id')
         item = insert.call_args_list[0].kwargs
         self.assertEqual((item['gst_hsn_code'], item['is_stock_item']), ('998313', 0))
@@ -155,32 +155,35 @@ class RunnerTests(unittest.TestCase):
                          'callback_http_ms', 'receive_ms', 'inline_projection_ms', 'post_callback_ms')],
                          [10, 15, 5, 50, 40, 30, 20])
 
-    def test_samples_immediately_at_fixed_spacing_until_receipts_finish(self):
+    def test_samples_target_measured_projection_midpoints(self):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
             clock, starts = [0.0], []
             def observe(provider, phase):
-                self.assertEqual(phase, 'processing')
-                self.assertEqual(provider, f'wamid.sim.processing.{runner.run_id}.{len(starts)}')
                 starts.append(clock[0])
-                clock[0] += .1
-                return {'receipts_complete': len(starts) == 35}
-            def sleep(seconds):
-                clock[0] += seconds
-            with patch.object(runner, 'observe_inbound', side_effect=observe), \
-                    patch.object(sim.time, 'monotonic', side_effect=lambda: clock[0]), \
-                    patch.object(sim.time, 'sleep', side_effect=sleep):
-                self.assertEqual(runner.sample_receipt_projection(), 35)
-            self.assertEqual(starts, [i * .25 for i in range(35)])
+                clock[0] += .2
+                runner.report['inbound_samples'].append({'latency_ms':200})
+                return {'receipts_complete':len(starts)==6}
+            runner.site = Mock()
+            runner.site.call.return_value = dict(started_ns=0,finished_ns=100_000_000)
+            with patch.object(runner,'observe_inbound',side_effect=observe), \
+                    patch.object(sim.time,'monotonic',side_effect=lambda:clock[0]), \
+                    patch.object(sim.time,'sleep',side_effect=lambda duration:clock.__setitem__(0,clock[0]+duration)):
+                self.assertEqual(runner.sample_receipt_projection([42]),6)
+            for actual, expected in zip(starts,[0,.85,1.85,2.85,3.85,4.85]):
+                self.assertAlmostEqual(actual,expected)
+            runner.site.call.assert_called_with('receipt_window',event_ids=[42])
 
     def test_sampling_times_out_if_receipts_never_finish(self):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
-            with patch.object(runner, 'observe_inbound', return_value={'receipts_complete': False}) as observe, \
-                    patch.object(sim.time, 'monotonic', side_effect=[0, 0, 0, .1, 120]), \
-                    patch.object(sim.time, 'sleep'):
-                with self.assertRaisesRegex(TimeoutError, 'Receipt projection'):
-                    runner.sample_receipt_projection()
+            runner.site = Mock()
+            runner.site.call.return_value = None
+            with patch.object(runner,'observe_inbound',return_value={'receipts_complete':False}) as observe, \
+                    patch.object(sim.time,'monotonic',side_effect=[0,0,0,0,.1,120]), \
+                    patch.object(sim.time,'sleep'):
+                with self.assertRaisesRegex(TimeoutError,'Receipt projection'):
+                    runner.sample_receipt_projection([42])
             observe.assert_called_once()
 
     def test_storm_gate_requires_real_processing_overlap_and_strict_target(self):
@@ -397,6 +400,7 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='relay-sim-') as directory:
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
             runner.binary, runner.db_env = Path('/tmp/relay-sim-test'), {}
+            runner.state_dir = Path(directory) / 'provider-state'
             with patch.object(sim.subprocess, 'Popen') as popen, patch('simulation_common.request', return_value={'ready': True}):
                 popen.return_value.poll.return_value = None
                 runner.start(resume=True)

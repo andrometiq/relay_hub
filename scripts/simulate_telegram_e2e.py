@@ -93,13 +93,15 @@ class TelegramRunner(ChannelRunner):
             assert len(accepted_text(self.providers(),text))==1
 
         with self.step('ambiguous_acceptance_and_restart_no_resend') as evidence:
+            fault_body = 'Local simulation isolated uncertain destination ' + self.run_id
+            fault_source = self.message(fault_body, lambda: self.emit(update(self.fixture['fault_endpoint'], identifier+8, fault_body)))
             text='Local simulation uncertain '+self.run_id
             self.control('telegram/faults',dict(faults=['disconnect_after']))
-            result=self.send(source,text,'uncertain_'+self.run_id)
+            result=self.send(fault_source,text,'uncertain_'+self.run_id)
             self.wait_control(lambda s:any(d['state']=='uncertain' for d in s['channel_deliveries']))
             assert len(accepted_text(self.providers(),text))==1
             self.stop_hub(); self.start(resume=True)
-            replay=self.send(source,text,'uncertain_'+self.run_id)
+            replay=self.send(fault_source,text,'uncertain_'+self.run_id)
             assert replay['action']==result['action'] and replay['status']=='Uncertain', replay
             time.sleep(2)
             assert len(accepted_text(self.providers(),text))==1, 'Ambiguous delivery was resent'
@@ -117,6 +119,13 @@ class TelegramRunner(ChannelRunner):
             choice=next(c for c in choices if c['doctype']=='Supplier')
             chosen=self.message(choice['id'],lambda:self.emit(update(shared,identifier+11,choice['id'])))
             assert chosen['business_name']==self.fixture['supplier']
+
+        with self.step('single_inbound_latency', continue_on_error=True) as evidence:
+            evidence.update(self.latency_acceptance())
+        with self.step('supplier_ai_scoped_ledger_and_handoff', continue_on_error=True) as evidence:
+            evidence.update(self.channel_ai_acceptance())
+        with self.step('sales_order_event_and_hub_outage', continue_on_error=True) as evidence:
+            evidence.update(self.channel_business_acceptance())
 
 
 if __name__=='__main__':

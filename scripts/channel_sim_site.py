@@ -22,14 +22,22 @@ def main():
     def insert(doctype, **values):
         return frappe.get_doc(dict(doctype=doctype, **values)).insert(ignore_permissions=True)
 
+    from whatsapp_sim_acceptance import Acceptance
+    acceptance = Acceptance(frappe, fixture, insert)
+
     def dispatch(req):
         action = req['action']
+        if action.startswith('acceptance_'):
+            method = action.removeprefix('acceptance_')
+            assert method in {'seed_ai', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable', 'diagnostics'}
+            return getattr(acceptance, method)(**{key: value for key, value in req.items() if key != 'action'})
         if action == 'preflight':
+            acceptance.preflight()
             assert frappe.conf.developer_mode and 'relay_core' in frappe.get_installed_apps()
             from frappe.utils.background_jobs import get_workers
             from whatsapp_sim_site import require_worker_isolation
             require_worker_isolation(get_workers())
-            doctypes = ['User', 'Customer', 'Supplier', 'Contact', 'Relay Contact', 'Relay Message']
+            doctypes = ['User', 'Customer', 'Supplier', 'Contact', 'Relay Contact', 'Relay Message', 'GL Entry', 'Sales Order', 'Item', 'Price List']
             for dt, field in [('Notification', 'document_type'), ('Webhook', 'webhook_doctype'),
                               ('YRP Notification Template', 'document_type')]:
                 if frappe.db.exists('DocType', dt):
@@ -72,6 +80,10 @@ def main():
             shared_endpoints = dict(Telegram=str(int(endpoints['Telegram'])+1), Email='shared-'+endpoints['Email'], WhatsApp=str(int(endpoints['WhatsApp'])+1))
             for kind, endpoint in shared_endpoints.items():
                 insert('Relay Contact Endpoint', channel=channels[kind], endpoint=endpoint, relay_contact=shared.name, verified=1)
+            fault_endpoint = str(int(endpoints['Telegram']) + 300000)
+            insert('Relay Contact Endpoint', channel=channels['Telegram'], endpoint=fault_endpoint,
+                relay_contact=contact.name, verified=1)
+            fixture['fault_endpoint'] = fault_endpoint
             fixture.update(shared_contact=shared.name, shared_person=shared_person.name, shared_endpoints=shared_endpoints)
             cc = 'sim-cc-'+run+'@example.invalid'
             insert('Relay Contact Endpoint', channel=channels['Email'], endpoint=cc, relay_contact=contact.name, verified=1)
@@ -88,6 +100,7 @@ def main():
             doc.save(ignore_permissions=True); frappe.db.commit()
             return True
         if action == 'restore':
+            acceptance.disable()
             if previous_settings:
                 doc = frappe.get_single('Relay Settings')
                 doc.update(previous_settings); doc.save(ignore_permissions=True); frappe.db.commit()
