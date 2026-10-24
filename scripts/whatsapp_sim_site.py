@@ -86,11 +86,17 @@ def fixture_contact(frappe, insert, channel, run):
     return contact, person, customer
 
 
+def validate_site(site, sites):
+    if site != 'yrp.site' or Path(sites).resolve() != Path('/home/sakthi/development/pilot/benches/version_16/sites').resolve():
+        raise ValueError('Only yrp.site in the local development bench is allowed')
+
+
 def main():
     sys.addaudithook(confine_writes)
     os.environ['FRAPPE_STREAM_LOGGING'] = '1'
-    import frappe
     site, sites = sys.argv[1:3]
+    validate_site(site, sites)
+    import frappe
     os.chdir(sites)
     frappe.init(site=site, sites_path=sites)
     frappe.connect()

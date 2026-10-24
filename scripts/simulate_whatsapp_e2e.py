@@ -97,7 +97,7 @@ def inbound_breakdown(records, sample):
 def storm_latency(samples, timings, event_ids, receipt_count):
     spans = [t for t in timings if t['hub_event_id'] in {str(e) for e in event_ids} and t['queue'] == 'long']
     overlapping = [s['latency_ms'] for s in samples if s['phase'] == 'processing' and any(
-        t['started_ns'] <= s['observed_ns'] < t['finished_ns'] for t in spans)]
+        s['started_ns'] < t['finished_ns'] and s['observed_ns'] >= t['started_ns'] for t in spans)]
     duration = (max(t['finished_ns'] for t in spans) - min(t['started_ns'] for t in spans)) / 1e9 if spans else None
     return {'samples': len(overlapping), 'p50': percentile(overlapping, 50), 'p95': percentile(overlapping, 95),
             'target_ms': 500, 'passed': len(overlapping) >= 5 and percentile(overlapping, 95) < 500,
@@ -529,7 +529,7 @@ class Runner(SimulationRunner):
 
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--site', default='yrp.site')
+    parser.add_argument('--site', choices=['yrp.site'], default='yrp.site')
     parser.add_argument('--sites', type=Path, default=BENCH / 'sites')
     parser.add_argument('--frappe-python', type=Path, default=BENCH / 'env/bin/python')
     parser.add_argument('--core-origin', type=loopback_origin, default='http://127.0.0.1:8001')
@@ -540,6 +540,8 @@ def arguments(argv=None):
     parser.add_argument('--storm-receipts', type=int, default=12000, help='Receipt count for step 10b (default: 12000)')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
+    if args.sites.resolve() != (BENCH / 'sites').resolve():
+        parser.error('Sites directory must be the local development bench')
     if args.storm_receipts <= 0:
         parser.error('--storm-receipts must be positive')
     args.report_dir = args.report_dir.resolve()

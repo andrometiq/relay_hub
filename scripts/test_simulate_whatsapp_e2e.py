@@ -198,16 +198,35 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(sim.storm_latency([dict(s, phase='held') for s in samples], spans, [9], 12000)['passed'])
         self.assertFalse(sim.storm_latency([dict(s, latency_ms=500) for s in samples], spans, [9], 12000)['passed'])
         self.assertFalse(sim.storm_latency(samples, spans, [10], 12000)['passed'])
-        # An interval intersection alone is insufficient: the row must appear during projection.
-        for observed in (900_000_000, 2_000_000_000, 2_100_000_000):
+        # Samples entirely outside processing are excluded.
+        for observed in (900_000_000,):
             self.assertFalse(sim.storm_latency([dict(s, observed_ns=observed) for s in samples], spans, [9], 12000)['passed'])
         self.assertTrue(sim.storm_latency([dict(s, started_ns=900_000_000, observed_ns=1_000_000_000)
                                           for s in samples], spans, [9], 12000)['passed'])
 
+    def test_slow_arrival_remains_in_storm_gate(self):
+        spans = [dict(hub_event_id='9', queue='long', started_ns=1_000_000_000, finished_ns=2_000_000_000)]
+        samples = [dict(phase='processing', started_ns=1_100_000_000, observed_ns=1_300_000_000, latency_ms=200)] * 5
+        samples.append(dict(phase='processing', started_ns=1_900_000_000, observed_ns=2_900_000_000, latency_ms=1000))
+        result = sim.storm_latency(samples, spans, [9], 12000)
+        self.assertEqual(result['samples'], 6)
+        self.assertEqual(result['p95'], 1000)
+        self.assertFalse(result['passed'])
+
+    def test_fixture_targets_are_confined(self):
+        from whatsapp_sim_site import validate_site
+        validate_site('yrp.site', sim.BENCH / 'sites')
+        for site, sites in [('sales-prod.site', sim.BENCH / 'sites'), ('yrp.site', '/tmp/sites')]:
+            with self.assertRaises(ValueError):
+                validate_site(site, sites)
+        for args in (['--site', 'sales-prod.site'], ['--sites', '/tmp/sites']):
+            with self.assertRaises(SystemExit):
+                sim.arguments(args)
+
     def test_storm_combines_events_but_excludes_projection_gaps(self):
         spans = [dict(hub_event_id=str(event), queue='long', started_ns=start, finished_ns=start + 100_000_000)
                  for event, start in ((9, 1_000_000_000), (10, 2_000_000_000))]
-        samples = [dict(phase='processing', observed_ns=stamp, latency_ms=100)
+        samples = [dict(phase='processing', started_ns=stamp-10_000_000, observed_ns=stamp, latency_ms=100)
                    for stamp in (1_050_000_000, 2_050_000_000, 1_500_000_000)]
         result = sim.storm_latency(samples, spans, [9, 10], 6000)
         self.assertEqual(result['samples'], 2)
@@ -537,3 +556,35 @@ else:
 
 if __name__ == '__main__':
     unittest.main()
+
+class AcceptanceIsolationTests(unittest.TestCase):
+    def test_every_medium_copies_installed_sample(self):
+        from whatsapp_sim_acceptance import Acceptance
+        from copy import copy
+        class StopAfterCopy(Exception):
+            pass
+        for medium in ['WhatsApp', 'Telegram', 'Email']:
+            sample = SimpleNamespace(name='installed', sample_key='supplier_ledger', title='Installed',
+                channel='', enabled=0, allowed_tools=json.dumps(['ledger']))
+            copies = []
+            def copy_doc(doc):
+                result = copy(doc)
+                def insert(**kwargs):
+                    copies.append(result)
+                    raise StopAfterCopy()
+                result.insert = insert
+                return result
+            conf = SimpleNamespace(developer_mode=True)
+            fake = SimpleNamespace(conf=conf, local=SimpleNamespace(site='yrp.site'),
+                db=SimpleNamespace(has_column=lambda *args: True), get_doc=lambda *args: sample, copy_doc=copy_doc)
+            installed = SimpleNamespace(install_samples=lambda: None, LEDGER_TOOL='ledger')
+            acceptance = Acceptance(fake, {'channel': 'local-fixture'}, None)
+            with patch.object(acceptance, 'preflight'), patch.dict(sys.modules, {'relay_core.ai.samples': installed}):
+                with self.assertRaises(StopAfterCopy):
+                    acceptance.seed_ai('unique-run', 'http://127.0.0.1:18094', medium)
+            self.assertEqual(sample.channel, '')
+            self.assertEqual(sample.sample_key, 'supplier_ledger')
+            self.assertEqual(copies[0].channel, 'local-fixture')
+            self.assertIsNone(copies[0].sample_key)
+            self.assertIn(medium, copies[0].title)
+            self.assertEqual(copies[0].enabled, 0)
