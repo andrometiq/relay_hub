@@ -293,8 +293,9 @@ func run() error {
 				channelCallbacks = append(channelCallbacks, channels.RuntimeCallback{Account: row.AccountID, Site: row.Site, APIKey: get("core_api_key"), APISecret: get("core_api_secret"), CallbackSecret: get("callback_secret")})
 			}
 		}
-		channelEvents := channels.Store{DB: authPool}
-		channelCallbacksDispatcher := &channels.CallbackDispatcher{URL: os.Getenv("DATABASE_URL")}
+		channelWake := make(chan struct{}, 1)
+		channelEvents := channels.Store{DB: authPool, Wake: channelWake}
+		channelCallbacksDispatcher := &channels.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Wake: channelWake}
 		callbacks := &whatsapp.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Service: wa}
 		wa.Outbox, err = whatsapp.NewOutbox(context.Background(), os.Getenv("DATABASE_URL"), wa, workers)
 		if err != nil {
@@ -699,7 +700,7 @@ func run() error {
 		wa.Metadata.Run(shutdown)
 		wa.Outbox.Run(shutdown)
 		channels.Outbox{DB: authPool, Registry: channelRegistry}.Run(shutdown)
-		channels.MailboxPoller{DB: mailboxPool, Registry: channelRegistry}.Run(shutdown)
+		channels.MailboxPoller{DB: mailboxPool, Registry: channelRegistry, Wake: channelWake}.Run(shutdown)
 		callbacks.Run(shutdown)
 		channelCallbacksDispatcher.Run(shutdown, channelCallbacks)
 		go func() {

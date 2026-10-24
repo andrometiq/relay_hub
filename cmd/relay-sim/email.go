@@ -58,6 +58,7 @@ type fakeEmail struct {
 	mu          sync.Mutex
 	connections map[net.Conn]bool
 	closed      bool
+	idlers      map[chan struct{}]bool
 	workers     sync.WaitGroup
 }
 
@@ -73,7 +74,7 @@ func newFakeEmail(path string, records *recorder) (*fakeEmail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &fakeEmail{state: state, records: records, certificate: certificate, roots: roots, connections: map[net.Conn]bool{}}, nil
+	return &fakeEmail{state: state, records: records, certificate: certificate, roots: roots, connections: map[net.Conn]bool{}, idlers: map[chan struct{}]bool{}}, nil
 }
 func mailCertificate() (tls.Certificate, *x509.CertPool, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -398,7 +399,7 @@ func (e *fakeEmail) serveIMAP(raw net.Conn) {
 	if conn.Handshake() != nil {
 		return
 	}
-	io.WriteString(conn, "* OK [CAPABILITY IMAP4rev1] Local simulation IMAP\r\n")
+	io.WriteString(conn, "* OK [CAPABILITY IMAP4rev1 IDLE] Local simulation IMAP\r\n")
 	reader := bufio.NewReaderSize(conn, 8192)
 	authenticated, selected := false, false
 	for {
@@ -414,7 +415,7 @@ func (e *fakeEmail) serveIMAP(raw net.Conn) {
 		ok := func() { fmt.Fprintf(conn, "%s OK Completed\r\n", tag) }
 		switch command {
 		case "CAPABILITY":
-			io.WriteString(conn, "* CAPABILITY IMAP4rev1\r\n")
+			io.WriteString(conn, "* CAPABILITY IMAP4rev1 IDLE\r\n")
 			ok()
 		case "LOGIN":
 			if len(fields) == 4 && imapAtom(fields[2]) == simulationMailUser && imapAtom(fields[3]) == simulationMailPassword {
@@ -431,6 +432,14 @@ func (e *fakeEmail) serveIMAP(raw net.Conn) {
 			s := e.state.snapshot()
 			selected = true
 			fmt.Fprintf(conn, "* FLAGS (\\Seen)\r\n* %d EXISTS\r\n* OK [UIDVALIDITY %d] Validity\r\n* OK [UIDNEXT %d] Next\r\n%s OK [READ-ONLY] Examined\r\n", len(s.Inbox), s.Validity, s.Next, tag)
+		case "IDLE":
+			if !selected {
+				fmt.Fprintf(conn, "%s BAD Select mailbox first\r\n", tag)
+				continue
+			}
+			if !e.imapIdle(conn, reader, tag) {
+				return
+			}
 		case "UID":
 			if !selected || len(fields) < 4 {
 				fmt.Fprintf(conn, "%s BAD Select mailbox first\r\n", tag)
@@ -552,6 +561,16 @@ func (e *fakeEmail) appendMail(raw string, uid uint32) (uint32, error) {
 		s.Next = uid + 1
 		return nil
 	})
+	if err == nil {
+		e.mu.Lock()
+		for wake := range e.idlers {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+		e.mu.Unlock()
+	}
 	return uid, err
 }
 func bounceMail(messageID, recipient string) (string, error) {
@@ -566,4 +585,37 @@ func bounceMail(messageID, recipient string) (string, error) {
 	fmt.Fprintf(&b, "From: postmaster@sim.invalid\r\nTo: inbox@sim.invalid\r\nMessage-ID: <dsn-%d@sim.invalid>\r\nSubject: Delivery failed\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=delivery-status; boundary=sim-dsn\r\n\r\n", time.Now().UnixNano())
 	fmt.Fprintf(&b, "--sim-dsn\r\nContent-Type: text/plain\r\n\r\nLocal simulation bounce.\r\n--sim-dsn\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; mx.sim.invalid\r\nOriginal-Message-ID: %s\r\n\r\nFinal-Recipient: rfc822; %s\r\nAction: failed\r\nStatus: 5.1.1\r\n\r\n--sim-dsn--\r\n", messageID, address.Address)
 	return authenticatedMail(b.String(), simulationAuthserv, "pass")
+}
+
+func (e *fakeEmail) imapIdle(conn net.Conn, reader *bufio.Reader, tag string) bool {
+	wake := make(chan struct{}, 1)
+	e.mu.Lock()
+	e.idlers[wake] = true
+	e.mu.Unlock()
+	defer func() { e.mu.Lock(); delete(e.idlers, wake); e.mu.Unlock() }()
+	if _, err := io.WriteString(conn, "+ Idling\r\n"); err != nil {
+		return false
+	}
+	e.capture("imap", "idle", nil, 200, "")
+	// Send current EXISTS after subscribing so arrivals between EXAMINE and IDLE
+	// cannot disappear into the notification gap.
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	done := make(chan bool, 1)
+	go func() { line, err := readProtocolLine(reader); done <- err == nil && strings.EqualFold(line, "DONE") }()
+	for {
+		select {
+		case valid := <-done:
+			if valid {
+				fmt.Fprintf(conn, "%s OK IDLE completed\r\n", tag)
+			}
+			return valid
+		case <-wake:
+			if _, err := fmt.Fprintf(conn, "* %d EXISTS\r\n", len(e.state.snapshot().Inbox)); err != nil {
+				return false
+			}
+		}
+	}
 }

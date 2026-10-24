@@ -231,3 +231,64 @@ func TestMailboxOversizedRecord(t *testing.T) {
 		t.Fatal("oversized body did not produce a bounded rejection")
 	}
 }
+
+func TestMailboxIDLEArrivalCancellationAndDisconnect(t *testing.T) {
+	fake, client := emailFixture(t, filepath.Join(t.TempDir(), "email.json"))
+	for _, disconnect := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		updates := make(chan struct{}, 8)
+		done := make(chan error, 1)
+		go func() {
+			done <- client.WatchMailbox(ctx, func() {
+				select {
+				case updates <- struct{}{}:
+				default:
+				}
+			})
+		}()
+		// Wait for the real TLS server to acknowledge IDLE, not just EXAMINE.
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			fake.mu.Lock()
+			ready := len(fake.idlers) > 0
+			fake.mu.Unlock()
+			if ready {
+				break
+			}
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatal("IDLE not entered")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if disconnect {
+			fake.close()
+		} else {
+			// Drain the initial re-check hints, then exercise an actual mailbox arrival.
+			time.Sleep(20 * time.Millisecond)
+			for len(updates) > 0 {
+				<-updates
+			}
+			raw := "From: sender@example.invalid\r\nTo: inbox@sim.invalid\r\nSubject: IDLE\r\nMessage-ID: <idle@example.invalid>\r\n\r\nAmount 125.50"
+			if _, err := fake.appendMail(raw, 0); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-updates:
+			case <-time.After(time.Second):
+				cancel()
+				t.Fatal("arrival did not wake IDLE")
+			}
+			cancel()
+		}
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("expected cancellation/disconnect")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("IDLE did not stop")
+		}
+		cancel()
+	}
+}

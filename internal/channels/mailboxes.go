@@ -21,6 +21,7 @@ type MailboxReader interface {
 type MailboxPoller struct {
 	DB       *pgxpool.Pool
 	Registry *Registry
+	Wake     chan<- struct{}
 }
 
 // NewMailboxPool isolates connections held during IMAP I/O from request traffic.
@@ -43,13 +44,15 @@ func (p MailboxPoller) Run(ctx context.Context) {
 	})
 }
 func (p MailboxPoller) run(ctx context.Context, interval time.Duration, readers func() map[string]MailboxReader) {
-	callbackworker.Run(ctx, interval, 8, func() []callbackworker.Job {
+	wake := make(chan struct{}, 1)
+	go p.watchMailboxes(ctx, interval, readers, wake)
+	callbackworker.RunWithWake(ctx, interval, 8, func() []callbackworker.Job {
 		jobs := []callbackworker.Job{}
 		for account, client := range readers() {
 			jobs = append(jobs, callbackworker.Job{Key: account, Run: func(ctx context.Context) { _ = p.poll(ctx, account, client, true) }})
 		}
 		return jobs
-	})
+	}, wake)
 }
 func (p MailboxPoller) Poll(ctx context.Context, account string, client MailboxReader) error {
 	return p.poll(ctx, account, client, false)
@@ -79,7 +82,8 @@ func (p MailboxPoller) poll(ctx context.Context, account string, client MailboxR
 	cursor := relayemail.MailboxCursor{}
 	failures := 0
 	var ready bool
-	if err = conn.QueryRow(ctx, `SELECT uid_validity,last_uid,reset_uid_next,failures,next_attempt<=now() FROM relay_mailbox_cursor WHERE account=$1 AND mailbox=$2`, account, key).Scan(&cursor.Validity, &cursor.UID, &cursor.ResetUIDNext, &failures, &ready); err != nil {
+	var nextAttempt time.Time
+	if err = conn.QueryRow(ctx, `SELECT uid_validity,last_uid,reset_uid_next,failures,next_attempt<=now(),next_attempt FROM relay_mailbox_cursor WHERE account=$1 AND mailbox=$2`, account, key).Scan(&cursor.Validity, &cursor.UID, &cursor.ResetUIDNext, &failures, &ready, &nextAttempt); err != nil {
 		return err
 	}
 	if scheduled && !ready {
@@ -108,7 +112,10 @@ func (p MailboxPoller) poll(ctx context.Context, account string, client MailboxR
 		if _, e = tx.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=$4,last_sync=now(),last_error='' WHERE account=$1 AND mailbox=$2`, account, key, validity, uid); e != nil {
 			return e
 		}
-		return tx.Commit(ctx)
+		if e = tx.Commit(ctx); e == nil {
+			WakeCallbacks(p.Wake)
+		}
+		return e
 	})
 	if err != nil {
 		write, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -120,7 +127,7 @@ func (p MailboxPoller) poll(ctx context.Context, account string, client MailboxR
 	if next.Backlog {
 		delay = 0
 	}
-	_, err = conn.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=$4,last_sync=now(),last_error='',failures=0,next_attempt=now()+$5*interval '1 second' WHERE account=$1 AND mailbox=$2`, account, key, next.Validity, next.UID, delay)
+	_, err = conn.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=$4,last_sync=now(),last_error='',failures=0,next_attempt=CASE WHEN next_attempt=$6 THEN now()+$5*interval '1 second' ELSE now() END WHERE account=$1 AND mailbox=$2`, account, key, next.Validity, next.UID, delay, nextAttempt)
 	return err
 }
 
@@ -224,4 +231,77 @@ func MailboxStatus(ctx context.Context, db *pgxpool.Pool, account string) ([]Mai
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// IDLE sessions are separate from the fair, bounded fetch pool. A quiet mailbox
+// never occupies a fetch slot or a PostgreSQL connection. Registry replacement
+// cancels its old session, including changed credentials for the same mailbox.
+func (p MailboxPoller) watchMailboxes(ctx context.Context, interval time.Duration, readers func() map[string]MailboxReader, wake chan<- struct{}) {
+	type watcher interface {
+		WatchMailbox(context.Context, func()) error
+	}
+	type active struct {
+		reader MailboxReader
+		cancel context.CancelFunc
+	}
+	running := map[string]active{}
+	defer func() {
+		for _, a := range running {
+			a.cancel()
+		}
+	}()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		current := readers()
+		for account, a := range running {
+			if current[account] != a.reader {
+				a.cancel()
+				delete(running, account)
+			}
+		}
+		for account, reader := range current {
+			client, ok := reader.(watcher)
+			if !ok {
+				continue
+			}
+			if _, ok := running[account]; ok {
+				continue
+			}
+			watchCtx, cancel := context.WithCancel(ctx)
+			running[account] = active{reader, cancel}
+			go func() {
+				failures := 0
+				for watchCtx.Err() == nil {
+					err := client.WatchMailbox(watchCtx, func() {
+						// An IDLE hint must not defeat authentication/fetch failure backoff.
+						queryCtx, done := context.WithTimeout(watchCtx, 3*time.Second)
+						_, err := p.DB.Exec(queryCtx, `UPDATE relay_mailbox_cursor SET next_attempt=now()
+       WHERE account=$1 AND mailbox=$2 AND failures=0`, account, reader.MailboxKey())
+						done()
+						if err == nil {
+							WakeCallbacks(wake)
+						}
+					})
+					if err == nil {
+						failures = 0
+						continue
+					}
+					failures++
+					timer := time.NewTimer(deliverypolicy.RetryDelay(failures, 0))
+					select {
+					case <-watchCtx.Done():
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+				}
+			}()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }

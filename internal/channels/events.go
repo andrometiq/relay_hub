@@ -15,7 +15,19 @@ type Event struct {
 	OccurredAt                                                                time.Time       `json:"occurred_at"`
 	Payload                                                                   json.RawMessage `json:"payload,omitempty"`
 }
-type Store struct{ DB *pgxpool.Pool }
+type Store struct {
+	DB   *pgxpool.Pool
+	Wake chan<- struct{}
+}
+
+// WakeCallbacks is a coalesced hint after commit. The durable journal and
+// dispatcher's retry ticker remain authoritative across restarts and replicas.
+func WakeCallbacks(wake chan<- struct{}) {
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
 
 // Only serve sticker IDs journaled for this account. Never turn the Hub into an
 // arbitrary bot file downloader for a caller-supplied provider identifier.
@@ -35,6 +47,9 @@ func (s Store) Save(ctx context.Context, e Event) error {
 		return errors.New("invalid channel event")
 	}
 	_, err := s.DB.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id,sender,recipient,subject,body,occurred_at,payload) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(channel,account,provider_id) DO NOTHING`, e.Account, e.Channel, e.Direction, e.ProviderID, e.Sender, e.Recipient, e.Subject, e.Body, e.OccurredAt, e.Payload)
+	if err == nil {
+		WakeCallbacks(s.Wake)
+	}
 	return err
 }
 

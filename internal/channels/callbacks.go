@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,13 +26,14 @@ type CallbackDispatcher struct {
 	URL      string
 	DB       interface{}
 	Accounts []RuntimeCallback
+	Wake     <-chan struct{}
 	mu       sync.RWMutex
 }
 
 func (d *CallbackDispatcher) Run(ctx context.Context, callbacks []RuntimeCallback) {
 	d.Update(callbacks)
 	d.runStatusCallbacks(ctx)
-	go callbackworker.Run(ctx, 250*time.Millisecond, 8, func() []callbackworker.Job {
+	go callbackworker.RunWithWake(ctx, 250*time.Millisecond, 8, func() []callbackworker.Job {
 		d.mu.RLock()
 		current := append([]RuntimeCallback(nil), d.Accounts...)
 		d.mu.RUnlock()
@@ -43,7 +45,7 @@ func (d *CallbackDispatcher) Run(ctx context.Context, callbacks []RuntimeCallbac
 			}
 		}
 		return jobs
-	})
+	}, d.Wake)
 }
 
 func (d *CallbackDispatcher) Update(callbacks []RuntimeCallback) {
@@ -91,6 +93,7 @@ func (d *CallbackDispatcher) deliverPending(ctx context.Context, c *pgx.Conn, a 
 }
 
 func (d *CallbackDispatcher) deliverBatch(ctx context.Context, c *pgx.Conn, a RuntimeCallback, channel string, through int64) (int64, error) {
+	started := time.Now()
 	// pgx streams rows, while SQL limits both count and aggregate source size.
 	// Always include the first row so an oversized event is surfaced, not skipped.
 	rows, err := c.Query(ctx, `WITH candidates AS (
@@ -164,6 +167,7 @@ func (d *CallbackDispatcher) deliverBatch(ctx context.Context, c *pgx.Conn, a Ru
 		}
 		return 0, err
 	}
+	req.Header.Set("X-Relay-Dispatch-Ms", strconv.FormatFloat(float64(time.Since(started).Microseconds())/1000, 'f', 3, 64))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "token "+a.APIKey+":"+a.APISecret)
 	req.Header.Set("X-Relay-Timestamp", fmtInt(ts))

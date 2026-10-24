@@ -409,3 +409,32 @@ func TestMailboxRejectsOversizedTrustedDSNAndContinues(t *testing.T) {
 		t.Fatal(uid, rejected, events, evidence, err)
 	}
 }
+
+// A notification received during an active fetch must survive its final cursor
+// update, otherwise the newly arrived message waits for the fallback interval.
+func TestMailboxWakeDuringFetchSurvivesCheckpoint(t *testing.T) {
+	pool, _ := channelTestDB(t)
+	p := MailboxPoller{DB: pool}
+	release := make(chan struct{})
+	reader := &pagedMailbox{key: rand.Text(), epoch: 1, block: release}
+	done := make(chan error, 1)
+	go func() { done <- p.Poll(t.Context(), "wake", reader) }()
+	deadline := time.Now().Add(time.Second)
+	for reader.calls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("fetch did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := pool.Exec(t.Context(), `UPDATE relay_mailbox_cursor SET next_attempt=clock_timestamp() WHERE account='wake'`); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var ready bool
+	if err := pool.QueryRow(t.Context(), `SELECT next_attempt<=now() FROM relay_mailbox_cursor WHERE account='wake'`).Scan(&ready); err != nil || !ready {
+		t.Fatal("notification was lost", err)
+	}
+}
