@@ -2,37 +2,18 @@
 import argparse
 from contextlib import contextmanager
 import json
-import fcntl
-import os
 from pathlib import Path
 import secrets
-import subprocess
 import time
 import traceback
 import urllib.parse
 from simulation_common import (ROOT, BENCH, Site, Realtime, SimulationRunner, address,
-                               loopback_origin, percentile, read_env)
+                               loopback_origin, percentile, validate_test_database)
+
+from channel_sim_acceptance import ChannelAcceptance
 
 
-def test_database_url():
-    values = read_env()
-    dsn = os.environ.get('RELAY_TEST_DATABASE_URL')
-    if not dsn:
-        source = urllib.parse.urlsplit(values['DATABASE_URL'])
-        assert source.hostname == '127.0.0.1' and source.port == 18433, 'Unexpected database source'
-        dsn = urllib.parse.urlunsplit(source._replace(path='/relay_hub_v1_test', query='', fragment=''))
-    validate_test_database(dsn)
-    return dsn
-
-
-def validate_test_database(dsn):
-    parsed = urllib.parse.urlsplit(dsn)
-    if (parsed.scheme not in ('postgres','postgresql') or parsed.hostname != '127.0.0.1'
-            or parsed.port != 18433 or parsed.path != '/relay_hub_v1_test' or parsed.query or parsed.fragment):
-        raise ValueError('Only relay_hub_v1_test at 127.0.0.1:18433 without query overrides is allowed')
-
-
-class ChannelRunner(SimulationRunner):
+class ChannelRunner(SimulationRunner, ChannelAcceptance):
     def __init__(self, args, medium):
         self.args, self.medium = args, medium
         self.run_id = str(time.time_ns())
@@ -42,8 +23,7 @@ class ChannelRunner(SimulationRunner):
         self.logs, self.captures = [], []
         self.fixture = {}
         self.report = dict(run=self.run_id, channel=medium, site=args.site, steps={}, latencies_ms=[],
-            limitations=['AI/automation and handoff skipped: next Core wave.',
-                         'Real Socket.IO and permission-checked HTTP APIs; browser rendering is not exercised.',
+            limitations=['Real Socket.IO and permission-checked HTTP APIs; browser rendering is not exercised.',
                          '12,000-event latency acceptance is a separate plan item.'])
         args.report_dir.mkdir(parents=True, exist_ok=True)
 
@@ -75,42 +55,14 @@ class ChannelRunner(SimulationRunner):
         self.launch(command, {'RELAY_SIM_CHILD': '1'})
 
     def setup(self):
-        import psycopg2
-        from psycopg2 import sql
-        self.run_lock = open(ROOT / '.runtime/channel-simulation.lock', 'a')
-        try:
-            fcntl.flock(self.run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError('Another connected channel driver owns the local site') from None
+        self.lock_site()
         self.site = Site(self.args, self.open_log('site.log'), 'channel_sim_site.py')
         self.report['preflight'] = self.site.call('preflight')
         self.canonical = self.report['preflight']['canonical_origin']
-        self.database = psycopg2.connect(test_database_url(), connect_timeout=5)
-        self.database.autocommit = True
-        schema = 'relay_sim_test_'+self.run_id
-        with self.database.cursor() as cur:
-            cur.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
-        self.schema = schema
-        self.db_env = dict(DATABASE_URL=test_database_url()+'?search_path='+self.schema,
-            RELAY_CREDENTIAL_KEY=read_env()['RELAY_CREDENTIAL_KEY'])
-        self.binary = ROOT / '.runtime/relay-sim-connected.test'
-        self.state_dir = self.args.report_dir / ('provider-'+self.run_id)
-        self.state_dir.mkdir(mode=0o700)
-        # A fresh fake mailbox must have a new UIDVALIDITY: Core retains its old provider IDs.
-        with (self.state_dir / 'email.json').open('x') as state:
-            json.dump(dict(uid_validity=int(self.run_id)//1000000000, uid_next=1,
-                           sent=[], inbox=[], faults={}), state)
-        (self.state_dir / 'email.json').chmod(0o600)
-        subprocess.run(['go','test','-c','-o',str(self.binary),'./cmd/relay-sim'], cwd=ROOT,
-            env={**os.environ,'GOCACHE':'/tmp/relay-sim-gocache'}, check=True,
-            stdout=self.open_log('build.log'),stderr=subprocess.STDOUT)
+        self.prepare_database()
+        self.build_launcher()
         self.start()
-        # Core retains event identities between runs; isolated Hub schemas must not reuse them.
-        with self.database.cursor() as cur:
-            cur.execute('SELECT sequencename FROM pg_sequences WHERE schemaname=%s', (self.schema,))
-            for (sequence,) in cur.fetchall():
-                cur.execute('SELECT setval(%s::regclass,%s,false)',
-                    (self.schema+'.'+sequence, int(self.run_id)//1000))
+        self.unique_sequences()
         self.fixture = self.site.call('provision', run=self.run_id, medium=self.medium)
         self.report['fixture'] = {k:v for k,v in self.fixture.items() if k not in ('service','operator','unauthorized')}
         self.configure()
@@ -144,7 +96,10 @@ class ChannelRunner(SimulationRunner):
                 elapsed = (time.monotonic_ns()-started)/1e6
                 self.report['latencies_ms'].append(elapsed)
                 self.report.setdefault('latency_samples', []).append(dict(kind=kind,
-                    ingress=getattr(self, 'last_ingress', 'unknown'), milliseconds=elapsed))
+                    ingress=getattr(self, 'last_ingress', 'unknown'), milliseconds=elapsed,
+                    started_ns=started, observed_ns=started+int(elapsed*1e6),
+                    realtime_ms=(event['monotonic_ns']-started)/1e6,
+                    snapshot_ms=elapsed-(event['monotonic_ns']-started)/1e6))
                 return result
         raise TimeoutError('Socket.IO invalidation did not expose the expected Core state')
 
@@ -154,6 +109,7 @@ class ChannelRunner(SimulationRunner):
             assert len(rows)<=1, 'Duplicate Core message'
             return rows[0] if rows else None
         row = self.observe(emit, match)
+        self.report['latency_samples'][-1]['body'] = body
         visible = self.core('relay_core.api.messages',dict(contact=row['relay_contact'],channel=self.fixture['channel']))['items']
         assert any(m['name']==row['name'] for m in visible), 'Projected message is absent from authorized API'
         return row
@@ -186,12 +142,27 @@ class ChannelRunner(SimulationRunner):
         else:
             raise AssertionError('Unauthorized operation succeeded')
 
+    def latency_acceptance(self):
+        values = []
+        for number in range(10):
+            body = f'Local simulation latency {self.run_id} {number}'
+            _, emit = self.ai_payload(self.fixture, 1000 + number, body)
+            self.message(body, emit)
+            values.append(self.report['latency_samples'][-1]['milliseconds'])
+        result = dict(samples=len(values), p50=percentile(values,50), p95=percentile(values,95), target_ms=500)
+        result['passed'] = result['p95'] < result['target_ms']
+        self.report['single_inbound_latency_ms'] = result
+        assert result['passed'], 'Single inbound p95 must be < 500 ms; see callback timing and Core inline eligibility'
+        return result
+
     def finish(self):
         try:
             if self.process and self.process.poll() is None:
                 self.report['hub_state']=self.control('state')
                 self.report['providers']=self.control('providers')
-            if self.fixture:self.report['core_state']=self.snapshot()
+            if self.fixture:
+                self.report['core_state']=self.snapshot()
+                self.report['automation_diagnostics']=self.site.call('acceptance_diagnostics')
         except Exception as exc:
             self.report['capture_error']=type(exc).__name__
         for connection in (self.realtime,self.denied):
@@ -201,15 +172,14 @@ class ChannelRunner(SimulationRunner):
             try:self.site.call('restore')
             except Exception as exc:self.report['cleanup_error']=type(exc).__name__
             self.site.close()
-        if self.database:
-            from psycopg2 import sql
-            if hasattr(self,'schema'):
-                with self.database.cursor() as cur:
-                    cur.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
-            self.database.close()
-        if self.run_lock:self.run_lock.close()
+        self.close_database()
         for log in self.logs:log.close()
         self.report['captures']=self.captures
+        self.report['callback_timings_ms'] = [dict(
+            http=(r['finished_ns']-r['started_ns'])/1e6,
+            dispatch=float(r.get('headers',{}).get('X-Relay-Dispatch-Ms',['0'])[0]),
+            **r.get('response',{}).get('message',{}).get('timing',{}))
+            for r in self.captures if r['kind']=='callback' and r['status']==200]
         self.report['latency_basis']='Control emit start to event-gated Core observation (no HTTP polling)'
         self.report['latency_ms']={key:percentile(self.report['latencies_ms'],n) for key,n in [('p50',50),('p95',95),('p99',99)]}
         samples=self.report.get('latency_samples', [])

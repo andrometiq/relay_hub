@@ -74,4 +74,42 @@ class TelegramDriverTests(unittest.TestCase):
         with self.assertRaises(AssertionError):runner.permission_denied('method',{})
 
 
+class ChannelAcceptanceTests(unittest.TestCase):
+    def runner(self, medium):
+        from channel_sim_acceptance import ChannelAcceptance
+        runner = ChannelAcceptance()
+        runner.medium, runner.run_id, runner.report = medium, '1792805488467037716', {}
+        runner.emit = Mock()
+        return runner
+
+    def test_email_replay_keeps_hub_identity_and_reply_thread(self):
+        from email import policy
+        from email.parser import Parser
+        runner = self.runner('Email')
+        provider, emit = runner.ai_payload({'endpoint':'ledger@example.invalid'}, 2, 'yes')
+        emit(); emit()
+        self.assertEqual(runner.emit.call_args_list[0],runner.emit.call_args_list[1])
+        call = runner.emit.call_args
+        self.assertEqual(provider,call.kwargs['identifier'])
+        message = Parser(policy=policy.default).parsestr(call.args[0])
+        self.assertEqual(message['In-Reply-To'], '<ledger-1792805488467037716-1@example.invalid>')
+        self.assertEqual(message['References'],message['In-Reply-To'])
+
+    def test_email_blank_provider_field_remains_a_reported_defect(self):
+        runner = self.runner('Email')
+        runner.check_email_identity(dict(name='outgoing',provider_id='',
+            provider_context='{"provider":"Email","message_id":"<accepted@example.invalid>"}'))
+        self.assertEqual(runner.report['email_identity_defects'],['outgoing'])
+
+    def test_latency_gate_keeps_failure_and_all_ten_samples(self):
+        runner = object.__new__(ChannelRunner)
+        runner.run_id, runner.fixture, runner.report = 'run', {}, {'latency_samples':[]}
+        runner.ai_payload = Mock(return_value=('id',lambda:None))
+        def message(*args): runner.report['latency_samples'].append({'milliseconds':501})
+        runner.message = message
+        with self.assertRaisesRegex(AssertionError,'500 ms'): runner.latency_acceptance()
+        self.assertEqual(runner.report['single_inbound_latency_ms']['samples'],10)
+        self.assertFalse(runner.report['single_inbound_latency_ms']['passed'])
+
+
 if __name__=='__main__':unittest.main()

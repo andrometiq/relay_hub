@@ -1,4 +1,5 @@
 """Shared local-only HTTP, fixture process and Socket.IO simulation transports."""
+import fcntl
 import ipaddress
 import json
 import math
@@ -192,6 +193,56 @@ class Realtime:
 
 
 class SimulationRunner:
+    def lock_site(self):
+        self.run_lock = open(ROOT / '.runtime/channel-simulation.lock', 'a')
+        try:
+            fcntl.flock(self.run_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('Another connected channel driver owns the local site') from None
+
+    def prepare_database(self):
+        import psycopg2
+        from psycopg2 import sql
+        self.database = psycopg2.connect(test_database_url(), connect_timeout=5)
+        self.database.autocommit = True
+        schema = 'relay_sim_test_'+self.run_id
+        with self.database.cursor() as cur:
+            cur.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
+        self.schema = schema
+        self.db_env = dict(DATABASE_URL=test_database_url()+'?search_path='+self.schema,
+            RELAY_CREDENTIAL_KEY=read_env()['RELAY_CREDENTIAL_KEY'])
+
+    def build_launcher(self):
+        self.binary = ROOT / '.runtime/relay-sim-connected.test'
+        self.state_dir = self.args.report_dir / ('provider-'+self.run_id)
+        self.state_dir.mkdir(mode=0o700)
+        # A fresh fake mailbox must have a new UIDVALIDITY: Core retains its old provider IDs.
+        with (self.state_dir / 'email.json').open('x') as state:
+            json.dump(dict(uid_validity=int(self.run_id)//1000000000, uid_next=1,
+                           sent=[], inbox=[], faults={}), state)
+        (self.state_dir / 'email.json').chmod(0o600)
+        subprocess.run(['go','test','-c','-o',str(self.binary),'./cmd/relay-sim'], cwd=ROOT,
+            env={**os.environ,'GOCACHE':'/tmp/relay-sim-gocache'}, check=True,
+            stdout=self.open_log('build.log'),stderr=subprocess.STDOUT)
+
+    def unique_sequences(self):
+        # Core retains event identities between runs; isolated Hub schemas must not reuse them.
+        with self.database.cursor() as cur:
+            cur.execute('SELECT sequencename FROM pg_sequences WHERE schemaname=%s', (self.schema,))
+            for (sequence,) in cur.fetchall():
+                cur.execute('SELECT setval(%s::regclass,%s,false)',
+                    (self.schema+'.'+sequence, int(self.run_id)//1000))
+
+    def close_database(self):
+        if getattr(self, 'database', None):
+            from psycopg2 import sql
+            if hasattr(self, 'schema'):
+                with self.database.cursor() as cur:
+                    cur.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(self.schema)))
+            self.database.close()
+        if getattr(self, 'run_lock', None):
+            self.run_lock.close()
+
     def control(self, path, data=None):
         return request(self.meta + '/_sim/' + path, data, {'Authorization': 'Bearer ' + self.control_token})
 
@@ -245,3 +296,21 @@ class SimulationRunner:
             except (OSError, RuntimeError):
                 time.sleep(.1)
         raise TimeoutError('relay-sim readiness timeout')
+
+
+def test_database_url():
+    values = read_env()
+    dsn = os.environ.get('RELAY_TEST_DATABASE_URL')
+    if not dsn:
+        source = urllib.parse.urlsplit(values['DATABASE_URL'])
+        assert source.hostname == '127.0.0.1' and source.port == 18433, 'Unexpected database source'
+        dsn = urllib.parse.urlunsplit(source._replace(path='/relay_hub_v1_test', query='', fragment=''))
+    validate_test_database(dsn)
+    return dsn
+
+
+def validate_test_database(dsn):
+    parsed = urllib.parse.urlsplit(dsn)
+    if (parsed.scheme not in ('postgres','postgresql') or parsed.hostname != '127.0.0.1'
+            or parsed.port != 18433 or parsed.path != '/relay_hub_v1_test' or parsed.query or parsed.fragment):
+        raise ValueError('Only relay_hub_v1_test at 127.0.0.1:18433 without query overrides is allowed')

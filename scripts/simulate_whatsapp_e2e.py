@@ -105,30 +105,6 @@ def storm_latency(samples, timings, event_ids, receipt_count):
             'receipts_per_second': receipt_count / duration if duration else None}
 
 
-def database_env():
-    import psycopg2
-    from psycopg2 import sql
-    values = read_env()
-    original = urllib.parse.urlsplit(values['DATABASE_URL'])
-    assert original.hostname == '127.0.0.1' and original.port == 18433, 'Unexpected source database destination'
-    owner = urllib.parse.unquote(original.username)
-    try:
-        conn = psycopg2.connect(host='127.0.0.1', port=18433, dbname='postgres', user='postgres',
-                              password=values['POSTGRES_PASSWORD'], connect_timeout=5)
-        try:
-            conn.autocommit = True
-            with conn.cursor() as cur:
-                cur.execute('SELECT 1 FROM pg_database WHERE datname=%s', ('relay_hub_sim',))
-                if not cur.fetchone():
-                    cur.execute(sql.SQL('CREATE DATABASE relay_hub_sim OWNER {}').format(sql.Identifier(owner)))
-        finally:
-            conn.close()
-    except psycopg2.Error as exc:
-        raise RuntimeError('Cannot provision relay_hub_sim on local PostgreSQL (SQLSTATE ' + str(exc.pgcode) + ')') from None
-    dsn = urllib.parse.urlunsplit(original._replace(path='/relay_hub_sim', query='', fragment=''))
-    return {'DATABASE_URL': dsn, 'RELAY_CREDENTIAL_KEY': values['RELAY_CREDENTIAL_KEY']}
-
-
 class Runner(SimulationRunner):
     def __init__(self, args):
         self.args = args
@@ -162,9 +138,9 @@ class Runner(SimulationRunner):
 
 
     def start(self, resume=False):
-        self.launch([str(self.binary), '--addr', self.args.hub_addr,
+        self.launch([str(self.binary), '-test.run=^TestLauncherProcess$', '--', '--addr', self.args.hub_addr,
             '--meta-addr', self.args.meta_addr, '--core-origin', self.args.core_origin,
-            '--resume' if resume else '--migrate'])
+            '--state-dir', str(self.state_dir), '--resume' if resume else '--migrate'], {'RELAY_SIM_CHILD': '1'})
 
 
 
@@ -186,17 +162,30 @@ class Runner(SimulationRunner):
         self.record_inbound(provider, result, observed, phase)
         return observed
 
-    def sample_receipt_projection(self):
+    def sample_receipt_projection(self, event_ids):
         deadline = time.monotonic() + max(60, self.args.storm_receipts / 100)
         count = 0
+        next_sample = time.monotonic()
         while time.monotonic() < deadline:
-            started = time.monotonic()
+            time.sleep(max(0, next_sample - time.monotonic()))
             observed = self.observe_inbound(f'wamid.sim.processing.{self.run_id}.{count}', phase='processing')
             count += 1
             if observed['receipts_complete']:
                 return count
-            # Pace send starts without adding the observation latency to the spacing.
-            time.sleep(max(0, .25 - (time.monotonic() - started)))
+            window = self.site.call('receipt_window', event_ids=event_ids)
+            now = time.monotonic()
+            if window:
+                # Status callbacks run once per second. Aim the *observation*
+                # at the next projection's midpoint using measured worker times
+                # and our last inbound latency. Free-running samples can alias
+                # the ~100 ms projection windows and leave only four overlaps.
+                latency = self.report['inbound_samples'][-1]['latency_ms'] / 1000
+                midpoint = (window['started_ns'] + window['finished_ns']) / 2e9
+                next_sample = midpoint + 1 - latency
+                if next_sample < now:
+                    next_sample += math.floor(now - next_sample) + 1
+            else:
+                next_sample = now  # Bootstrap until the first real timing exists.
         raise TimeoutError('Receipt projection did not finish during inbound sampling')
 
     def wait_projection_timings(self, event_ids, batches):
@@ -298,7 +287,7 @@ class Runner(SimulationRunner):
     def execute(self):
         if self.args.dry_run:
             self.report['plan'] = {'hub': self.hub, 'fake_meta': self.meta, 'core': self.args.core_origin,
-                'socketio': self.args.socketio_origin, 'database': 'relay_hub_sim@127.0.0.1:18433',
+                'socketio': self.args.socketio_origin, 'database': 'isolated schema in relay_hub_v1_test@127.0.0.1:18433',
                 'bench_python': str(self.args.frappe_python), 'sites': str(self.args.sites),
                 'writes': 'Only an actual run provisions the Hub database and Core fixture/settings.',
                 'receipt_count': 1251, 'expected_batches': [500, 500, 251],
@@ -315,11 +304,11 @@ class Runner(SimulationRunner):
         self.canonical = self.report['preflight']['canonical_origin']
         parsed = urllib.parse.urlsplit(self.canonical)
         assert parsed.scheme == 'http' and parsed.hostname == self.args.site and parsed.port == urllib.parse.urlsplit(self.args.core_origin).port, 'Core canonical origin must match site and local HTTP port'
-        self.db_env = database_env()
-        self.binary = ROOT / '.runtime/relay-sim'
-        subprocess.run(['go', 'build', '-o', str(self.binary), './cmd/relay-sim'], cwd=ROOT,
-            env={**os.environ, 'GOCACHE': '/tmp/relay-sim-gocache'}, check=True, stdout=self.open_log('build.log'), stderr=subprocess.STDOUT)
+        self.lock_site()
+        self.prepare_database()
+        self.build_launcher()
         self.start()
+        self.unique_sequences()
         self.fixture = self.site.call('provision', run=self.run_id)
         self.callback_secret = secrets.token_urlsafe(32)
         self.configure()
@@ -440,7 +429,9 @@ class Runner(SimulationRunner):
             previous_ids = {e['id'] for e in self.control('state')['events']}
             for payload in sustained_storm(providers, count):
                 self.emit(payload)
-            processing_samples = self.sample_receipt_projection()
+            committed = self.control('state')
+            storm_ids = [e['id'] for e in committed['events'] if e['lane'] == 'status' and e['id'] not in previous_ids]
+            processing_samples = self.sample_receipt_projection(storm_ids)
             state = self.wait_control(lambda s: all(c['acknowledged'] for c in s['callbacks'] if c['lane'] == 'status'),
                                       timeout=max(60, count / 100))
             storm_ids = [e['id'] for e in state['events'] if e['lane'] == 'status' and e['id'] not in previous_ids]
@@ -499,6 +490,7 @@ class Runner(SimulationRunner):
         if self.site:
             try:
                 self.site.call('acceptance_disable')
+                self.site.call('restore')
             except Exception as exc:
                 self.report['cleanup_error'] = str(exc)
                 self.report['error'] = 'Simulation automation could not be disabled'
@@ -507,6 +499,7 @@ class Runner(SimulationRunner):
             except Exception:
                 pass
             self.site.close()
+        self.close_database()
         for log in self.logs:
             log.close()
         self.report['captures'] = self.captures

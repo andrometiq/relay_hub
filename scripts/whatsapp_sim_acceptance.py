@@ -14,6 +14,11 @@ def fixture_origin(value):
     return loopback_origin(value)
 
 
+def provider_identity(message):
+    context = json.loads(message.get('provider_context') or '{}')
+    return context.get('message_id') if context.get('provider') == 'Email' else message.get('provider_id')
+
+
 class Acceptance:
     def __init__(self, frappe, fixture, insert):
         self.f, self.fixture, self.insert = frappe, fixture, insert
@@ -26,7 +31,7 @@ class Acceptance:
             'site configuration activation needs separate approval. '
             'See docs/simulation-validation.md.')
 
-    def seed_ai(self, run, origin):
+    def seed_ai(self, run, origin, medium="WhatsApp"):
         self.preflight()
         f, fixture = self.f, self.fixture
         origin = fixture_origin(origin)
@@ -34,7 +39,15 @@ class Acceptance:
         assert f.db.has_column('Relay AI Skill', 'sample_key'), 'Reload Relay AI Skill before the connected run'
         from relay_core.ai.samples import install_samples, LEDGER_TOOL
         install_samples()
-        skill = f.get_doc('Relay AI Skill', {'sample_key': 'supplier_ledger'})
+        sample = f.get_doc('Relay AI Skill', {'sample_key': 'supplier_ledger'})
+        # Channel-specific fixture copies preserve the installed sample's scope.
+        skill = sample if medium == 'WhatsApp' else f.copy_doc(sample)
+        if medium != 'WhatsApp':
+            skill.sample_key = None
+            skill.title = f'Local simulation {medium} supplier ledger {run}'
+            skill.channel = fixture['channel']
+            skill.enabled = 0
+            skill.insert(ignore_permissions=True)
         assert json.loads(skill.allowed_tools) == [LEDGER_TOOL], 'Sample read tools were customized; review before simulation'
         assert not skill.channel or skill.channel == fixture['channel'], 'Sample belongs to another channel'
         assert not f.get_all('Relay AI Skill', filters={'channel': fixture['channel'], 'business_doctype': 'Supplier',
@@ -44,6 +57,8 @@ class Acceptance:
         suppliers = [self.insert('Supplier', supplier_name=f'Local Relay simulation {label} {run}',
             supplier_type='Company', supplier_group=group) for label in ('supplier', 'excluded supplier')]
         endpoint = '9198' + str(int(hashlib.sha256(run.encode()).hexdigest()[:12], 16) % 100000000).zfill(8)
+        if medium == 'Telegram': endpoint = str(int(run[-12:]) + 200000)
+        elif medium == 'Email': endpoint = 'ledger-' + run + '@example.invalid'
         assert not f.db.exists('Relay Contact Endpoint', {'channel': fixture['channel'], 'endpoint': endpoint}), 'Fixture endpoint collision'
         kind = f.db.get_value('Relay Contact Type', {'business_doctype': 'Supplier'}, 'name')
         if not kind:
@@ -51,7 +66,7 @@ class Acceptance:
         else:
             assert f.db.get_value('Relay Contact Type', kind, 'enabled'), 'Supplier contact type is disabled'
         person = self.insert('Contact', first_name=f'Local Relay simulation supplier {run}',
-            phone_nos=[dict(phone=endpoint, is_primary_mobile_no=1)],
+            phone_nos=[dict(phone=endpoint, is_primary_mobile_no=1)] if medium == 'WhatsApp' else [],
             links=[dict(link_doctype='Supplier', link_name=suppliers[0].name)])
         contact = self.insert('Relay Contact', contact=person.name, display_name=f'Local simulation supplier {run}', automation_paused=0)
         self.insert('Relay Contact Endpoint', channel=fixture['channel'], endpoint=endpoint, relay_contact=contact.name, verified=1)
@@ -103,7 +118,7 @@ class Acceptance:
         while time.monotonic() < deadline:
             state = self.ai_state(provider)
             if len(state['runs']) == 1 and state['runs'][0]['status'] == status:
-                if status == 'Handoff' or (len(state['outgoing']) == 1 and state['outgoing'][0]['provider_id']
+                if status == 'Handoff' or (len(state['outgoing']) == 1 and provider_identity(state['outgoing'][0])
                         and (not receipt or state['outgoing'][0]['status'] == receipt)):
                     return state
             time.sleep(.05)
@@ -131,11 +146,13 @@ class Acceptance:
     def automation_checked(self, message):
         return self.f.db.get_value('Relay Message', message, 'automation_status') == 'Complete'
 
-    def seed_event(self, run, template_id):
+    def seed_event(self, run, template_id=None, medium="WhatsApp"):
         f, fixture = self.f, self.fixture
         assert f.conf.developer_mode and f.local.site == 'yrp.site'
-        template = f.db.get_value('Relay WhatsApp Template', {'account': 'sim-v1', 'template_id': template_id, 'status': 'APPROVED'}, 'name')
-        assert template, 'Step 12 approved template is required'
+        template = None
+        if medium == 'WhatsApp':
+            template = f.db.get_value('Relay WhatsApp Template', {'account': 'sim-v1', 'template_id': template_id, 'status': 'APPROVED'}, 'name')
+            assert template, 'Step 12 approved template is required'
         assert not f.get_all('Relay Business Event Rule', filters={'source_doctype': 'Sales Order', 'enabled': 1}, limit_page_length=1), 'Disable other Sales Order rules before simulation'
         item_group = f.db.get_value('Item Group', {'is_group': 0}, 'name')
         uom = f.db.get_value('UOM', {'enabled': 1}, 'name')
@@ -151,10 +168,19 @@ class Acceptance:
             item_group=item_group, stock_uom=uom, is_stock_item=0, is_sales_item=1, **tax_fields)
         price_list = self.insert('Price List', price_list_name=f'Local Relay simulation {run}',
             enabled=1, selling=1, buying=0, currency=currency)
+        if medium != 'WhatsApp':
+            binding = f.db.get_value('Relay Contact Endpoint', {'channel': fixture['channel'],
+                'relay_contact': fixture['contact'], 'endpoint': fixture['endpoint']}, 'name')
+            assert binding, 'Customer fixture endpoint is required'
+            self.insert('Relay Channel Preference', contact=fixture['person'],
+                business_doctype='Customer', business_name=fixture['customer'],
+                endpoint=binding, consent='Granted', priority=1)
         rule = self.insert('Relay Business Event Rule', title=f'Local Relay simulation order {run}', enabled=1,
-            source_doctype='Sales Order', event='on_submit', recipient_field='customer', business_doctype='Customer',
+            source_doctype='Sales Order', event='on_submit', recipient_field='customer', business_doctype='Customer', contact=fixture['person'],
             channel=fixture['channel'], run_as_user=fixture['operator']['name'], template=template,
-            parameter_mapping=json.dumps(['name']))
+            parameter_mapping=json.dumps(['name']),
+            telegram_body='Local simulation order {name}',
+            email_subject='Local simulation order {name}', email_body='Local simulation order {name}')
         self.event = dict(rule=rule.name, item=item.name, company=company, uom=uom,
             currency=currency, price_list=price_list.name)
         f.db.commit()
@@ -190,10 +216,26 @@ class Acceptance:
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
             state = self.event_state(source)
-            if len(state['messages']) == 1 and state['messages'][0]['provider_id']:
+            if len(state['messages']) == 1 and provider_identity(state['messages'][0]):
                 return state
             time.sleep(.05)
         raise AssertionError('Business event worker did not create outgoing history')
+
+    def diagnostics(self):
+        f = self.f
+        f.db.rollback()
+        from frappe.utils.background_jobs import get_job, get_queue
+        from relay_core.automation.queue import _signal_key
+        signal = f.cache.get(_signal_key())
+        signal = signal.decode() if isinstance(signal, bytes) else signal
+        job = get_job('relay-message-automation-drain:' + str(signal)) if signal else None
+        messages = f.get_all('Relay Message', filters={'relay_contact': self.ai['contact']},
+            fields=['name', 'direction', 'provider_id', 'provider_context', 'automation_status'],
+            limit_page_length=100) if self.ai else []
+        return dict(messages=messages, pending_hooks=f.db.count('Relay Message', {'automation_status': 'Pending'}),
+            default_queue=get_queue('default').count, wake_exists=bool(signal),
+            wake_ttl=f.cache.ttl(_signal_key()), wake_job_exists=bool(job),
+            wake_job_status=str(job.get_status()) if job else None)
 
     def disable(self):
         # Retain every fixture for inspection; stop leftover simulation automation.
