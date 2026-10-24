@@ -106,6 +106,7 @@ class Acceptance:
             account=provider.name, model_id='relay-sim-ledger', temperature=0, max_tokens=1200)
         skill.update(dict(enabled=1, mode='Automatic', channel=fixture['channel'], ai_model=model.name,
             run_as_user=fixture['operator']['name'], handoff_owner=fixture['operator']['name'],
+            execution_policy='Execute', allowed_actions='[{"action":"reply"}]', search_confirmation='Always',
             target=TARGET, allowed_tools=json.dumps([{**LEDGER_TOOL, 'identity_anchor': 'Supplier',
                 'identity_fields': {medium: identity_field}, 'company_field': 'company'}])))
         skill.save(ignore_permissions=True)
@@ -122,19 +123,43 @@ class Acceptance:
         self.f.db.commit()
         return {'matched': matched}
 
+    def check_identity(self, message):
+        # Preview cannot authorize any read. Reuse the completed search while it
+        # is still the latest active turn, with its real declaration and receipt.
+        from relay_core.ai.service import authorize_search, decide
+        from relay_core.ai.tools import as_user, contracts
+        f = self.f
+        run = f.get_doc('Relay Automation Run', {'message': message, 'skill': self.ai['skill']})
+        assert run.status == 'Completed' and run.stage == 'Event'
+        source = f.get_doc('Relay Message', message)
+        assert source.relay_contact == self.ai['contact']
+        skill = f.get_doc('Relay AI Skill', run.skill)
+        plan = json.loads(run.search_plan)['plan']
+        with as_user(run.execution_user):
+            # Prove the declaration gate still allows this exact read. A preview
+            # or stale run denial would not exercise supplier identity checks.
+            contract = next(row for row in contracts(skill) if row['name'] == plan['reference'])
+            authorize_search(run.name, skill, contract, plan['arguments'])
+            try:
+                return decide(skill, source, run.name)
+            except ValueError:
+                return dict(handoff=True, reply='', reads=[])
+
     def ai_state(self, provider):
         f = self.f
         f.db.rollback()
         incoming = f.get_all('Relay Message', filters={'relay_contact': self.ai['contact'], 'provider_id': provider},
             fields=['name', 'business_doctype', 'business_name'])
         runs = f.get_all('Relay Automation Run', filters={'message': ['in', [row.name for row in incoming]]},
-            fields=['name', 'status', 'decision', 'ticket']) if incoming else []
+            fields=['name', 'status', 'stage', 'decision', 'ticket', 'match_result', 'search_plan', 'reason']) if incoming else []
+        flow_actions = f.get_all('Relay Flow Action', filters={'automation_run': ['in', [row.name for row in runs]]},
+            fields=['name', 'automation_run', 'action', 'step', 'status', 'result'], order_by='step asc') if runs else []
         actions = f.get_all('Relay Message Action', filters={'source_message': ['in', [row.name for row in incoming]]},
             fields=['name', 'status', 'request_key', 'outbound_message']) if incoming else []
         outgoing = [f.get_doc('Relay Message', row.outbound_message).as_dict() for row in actions if row.outbound_message]
         tickets = f.get_all('Relay Ticket', filters={'business_doctype': 'Supplier', 'business_name': self.ai['supplier']},
             fields=['name', 'assigned_to', 'business_doctype', 'business_name', 'source_run'])
-        return dict(incoming=incoming, runs=runs, actions=actions, outgoing=outgoing, tickets=tickets,
+        return dict(incoming=incoming, runs=runs, actions=actions, outgoing=outgoing, tickets=tickets, flow_actions=flow_actions,
             paused=f.db.get_value('Relay Contact', self.ai['contact'], 'automation_paused'))
 
     def wait_ai(self, provider, status, receipt=None):
@@ -146,7 +171,8 @@ class Acceptance:
                         and (not receipt or state['outgoing'][0]['status'] == receipt)):
                     return state
             time.sleep(.05)
-        raise AssertionError('AI worker did not reach expected run/history state')
+        details = [{key: row[key] for key in ('status', 'stage', 'reason')} for row in state['runs']]
+        raise AssertionError(f'AI worker did not reach expected run/history state: {details}')
 
     def wait_paused(self, provider):
         deadline = time.monotonic() + 35
@@ -159,8 +185,10 @@ class Acceptance:
                     continue
                 state = self.ai_state(provider)
                 assert state['paused'], 'Conversation is no longer paused'
-                assert not state['runs'], 'Paused message created an automation run'
-                assert not state['actions'] and not state['outgoing'], 'Paused message created an action'
+                assert len(state['runs']) == 1 and state['runs'][0]['status'] == 'Cancelled', (
+                    'Paused message created an automation run that was not cancelled')
+                assert state['runs'][0]['reason'] == 'Conversation is owned by staff'
+                assert not state['actions'] and not state['outgoing'] and not state['flow_actions'], 'Paused message created an action'
                 # The durable completion marker proves this committed message
                 # was checked for automation, independently of RQ retention.
                 return state

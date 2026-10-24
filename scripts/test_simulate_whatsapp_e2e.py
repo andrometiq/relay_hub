@@ -79,13 +79,15 @@ class RunnerTests(unittest.TestCase):
         from whatsapp_sim_acceptance import Acceptance
         acceptance = Acceptance(Mock(), {}, Mock())
         acceptance.automation_checked = Mock(return_value=True)
-        state = dict(incoming=[{'name': 'PAUSED-MESSAGE'}], paused=1, runs=[], actions=[], outgoing=[])
+        state = dict(incoming=[{'name': 'PAUSED-MESSAGE'}], paused=1,
+            runs=[{'status': 'Cancelled', 'reason': 'Conversation is owned by staff'}],
+            actions=[], outgoing=[], flow_actions=[])
         acceptance.ai_state = Mock(side_effect=[dict(state, incoming=[]), state, state])
         with patch('whatsapp_sim_acceptance.time.sleep'):
             self.assertEqual(acceptance.wait_paused('wamid.paused'), state)
         self.assertEqual(acceptance.ai_state.call_args_list, [call('wamid.paused'), call('wamid.paused'), call('wamid.paused')])
         for change in (dict(runs=[{'status': 'Pending'}]), dict(actions=[{'status': 'Pending'}]),
-                       dict(outgoing=[{}]), dict(paused=0), dict(incoming=[{}, {}])):
+                       dict(outgoing=[{}]), dict(flow_actions=[{}]), dict(runs=[]), dict(paused=0), dict(incoming=[{}, {}])):
             acceptance.ai_state = Mock(return_value=dict(state, **change))
             with self.subTest(change=change), self.assertRaises(AssertionError):
                 acceptance.wait_paused('wamid.paused')
@@ -113,8 +115,11 @@ class RunnerTests(unittest.TestCase):
             runner.emit = Mock()
             runner.wait_control = Mock(return_value={'callbacks': [{'acknowledged': True}]})
             runner.control = Mock(return_value={})
+            runner.assert_search_announcement = Mock()
+            runner.assert_confirmed_search = Mock()
+            runner.assert_identity_mismatch = Mock(return_value=True)
             runner.check_ai_reply = Mock(side_effect=[
-                dict(outgoing=[{'content': 'Confirm 2026-10-01 to 2026-10-31'}], runs=[{'decision': '{"reads":[]}'}]),
+                dict(outgoing=[{'content': 'Confirm 2026-10-01 to 2026-10-31'}], runs=[{'name': 'SEARCH-RUN', 'decision': '{"reads":[]}'}]),
                 dict(outgoing=[{'content': 'SIM-OWN-DEBIT SIM-OWN-CREDIT Debit: 100.10 Credit: 40.05 Net debit: 60.05'}],
                      runs=[{'decision': '{"reads":[{}]}'}], incoming=[{'name': 'CONFIRMED-MESSAGE'}])])
             with patch.object(sim, 'provider_posts', return_value=[{}, {}]), \
@@ -365,11 +370,11 @@ class RunnerTests(unittest.TestCase):
         for bad in (good + ' SIM-OTHER-SUPPLIER-SECRET', good + ' MODEL INVENTED TOTAL 999999',
                     good.replace('60.05', '60.06'), good + ' SIM-OUTSIDE-RANGE', good + ' SIM-CANCELLED'):
             with self.assertRaises(AssertionError): sim.assert_ledger_reply(bad)
-        fixture = dict(supplier='SUP-A', handoff_owner='owner')
-        ticket = dict(assigned_to='owner', business_doctype='Supplier', business_name='SUP-A', source_run='RUN-1')
-        state = dict(paused=1, tickets=[ticket], runs=[dict(name='RUN-1', status='Handoff')], actions=[], outgoing=[])
+        fixture = dict(supplier='SUP-A', handoff_owner='owner', source_run='SEARCH-RUN')
+        ticket = dict(name='TICKET-1', assigned_to='owner', business_doctype='Supplier', business_name='SUP-A', source_run='SEARCH-RUN')
+        state = dict(paused=1, tickets=[ticket], runs=[dict(name='RUN-1', ticket='TICKET-1', status='Handoff')], actions=[], outgoing=[])
         sim.assert_handoff(state, fixture)
-        for change in (dict(paused=0), dict(actions=[{}]), dict(runs=[dict(name='RUN-1', status='Completed')]), dict(tickets=[ticket, ticket]),
+        for change in (dict(paused=0), dict(actions=[{}]), dict(runs=[dict(name='RUN-1', ticket='TICKET-1', status='Completed')]), dict(tickets=[ticket, ticket]),
                        dict(tickets=[dict(ticket, business_name='SUP-B')]),
                        dict(tickets=[dict(ticket, assigned_to='wrong')])):
             with self.assertRaises(AssertionError): sim.assert_handoff(dict(state, **change), fixture)
@@ -588,3 +593,54 @@ class AcceptanceIsolationTests(unittest.TestCase):
             self.assertIsNone(copies[0].sample_key)
             self.assertIn(medium, copies[0].title)
             self.assertEqual(copies[0].enabled, 0)
+
+class DeclaredSearchTests(unittest.TestCase):
+    def setUp(self):
+        from simulation_common import SimulationRunner
+        self.runner = SimulationRunner()
+        self.plan = dict(purpose='review totals', reference='supplier_ledger',
+            fields=['debit', 'credit'], arguments={'filters': {'posting_date': ['between', ['2026-10-01', '2026-10-31']]}})
+        self.offered = dict(runs=[dict(name='SEARCH', ticket='TICKET', stage='Search', status='Completed',
+            search_plan=json.dumps(dict(plan=self.plan, confirmed_by=None, consumed_by=None)),
+            decision=json.dumps({'reads': []}), match_result=json.dumps({'method': 'classifier', 'selected': 'SKILL'}))],
+            flow_actions=[], actions=[{'status': 'Submitted'}], outgoing=[dict(provider_id='provider-search', creation='1',
+                content='I will search supplier_ledger to review totals. Fields: debit, credit. Search: 2026-10-01 2026-10-31. Please confirm')])
+        self.result = dict(runs=[dict(name='READ', ticket='TICKET', stage='Event',
+            search_plan=json.dumps(dict(plan=self.plan, origin='SEARCH', confirmed_by='YES', consumed_by='READ')),
+            decision=json.dumps({'reads': [{}]}))], incoming=[{'name': 'YES'}],
+            flow_actions=[dict(action='reply', status='Completed', step=0, result=json.dumps({'reply': 'ledger'}))],
+            outgoing=[dict(content='ledger', creation='2')])
+        self.records = [dict(kind='graph', body={'text': self.offered['outgoing'][0]['content']}, status=200, finished_ns=10),
+            dict(kind='ai', started_ns=20, body={'messages': [{'role': 'tool', 'content': 'SIM-OWN-DEBIT'}]})]
+        self.runner.control = Mock(return_value={'records': self.records})
+
+    def test_provider_acceptance_must_precede_ledger_data(self):
+        from copy import deepcopy
+        self.runner.assert_confirmed_search(self.offered, self.result)
+        for changes in ({'finished_ns': 30}, {'status': 503}, {'body': {'text': 'No announcement'}}):
+            records = deepcopy(self.records)
+            records[0].update(changes)
+            self.runner.control.return_value = {'records': records}
+            with self.subTest(changes=changes), self.assertRaises(AssertionError):
+                self.runner.assert_confirmed_search(self.offered, self.result)
+
+    def test_confirmation_cannot_change_plan_or_duplicate_reply(self):
+        from copy import deepcopy
+        for change in ('plan', 'confirmation', 'reply'):
+            result = deepcopy(self.result)
+            if change == 'reply':
+                result['flow_actions'] *= 2
+            else:
+                record = json.loads(result['runs'][0]['search_plan'])
+                if change == 'plan': record['plan']['arguments'] = {}
+                else: record['confirmed_by'] = 'OTHER'
+                result['runs'][0]['search_plan'] = json.dumps(record)
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                self.runner.assert_confirmed_search(self.offered, result)
+
+    def test_announcement_cannot_contain_business_reads(self):
+        self.runner.control.return_value = {'records': [dict(kind='ai', body={'messages': []}) for _ in range(2)]}
+        self.runner.assert_search_announcement(self.offered)
+        self.offered['runs'][0]['decision'] = json.dumps({'reads': [{}]})
+        with self.assertRaisesRegex(AssertionError, 'before confirmation'):
+            self.runner.assert_search_announcement(self.offered)

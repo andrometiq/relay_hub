@@ -194,12 +194,53 @@ class Realtime:
 
 
 class SimulationRunner:
+    def assert_search_announcement(self, state):
+        run = state['runs'][0]
+        plan = json.loads(run['search_plan'])
+        decision = json.loads(run['decision'])
+        match = json.loads(run['match_result'])
+        assert match['method'] == 'classifier' and match['selected'], 'Event was not classified'
+        assert run['stage'] == 'Search' and run['status'] == 'Completed'
+        assert decision['reads'] == [] and not state['flow_actions'], 'Business action ran before confirmation'
+        assert plan['confirmed_by'] is None and plan['consumed_by'] is None
+        assert state['actions'][0]['status'] == 'Submitted' and state['outgoing'][0]['provider_id']
+        text = state['outgoing'][0]['content']
+        assert text.startswith('I will search supplier_ledger to '), 'Missing search announcement'
+        assert all(value in text for value in ('2026-10-01', '2026-10-31', 'Fields:', 'Search:', 'confirm'))
+        calls = [r for r in self.control('state')['records'] if r['kind'] == 'ai']
+        assert len(calls) == 2, 'Expected classifier and search declaration before confirmation'
+        assert not any(m['role'] == 'tool' for r in calls for m in r['body']['messages']), 'Read before announcement'
+        assert not any(marker in json.dumps(calls) + text for marker in ('SIM-OWN-DEBIT', 'SIM-OWN-CREDIT'))
+
+    def assert_confirmed_search(self, offered, state):
+        origin, run = offered['runs'][0], state['runs'][0]
+        plan = json.loads(run['search_plan'])
+        assert run['stage'] == 'Event' and run['ticket'] == origin['ticket']
+        assert plan['origin'] == origin['name'] and plan['confirmed_by'] == state['incoming'][0]['name']
+        assert plan['consumed_by'] == run['name']
+        assert plan['plan'] == json.loads(origin['search_plan'])['plan']
+        assert len(json.loads(run['decision'])['reads']) == 1, 'Expected scoped tool evidence'
+        assert len(state['flow_actions']) == 1, 'Expected one ordered reply action'
+        action = state['flow_actions'][0]
+        assert action['action'] == 'reply' and action['status'] == 'Completed' and action['step'] == 0
+        assert json.loads(action['result'])['reply'] == state['outgoing'][0]['content']
+        # The first provider send was checked as accepted before confirmation
+        # was emitted; compare the persisted timeline as well.
+        assert offered['outgoing'][0]['creation'] < state['outgoing'][0]['creation'], 'Ledger preceded announcement'
+        records = self.control('state')['records']
+        announcements = [r for r in records if r['kind'] in ('graph', 'telegram', 'smtp')
+            and 'I will search supplier_ledger to ' in json.dumps(r['body'])]
+        reads = [r for r in records if r['kind'] == 'ai' and any(
+            m['role'] == 'tool' and 'SIM-OWN-DEBIT' in m['content'] for m in r['body']['messages'])]
+        assert len(announcements) == len(reads) == 1, 'Missing unique provider announcement or ledger result'
+        assert announcements[0]['status'] in (200, 250), 'Search announcement was not accepted'
+        assert announcements[0]['finished_ns'] < reads[0]['started_ns'], 'Ledger data reached AI before announcement'
+
     def assert_identity_mismatch(self, fixture, message):
         before = len([r for r in self.control('state')['records'] if r['kind'] == 'ai'])
         try:
             self.site.call('acceptance_set_ai_identity', matched=False)
-            result = self.core('relay_core.ai.configuration.test_skill',
-                dict(name=fixture['skill'], message=message))
+            result = self.site.call('acceptance_check_identity', message=message)
             assert result['handoff'] and not result['reply'] and not result.get('reads'), (
                 'A sender with a mismatched Supplier identity received ledger data')
         finally:
@@ -207,7 +248,8 @@ class SimulationRunner:
         calls = [r for r in self.control('state')['records'] if r['kind'] == 'ai'][before:]
         assert len(calls) == 2 and all(r['status'] == 200 for r in calls), 'Expected a ledger tool request and denial'
         tool = calls[0]['response']['choices'][0]['message']['tool_calls'][0]['function']
-        assert tool['name'] == 'supplier_ledger', 'Identity check did not attempt a ledger read'
+        assert tool['name'] == 'SEARCH' and json.loads(tool['arguments'])['reference'] == 'supplier_ledger', (
+            'Identity check did not attempt the declared ledger read')
         results = [m for m in calls[1]['body']['messages'] if m['role'] == 'tool']
         assert len(results) == 1 and set(json.loads(results[0]['content'])) == {'error'}, (
             'Mismatched identity exposed a ledger tool result')

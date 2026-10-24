@@ -54,7 +54,8 @@ def assert_handoff(state, fixture):
     ticket = state['tickets'][0]
     assert ticket['assigned_to'] == fixture['handoff_owner']
     assert ticket['business_doctype'] == 'Supplier' and ticket['business_name'] == fixture['supplier']
-    assert len(state['runs']) == 1 and ticket['source_run'] == state['runs'][0]['name']
+    assert len(state['runs']) == 1 and ticket['source_run'] == fixture['source_run']
+    assert state['runs'][0]['ticket'] == ticket['name']
     assert state['runs'][0]['status'] == 'Handoff'
     assert not state['actions'] and not state['outgoing'], 'Handoff must not send an automatic reply'
 
@@ -225,26 +226,25 @@ class Runner(SimulationRunner):
         first = f'wamid.sim.ai.offer.{self.run_id}'
         self.emit(inbound(first, fixture['endpoint'], 'I have a doubt in my ledger'))
         offered = self.check_ai_reply(first, fixture, 1)
-        offer = offered['outgoing'][0]['content']
-        assert '2026-10-01' in offer and '2026-10-31' in offer and 'confirm' in offer.lower()
-        assert json.loads(offered['runs'][0]['decision'])['reads'] == [], 'Ledger read before confirmation'
+        self.assert_search_announcement(offered)
+        fixture['source_run'] = offered['runs'][0]['name']
         confirmed = f'wamid.sim.ai.confirm.{self.run_id}'
         payload = inbound(confirmed, fixture['endpoint'], 'yes')
         self.emit(payload)
         result = self.check_ai_reply(confirmed, fixture, 2)
         assert_ledger_reply(result['outgoing'][0]['content'])
-        assert len(json.loads(result['runs'][0]['decision'])['reads']) == 1, 'Expected scoped tool evidence'
-        confirmed_message = result['incoming'][0]['name']
+        self.assert_confirmed_search(offered, result)
+        identity_denied = self.assert_identity_mismatch(fixture, result['incoming'][0]['name'])
         self.emit(payload)
         self.wait_control(lambda state: all(row['acknowledged'] for row in state['callbacks'] if row['lane'] == 'realtime'))
         assert len(provider_posts(self.control('state'), fixture['endpoint'])) == 2, 'Replay resent AI reply'
         person = f'wamid.sim.ai.person.{self.run_id}'
-        payload = inbound(person, fixture['endpoint'], 'please connect me to a person')
+        payload = inbound(person, fixture['endpoint'], 'talk to a human')
         self.emit(payload)
         result = self.site.call('acceptance_wait_ai', provider=person, status='Handoff')
         self.emit(payload)
         paused = f'wamid.sim.ai.paused.{self.run_id}'
-        self.emit(inbound(paused, fixture['endpoint'], 'please connect me to a person'))
+        self.emit(inbound(paused, fixture['endpoint'], 'talk to a human'))
         self.wait_control(lambda state: all(row['acknowledged'] for row in state['callbacks'] if row['lane'] == 'realtime'))
         self.site.call('acceptance_wait_paused', provider=paused)
         result = self.site.call('acceptance_ai_state', provider=person)
@@ -252,12 +252,11 @@ class Runner(SimulationRunner):
         state = self.control('state')
         assert len(provider_posts(state, fixture['endpoint'])) == 2, 'Handoff or paused conversation sent an AI reply'
         ai_calls = [row for row in state['records'] if row['kind'] == 'ai']
-        assert len(ai_calls) == 4 and all(row['status'] == 200 for row in ai_calls), 'Expected offer, tool request, tool result and handoff through fake AI'
+        assert len(ai_calls) == 6 and all(row['status'] == 200 for row in ai_calls), 'Expected classifier, declaration, read/result and identity-denied read/result; human request bypasses AI'
         assert all(marker not in json.dumps(ai_calls) for marker in ('SIM-OTHER-SUPPLIER-SECRET', 'SIM-OUTSIDE-RANGE', 'SIM-CANCELLED'))
-        identity_denied = self.assert_identity_mismatch(fixture, confirmed_message)
         return dict(supplier=fixture['supplier'], accepted_provider_posts=2, fake_ai_calls=len(ai_calls),
                     ticket=result['tickets'][0]['name'], statuses=['Sent', 'Delivered', 'Read'], automation_paused=True,
-                    mismatched_identity_denied=identity_denied)
+                    mismatched_identity_denied=identity_denied, search_announced_before_data=True)
 
     def business_event_acceptance(self):
         template = self.report['steps']['12'].get('template_id')

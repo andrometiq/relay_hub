@@ -36,11 +36,21 @@ func (a *fakeAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		var prompt struct {
 			Incoming string `json:"incoming"`
-			History  []struct {
-				Content string `json:"content"`
-			} `json:"history"`
+			Targets  []struct {
+				ID string `json:"id"`
+			} `json:"targets"`
 		}
+		var authorized map[string]any
 		for _, m := range turn.Messages {
+			if m.Role == "system" {
+				var text string
+				if json.Unmarshal(m.Content, &text) == nil {
+					if _, plan, ok := strings.Cut(text, "\nAuthorized search:\n"); ok {
+						plan, _, _ = strings.Cut(plan, "\nSkill:\n")
+						_ = json.Unmarshal([]byte(plan), &authorized)
+					}
+				}
+			}
 			if m.Role != "user" {
 				continue
 			}
@@ -60,27 +70,38 @@ func (a *fakeAI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		decision := map[string]any{"reply": "", "handoff": true, "reason": "Unsupported simulation intent"}
 		message := map[string]any{"role": "assistant"}
 		finish := "stop"
+		plan := map[string]any{"purpose": "review your ledger entries and totals", "reference": "supplier_ledger",
+			"fields":    []string{"company", "posting_date", "voucher_type", "voucher_no", "debit", "credit", "remarks"},
+			"arguments": map[string]any{"filters": map[string]any{"posting_date": []any{"between", []string{"2026-10-01", "2026-10-31"}}}, "limit": 20}}
 		switch strings.ToLower(strings.TrimSpace(prompt.Incoming)) {
 		case "i have a doubt in my ledger":
-			decision = map[string]any{"reply": "Shall I check your supplier ledger from 2026-10-01 to 2026-10-31? Please reply yes to confirm, or ask for a person.", "handoff": false, "reason": ""}
+			decision = map[string]any{"reply": "", "handoff": false, "reason": "", "search": plan}
 		case "yes":
-			confirmed := false
-			for _, h := range prompt.History {
-				if strings.Contains(h.Content, "2026-10-01 to 2026-10-31") {
-					confirmed = true
-				}
-			}
-			if confirmed {
+			if authorized != nil {
 				if turn.Messages[len(turn.Messages)-1].Role == "tool" {
 					// Deliberately wrong arithmetic proves Core, not the model, owns totals.
 					decision = map[string]any{"reply": "MODEL INVENTED TOTAL 999999", "handoff": false, "reason": ""}
 				} else {
-					message["tool_calls"] = []any{map[string]any{"id": "sim-ledger-read", "type": "function", "function": map[string]any{"name": "supplier_ledger", "arguments": `{"filters":{"posting_date":["between",["2026-10-01","2026-10-31"]]},"limit":20}`}}}
+					arguments, _ := json.Marshal(map[string]any{"purpose": authorized["purpose"], "reference": authorized["reference"], "arguments": authorized["arguments"]})
+					message["tool_calls"] = []any{map[string]any{"id": "sim-ledger-read", "type": "function", "function": map[string]any{"name": "SEARCH", "arguments": string(arguments)}}}
 					finish = "tool_calls"
 				}
 			}
-		case "please connect me to a person":
+		case "please connect me to a person", "talk to a human":
 			decision = map[string]any{"reply": "", "handoff": true, "reason": "Supplier requested a person"}
+		}
+		if prompt.Targets != nil {
+			scores := []any{}
+			for _, target := range prompt.Targets {
+				score := 0.0
+				if strings.EqualFold(strings.TrimSpace(prompt.Incoming), "I have a doubt in my ledger") {
+					score = 0.99
+				}
+				scores = append(scores, map[string]any{"id": target.ID, "score": score})
+			}
+			decision = map[string]any{"scores": scores, "human_request": strings.Contains(prompt.Incoming, "human") || strings.Contains(prompt.Incoming, "person")}
+			delete(message, "tool_calls")
+			finish = "stop"
 		}
 		if finish == "stop" {
 			content, _ := json.Marshal(decision)
