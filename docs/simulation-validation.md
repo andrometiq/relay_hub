@@ -1,5 +1,13 @@
 # Connected WhatsApp simulation
 
+Latest item 34 results: [Hub latency validation](v15-hub-latency-validation.md).
+The runner now shares the isolated `relay_hub_v1_test` schema lifecycle and site
+lock with Telegram/email; it never opens `channel_hub` or `relay_hub_sim`. Prior
+connection settings are restored, and fixture records remain for inspection.
+Step 10b schedules inbound observations using measured receipt-worker windows
+and inbound latency. It still requires at least five actual overlaps and
+p95 strictly below 500 ms; it does not delay receipt workers.
+
 For Telegram/email drivers, isolation, measured results and current Core defects,
 see [Connected channel simulations](connected-channel-simulations.md).
 
