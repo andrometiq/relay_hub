@@ -152,7 +152,7 @@ class ChannelRunner(SimulationRunner, ChannelAcceptance):
         result = dict(samples=len(values), p50=percentile(values,50), p95=percentile(values,95), target_ms=500)
         result['passed'] = result['p95'] < result['target_ms']
         self.report['single_inbound_latency_ms'] = result
-        assert result['passed'], 'Single inbound p95 must be < 500 ms; see callback timing and Core inline eligibility'
+        assert result['passed'], 'Single inbound p95 must be < 500 ms; see realtime_ms and snapshot_ms'
         return result
 
     def finish(self):
@@ -192,7 +192,7 @@ class ChannelRunner(SimulationRunner, ChannelAcceptance):
                '| Case | Result | Seconds |', '| --- | --- | --- |']
         for name, row in self.report['steps'].items():
             lines.append(f"| {name} | {row['status']} | {row['seconds']} |")
-        lines += ['', f"Socket.IO latency (ms): {self.report['latency_ms']}", '', *self.report['limitations']]
+        lines += ['', f"Inbound observation latency (ms): {self.report['latency_ms']}", '', *self.report['limitations']]
         for name, row in self.report['steps'].items():
             if row['status']=='fail':lines += ['', name+': '+row['error']]
         (self.args.report_dir/'report.md').write_text('\n'.join(lines)+'\n')
