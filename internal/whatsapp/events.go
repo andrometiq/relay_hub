@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"net/http"
 	"strconv"
@@ -23,17 +24,38 @@ type EventStore interface {
 	Save(context.Context, string, []byte) error
 	List(context.Context, string, int64) ([]Event, error)
 }
-type PostgresEvents struct{ URL string }
+
+// PostgresEvents journals webhooks. Pool, when set, avoids a new database
+// connection per webhook under receipt storms.
+type PostgresEvents struct {
+	URL  string
+	Pool *pgxpool.Pool
+}
+
+func (p PostgresEvents) connect(ctx context.Context) (*pgx.Conn, func(), error) {
+	if p.Pool != nil {
+		conn, err := p.Pool.Acquire(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return conn.Conn(), conn.Release, nil
+	}
+	conn, err := pgx.Connect(ctx, p.URL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, func() { conn.Close(context.Background()) }, nil
+}
 
 func (p PostgresEvents) Save(ctx context.Context, account string, body []byte) error {
 	return p.SaveEnvelope(ctx, account, body, body)
 }
 func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, original []byte) error {
-	c, e := pgx.Connect(ctx, p.URL)
+	c, release, e := p.connect(ctx)
 	if e != nil {
 		return e
 	}
-	defer c.Close(context.Background())
+	defer release()
 	digest := sha256.Sum256(body)
 	tx, e := c.Begin(ctx)
 	if e != nil {
@@ -70,11 +92,11 @@ func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, 
 	return tx.Commit(ctx)
 }
 func (p PostgresEvents) List(ctx context.Context, account string, after int64) ([]Event, error) {
-	c, e := pgx.Connect(ctx, p.URL)
+	c, release, e := p.connect(ctx)
 	if e != nil {
 		return nil, e
 	}
-	defer c.Close(context.Background())
+	defer release()
 	rows, e := c.Query(ctx, "WITH page AS (SELECT id,payload FROM relay_whatsapp_events WHERE account=$1 AND id>$2 ORDER BY id LIMIT 50), sized AS (SELECT id,payload,sum(octet_length(payload::text)) OVER (ORDER BY id) AS bytes,row_number() OVER (ORDER BY id) AS position FROM page) SELECT id,payload FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id", account, after)
 	if e != nil {
 		return nil, e
@@ -362,11 +384,11 @@ func realtimePayload(body []byte) []byte {
 }
 
 func (p PostgresEvents) Latest(ctx context.Context, account string) ([]Event, error) {
-	c, err := pgx.Connect(ctx, p.URL)
+	c, release, err := p.connect(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer c.Close(context.Background())
+	defer release()
 	rows, err := c.Query(ctx, `WITH page AS (SELECT id,payload FROM relay_whatsapp_events WHERE account=$1 ORDER BY id DESC LIMIT 50), sized AS (SELECT *,sum(octet_length(payload::text)) OVER(ORDER BY id DESC) bytes,row_number() OVER(ORDER BY id DESC) position FROM page) SELECT id,payload FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id`, account)
 	if err != nil {
 		return nil, err

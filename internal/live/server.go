@@ -4,6 +4,7 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"sync"
@@ -114,8 +115,25 @@ func (s *Server) listen(ctx context.Context, config *pgx.ConnConfig) {
 		return
 	}
 	s.invalidate(ctx, "")
+	// Coalesce bursts (bulk sends change rows hundreds of times per second)
+	// into at most one invalidation per account per interval.
+	pending := map[string]bool{}
+	var flushAt time.Time
 	for {
-		notification, err := conn.WaitForNotification(ctx)
+		wait, cancel := ctx, context.CancelFunc(func() {})
+		if len(pending) > 0 {
+			wait, cancel = context.WithDeadline(ctx, flushAt)
+		}
+		notification, err := conn.WaitForNotification(wait)
+		flush := err != nil && ctx.Err() == nil && errors.Is(wait.Err(), context.DeadlineExceeded)
+		cancel()
+		if flush {
+			for account := range pending {
+				s.invalidate(ctx, account)
+			}
+			clear(pending)
+			continue
+		}
 		if err != nil {
 			return
 		}
@@ -124,7 +142,12 @@ func (s *Server) listen(ctx context.Context, config *pgx.ConnConfig) {
 			Account string `json:"account"`
 		}
 		if json.Unmarshal([]byte(notification.Payload), &change) == nil && change.Schema == schema {
-			s.invalidate(ctx, change.Account)
+			if len(pending) == 0 {
+				flushAt = time.Now().Add(invalidationInterval)
+			}
+			pending[change.Account] = true
 		}
 	}
 }
+
+const invalidationInterval = 500 * time.Millisecond

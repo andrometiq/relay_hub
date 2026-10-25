@@ -166,4 +166,23 @@ func TestDatabaseNotificationsAreCommitScoped(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), `"account":"private-a"`) {
 		t.Fatal("commit notification missing", string(raw), err)
 	}
+	// A burst of separate commits reaches browsers as few coalesced invalidations.
+	for i := range 40 {
+		if _, err = conn.Exec(t.Context(), `INSERT INTO relay_channel_events(account,channel,direction,provider_id,payload) VALUES('private-a','Email','inbound',$1,'{}')`, fmt.Sprint("burst-", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	received := 0
+	ws.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
+	for {
+		if _, raw, err = ws.ReadMessage(); err != nil {
+			break
+		}
+		if strings.Contains(string(raw), "hub:invalidate") {
+			received++
+		}
+	}
+	if received < 1 || received > 4 {
+		t.Fatalf("40 commits produced %d invalidations", received)
+	}
 }
