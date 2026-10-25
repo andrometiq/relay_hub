@@ -149,7 +149,7 @@ class Acceptance:
         f = self.f
         f.db.rollback()
         incoming = f.get_all('Relay Message', filters={'relay_contact': self.ai['contact'], 'provider_id': provider},
-            fields=['name', 'business_doctype', 'business_name'])
+            fields=['name', 'business_doctype', 'business_name', 'ticket'])
         runs = f.get_all('Relay Automation Run', filters={'message': ['in', [row.name for row in incoming]]},
             fields=['name', 'status', 'stage', 'decision', 'ticket', 'match_result', 'search_plan', 'reason']) if incoming else []
         flow_actions = f.get_all('Relay Flow Action', filters={'automation_run': ['in', [row.name for row in runs]]},
@@ -158,7 +158,7 @@ class Acceptance:
             fields=['name', 'status', 'request_key', 'outbound_message']) if incoming else []
         outgoing = [f.get_doc('Relay Message', row.outbound_message).as_dict() for row in actions if row.outbound_message]
         tickets = f.get_all('Relay Ticket', filters={'business_doctype': 'Supplier', 'business_name': self.ai['supplier']},
-            fields=['name', 'assigned_to', 'business_doctype', 'business_name', 'source_run'])
+            fields=['name', 'assigned_to', 'business_doctype', 'business_name', 'source_run', 'ai_disabled', 'active_scope_key'])
         return dict(incoming=incoming, runs=runs, actions=actions, outgoing=outgoing, tickets=tickets, flow_actions=flow_actions,
             paused=f.db.get_value('Relay Contact', self.ai['contact'], 'automation_paused'))
 
@@ -184,7 +184,10 @@ class Acceptance:
                     time.sleep(.05)
                     continue
                 state = self.ai_state(provider)
-                assert state['paused'], 'Conversation is no longer paused'
+                assert len(state['tickets']) == 1, 'Expected one held episode'
+                ticket = state['tickets'][0]
+                assert ticket['ai_disabled'] and ticket['active_scope_key'], 'Conversation episode is no longer held'
+                assert state['incoming'][0]['ticket'] == ticket['name'], 'Message escaped the held episode'
                 assert len(state['runs']) == 1 and state['runs'][0]['status'] == 'Cancelled', (
                     'Paused message created an automation run that was not cancelled')
                 assert state['runs'][0]['reason'] == 'Conversation is owned by staff'

@@ -38,7 +38,8 @@ class RunnerTests(unittest.TestCase):
     def test_paused_assertion_waits_for_automation_and_rereads_committed_state(self):
         from whatsapp_sim_acceptance import Acceptance
         acceptance = Acceptance(Mock(), {}, Mock())
-        pending = dict(incoming=[{'name': 'paused'}], paused=1, runs=[], actions=[], outgoing=[])
+        pending = dict(incoming=[{'name': 'paused', 'ticket': 'ticket'}], paused=0,
+            tickets=[dict(name='ticket', ai_disabled=1, active_scope_key='scope')], runs=[], actions=[], outgoing=[])
         acceptance.ai_state = Mock(side_effect=[pending, pending, dict(pending, runs=[{'status': 'Pending'}])])
         acceptance.automation_checked = Mock(side_effect=[False, True])
         with patch('whatsapp_sim_acceptance.time.sleep'), self.assertRaisesRegex(AssertionError, 'created an automation run'):
@@ -79,7 +80,8 @@ class RunnerTests(unittest.TestCase):
         from whatsapp_sim_acceptance import Acceptance
         acceptance = Acceptance(Mock(), {}, Mock())
         acceptance.automation_checked = Mock(return_value=True)
-        state = dict(incoming=[{'name': 'PAUSED-MESSAGE'}], paused=1,
+        state = dict(incoming=[{'name': 'PAUSED-MESSAGE', 'ticket': 'ticket'}], paused=0,
+            tickets=[dict(name='ticket', ai_disabled=1, active_scope_key='scope')],
             runs=[{'status': 'Cancelled', 'reason': 'Conversation is owned by staff'}],
             actions=[], outgoing=[], flow_actions=[])
         acceptance.ai_state = Mock(side_effect=[dict(state, incoming=[]), state, state])
@@ -87,7 +89,10 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(acceptance.wait_paused('wamid.paused'), state)
         self.assertEqual(acceptance.ai_state.call_args_list, [call('wamid.paused'), call('wamid.paused'), call('wamid.paused')])
         for change in (dict(runs=[{'status': 'Pending'}]), dict(actions=[{'status': 'Pending'}]),
-                       dict(outgoing=[{}]), dict(flow_actions=[{}]), dict(runs=[]), dict(paused=0), dict(incoming=[{}, {}])):
+                       dict(outgoing=[{}]), dict(flow_actions=[{}]), dict(runs=[]), dict(tickets=[]),
+                       dict(tickets=[dict(name='ticket', ai_disabled=0, active_scope_key='scope')]),
+                       dict(tickets=[dict(name='ticket', ai_disabled=1, active_scope_key=None)]),
+                       dict(incoming=[{'name': 'PAUSED-MESSAGE', 'ticket': 'other'}]), dict(incoming=[{}, {}])):
             acceptance.ai_state = Mock(return_value=dict(state, **change))
             with self.subTest(change=change), self.assertRaises(AssertionError):
                 acceptance.wait_paused('wamid.paused')
@@ -103,8 +108,8 @@ class RunnerTests(unittest.TestCase):
             runner = sim.Runner(sim.arguments(['--dry-run', '--report-dir', directory]))
             acceptance = Acceptance(Mock(), {}, Mock())
             acceptance.automation_checked = Mock(return_value=True)
-            acceptance.ai_state = Mock(return_value=dict(incoming=[{'name': 'PAUSED-MESSAGE'}],
-                paused=1, runs=[{'status': 'Pending'}], actions=[], outgoing=[]))
+            acceptance.ai_state = Mock(return_value=dict(incoming=[{'name': 'PAUSED-MESSAGE', 'ticket': 'ticket'}],
+                tickets=[dict(name='ticket', ai_disabled=1, active_scope_key='scope')], paused=0, runs=[{'status': 'Pending'}], actions=[], outgoing=[]))
             def site_call(action, **values):
                 if action == 'acceptance_seed_ai': return {'endpoint': '919800000001'}
                 if action == 'acceptance_wait_ai': return {}
@@ -371,10 +376,12 @@ class RunnerTests(unittest.TestCase):
                     good.replace('60.05', '60.06'), good + ' SIM-OUTSIDE-RANGE', good + ' SIM-CANCELLED'):
             with self.assertRaises(AssertionError): sim.assert_ledger_reply(bad)
         fixture = dict(supplier='SUP-A', handoff_owner='owner', source_run='SEARCH-RUN')
-        ticket = dict(name='TICKET-1', assigned_to='owner', business_doctype='Supplier', business_name='SUP-A', source_run='SEARCH-RUN')
-        state = dict(paused=1, tickets=[ticket], runs=[dict(name='RUN-1', ticket='TICKET-1', status='Handoff')], actions=[], outgoing=[])
+        ticket = dict(name='TICKET-1', assigned_to='owner', business_doctype='Supplier', business_name='SUP-A', source_run='SEARCH-RUN',
+            ai_disabled=1, active_scope_key='scope')
+        state = dict(paused=0, tickets=[ticket], runs=[dict(name='RUN-1', ticket='TICKET-1', status='Handoff')], actions=[], outgoing=[])
         sim.assert_handoff(state, fixture)
-        for change in (dict(paused=0), dict(actions=[{}]), dict(runs=[dict(name='RUN-1', ticket='TICKET-1', status='Completed')]), dict(tickets=[ticket, ticket]),
+        for change in (dict(paused=1), dict(tickets=[dict(ticket, ai_disabled=0)]),
+                       dict(tickets=[dict(ticket, active_scope_key=None)]), dict(actions=[{}]), dict(runs=[dict(name='RUN-1', ticket='TICKET-1', status='Completed')]), dict(tickets=[ticket, ticket]),
                        dict(tickets=[dict(ticket, business_name='SUP-B')]),
                        dict(tickets=[dict(ticket, assigned_to='wrong')])):
             with self.assertRaises(AssertionError): sim.assert_handoff(dict(state, **change), fixture)
