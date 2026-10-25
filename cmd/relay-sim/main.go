@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -364,7 +365,8 @@ func runSimulation(validateDatabase func(string) error) error {
 	if err != nil {
 		return errors.New("invalid database configuration")
 	}
-	cfg.MaxConns = 3
+	// Release idle connections quickly: PostgreSQL is shared with the live Hub.
+	cfg.MaxConns, cfg.MaxConnIdleTime = 2, 10*time.Second
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return errors.New("simulation pool failed")
@@ -393,8 +395,24 @@ func runSimulation(validateDatabase func(string) error) error {
 	if err != nil {
 		return err
 	}
-	wa.Events = whatsapp.PostgresEvents{URL: dsn}
-	wa.Outbox, err = whatsapp.NewOutbox(ctx, dsn, wa, 1)
+	// Pool webhook writes as the Hub does. The local PostgreSQL also serves the
+	// live Hub and allows 20 clients, so the simulation keeps a small budget.
+	eventsConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return errors.New("invalid database configuration")
+	}
+	eventsConfig.MaxConns, eventsConfig.MinConns, eventsConfig.MaxConnIdleTime = 1, 0, 10*time.Second
+	eventsPool, err := pgxpool.NewWithConfig(ctx, eventsConfig)
+	if err != nil {
+		return errors.New("simulation events pool failed")
+	}
+	defer eventsPool.Close()
+	wa.Events = whatsapp.PostgresEvents{URL: dsn, Pool: eventsPool}
+	workers, err := strconv.Atoi(env("RELAY_OUTBOX_WORKERS", "1"))
+	if err != nil {
+		return errors.New("invalid RELAY_OUTBOX_WORKERS")
+	}
+	wa.Outbox, err = whatsapp.NewOutbox(ctx, dsn, wa, workers)
 	if err != nil {
 		return err
 	}
