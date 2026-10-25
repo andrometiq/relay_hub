@@ -225,7 +225,7 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		token, err := authStore.Issue(r.Context(), admin, "simulation", a.ID, []string{"account:read", "messages:send", "messages:read", "deliveries:read", "templates:read", "templates:write"}, 1)
+		token, err := authStore.Issue(r.Context(), admin, "simulation", a.ID, []string{"account:read", "messages:send", "messages:read", "deliveries:read", "deliveries:cancel", "templates:read", "templates:write"}, 1)
 		if err != nil {
 			http.Error(w, "token issue failed", 503)
 			return
