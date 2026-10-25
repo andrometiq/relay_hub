@@ -229,23 +229,30 @@ func TestPreSubmissionFailuresNeverBecomeUncertain(t *testing.T) {
 		t.Fatal(err)
 	}
 	enqueue("pacing", Input{Operation: "messages.send", To: "919999999992", Body: "fixture"})
-	if err := o.process(ctx); err != nil {
-		t.Fatal(err)
+	// The pacing slot is reserved inside the claim, so its failure undoes the claim.
+	if err := o.process(ctx); err == nil {
+		t.Fatal("pacing outage was not reported")
 	}
 	row, err = o.Lookup(ctx, a, "pacing")
-	if err != nil || row.State != "queued" {
+	if err != nil || row.State != "queued" || row.Attempts != 0 {
 		t.Fatal("pacing failure", row, err)
 	}
 	// Replace the fixture failure with a working gate without touching other schemas.
 	if _, err := db.Exec(ctx, `CREATE OR REPLACE FUNCTION fail_fixture_pacing() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`); err != nil {
 		t.Fatal(err)
 	}
+	if err := o.process(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if row, err = o.Lookup(ctx, a, "pacing"); err != nil || row.State != "submitted" || messages.Load() != 1 {
+		t.Fatal("pacing recovery", row, err)
+	}
 	enqueue("media", Input{Operation: "messages.media", To: "919999999993", MediaType: "document", ContentBase64: base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 fixture")), MIMEType: "application/pdf", Filename: "fixture.pdf"})
 	if err := o.process(ctx); err != nil {
 		t.Fatal(err)
 	}
 	row, err = o.Lookup(ctx, a, "media")
-	if err != nil || row.State != "queued" || messages.Load() != 0 || uploads.Load() != 1 {
+	if err != nil || row.State != "queued" || messages.Load() != 1 || uploads.Load() != 1 {
 		t.Fatal("upload failure", row, err, messages.Load(), uploads.Load())
 	}
 	if _, err := db.Exec(ctx, `UPDATE relay_outbox SET state='submitting',updated_at=now()-interval '3 minutes' WHERE request_key='missing'`); err != nil {

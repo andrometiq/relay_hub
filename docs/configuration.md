@@ -15,6 +15,7 @@ Values are literal `KEY=value` lines, with optional surrounding quotes. There is
 | `RELAY_PUBLIC_PREFIX` | Empty for a dedicated domain; `/hub` is the supported proxy mount. The proxy strips the prefix and preserves Host. |
 | `RELAY_CREDENTIAL_KEY` | Required stable private material used to encrypt channel `Secret` values. Back it up separately from the database. Use the offline `relay-keyrotate` command described in operations.md; do not replace the key before re-encrypting readable fields. |
 | `RELAY_OUTBOX_WORKERS` | WhatsApp adaptive worker ceiling: default 4, maximum 8. This does not scale machines or remove provider limits. |
+| `RELAY_BULK_UPDATE_WINDOW` | How long bulk send results and receipts wait to be coalesced before Core receives them, for example `30s`: default 30s, range 1s to 5m. A batch is sent earlier when 500 changes are pending. Replies never wait. |
 | `GOMAXPROCS`, `GOFLAGS` | Launcher defaults are `2` and `-p=2` to bound local build/runtime concurrency. |
 | `RELAY_WHATSAPP_CONFIG` | Optional private JSON account-registry path; empty disables this file source. Database-backed accounts are loaded separately. |
 | `RELAY_TELEGRAM_WEBHOOK_SECRET` | Private master, at least 32 characters, for deriving a different ingress secret per Telegram account. Never register the master with Telegram. |

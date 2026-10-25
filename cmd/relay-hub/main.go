@@ -317,6 +317,9 @@ func run() error {
 		channelEvents := channels.Store{DB: authPool, Wake: channelWake}
 		channelCallbacksDispatcher := &channels.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Wake: channelWake}
 		callbacks := &whatsapp.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Service: wa}
+		if callbacks.BulkWindow, err = whatsapp.ParseBulkWindow(os.Getenv("RELAY_BULK_UPDATE_WINDOW")); err != nil {
+			return err
+		}
 		wa.Outbox, err = whatsapp.NewOutbox(context.Background(), os.Getenv("DATABASE_URL"), wa, workers)
 		if err != nil {
 			return err

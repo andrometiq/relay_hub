@@ -250,6 +250,23 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			return nil, map[string]any{"deliveries": rows}, nil
 		})
 
+		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.bulk", Description: "Durably queue 1-50 template sends with stable request keys. Invalid recipients are rejected individually; queued reports the account queue depth for backpressure. Results arrive in coalesced bulk update callbacks."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+			Messages []whatsapp.Submission `json:"messages"`
+		}) (*mcp.CallToolResult, map[string]any, error) {
+			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)
+			if !ok {
+				return nil, nil, errors.New("account credential required")
+			}
+			if !allowed(ctx, "messages:send") {
+				return nil, nil, errors.New("messages:send scope required")
+			}
+			rows, queued, err := wa.Outbox.EnqueueBulk(ctx, a, in.Messages)
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, map[string]any{"deliveries": rows, "queued": queued, "limit": whatsapp.QueueLimit, "messages_per_second": a.SendRate()}, nil
+		})
+
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.resolve", Description: "Record a verified uncertain delivery outcome without resending."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			ID         int64  `json:"id"`
 			Outcome    string `json:"outcome"`

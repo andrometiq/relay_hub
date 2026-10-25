@@ -40,73 +40,110 @@ type Delivery struct {
 	NextAttempt    time.Time       `json:"next_attempt"`
 }
 
+// QueueLimit bounds queued and submitting intents per account.
+const QueueLimit = 10000
+
 func (o *Outbox) Enqueue(ctx context.Context, a Account, batch []Submission) ([]Delivery, error) {
+	rows, _, err := o.enqueue(ctx, a, batch, false)
+	return rows, err
+}
+
+// EnqueueBulk admits up to 50 template sends at once. A recipient that fails
+// validation is returned as rejected without blocking the others; the queue
+// depth after admission lets Core apply backpressure.
+func (o *Outbox) EnqueueBulk(ctx context.Context, a Account, batch []Submission) ([]Delivery, int, error) {
+	return o.enqueue(ctx, a, batch, true)
+}
+
+func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bulk bool) ([]Delivery, int, error) {
 	if len(batch) == 0 || len(batch) > 50 {
-		return nil, errors.New("submit between 1 and 50 messages")
+		return nil, 0, errors.New("submit between 1 and 50 messages")
 	}
 	seen := map[string]bool{}
+	refused := map[string]string{}
 	for _, item := range batch {
 		if !identifier.MatchString(item.Key) || seen[item.Key] {
-			return nil, errors.New("unique request keys are required")
+			return nil, 0, errors.New("unique request keys are required")
 		}
 		seen[item.Key] = true
-		switch item.Message.Operation {
-		case "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin", "messages.send", "messages.react", "messages.media", "messages.location", "messages.contacts", "messages.flow":
-		default:
-			return nil, errors.New("operation cannot be queued")
+		err := queueable(item.Message.Operation, bulk)
+		if err == nil {
+			_, err = o.Service.execute(ctx, a, item.Message, true)
 		}
-		if _, err := o.Service.execute(ctx, a, item.Message, true); err != nil {
-			return nil, err
+		if err != nil && !bulk {
+			return nil, 0, err
+		}
+		var before *preSubmissionError
+		if errors.As(err, &before) {
+			err = before.error
+		}
+		if err != nil {
+			refused[item.Key] = err.Error()
 		}
 	}
 	c, release, err := o.connect(ctx)
 	if err != nil {
-		return nil, errors.New("outbox unavailable")
+		return nil, 0, errors.New("outbox unavailable")
 	}
 	defer release()
 	tx, err := c.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer tx.Rollback(context.Background())
 	// Serialize capacity accounting per account, across Hub processes.
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", a.ID); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var count int
 	if err = tx.QueryRow(ctx, "SELECT count(*) FROM relay_outbox WHERE account=$1 AND state IN ('queued','submitting')", a.ID).Scan(&count); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	result := make([]Delivery, 0, len(batch))
 	for _, item := range batch {
+		if reason, ok := refused[item.Key]; ok {
+			result = append(result, Delivery{Key: item.Key, State: "rejected", Error: reason})
+			continue
+		}
 		raw, _ := json.Marshal(item.Message)
 		var d Delivery
 		var same bool
 		err = tx.QueryRow(ctx, "SELECT id::text,request_key,state,payload=$3::jsonb FROM relay_outbox WHERE account=$1 AND request_key=$2", a.ID, item.Key, string(raw)).Scan(&d.ID, &d.Key, &d.State, &same)
 		if err == nil {
 			if !same {
-				return nil, errors.New("request key already used with another message")
+				return nil, 0, errors.New("request key already used with another message")
 			}
 			result = append(result, d)
 			continue
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return nil, err
+			return nil, 0, err
 		}
-		if count >= 10000 {
-			return nil, errors.New("account queue is full; nothing in this batch was accepted")
+		if count >= QueueLimit {
+			return nil, 0, errors.New("account queue is full; nothing in this batch was accepted")
 		}
-		err = tx.QueryRow(ctx, "INSERT INTO relay_outbox(account,request_key,payload) VALUES($1,$2,$3) RETURNING id::text,request_key,state", a.ID, item.Key, string(raw)).Scan(&d.ID, &d.Key, &d.State)
+		err = tx.QueryRow(ctx, "INSERT INTO relay_outbox(account,request_key,payload,bulk) VALUES($1,$2,$3,$4) RETURNING id::text,request_key,state", a.ID, item.Key, string(raw), bulk).Scan(&d.ID, &d.Key, &d.State)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		count++
 		result = append(result, d)
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return nil, errors.New("submission outcome unknown; retry with the same request keys")
+		return nil, 0, errors.New("submission outcome unknown; retry with the same request keys")
 	}
-	return result, nil
+	return result, count, nil
+}
+
+func queueable(operation string, bulk bool) error {
+	if bulk && operation != "templates.send" {
+		return errors.New("bulk sends accept approved templates only")
+	}
+	switch operation {
+	case "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin", "messages.send", "messages.react", "messages.media", "messages.location", "messages.contacts", "messages.flow":
+		return nil
+	}
+	return errors.New("operation cannot be queued")
 }
 func (o *Outbox) List(ctx context.Context, a Account, after string) ([]Delivery, error) {
 	cursor := int64(0)
@@ -204,8 +241,14 @@ func (o *Outbox) Run(ctx context.Context) {
 					continue
 				}
 				jobCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				o.process(jobCtx)
+				sent, _ := o.send(jobCtx)
 				cancel()
+				// Continue at once after a send; pacing is enforced by the claim.
+				for sent && ctx.Err() == nil {
+					jobCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
+					sent, _ = o.send(jobCtx)
+					cancel()
+				}
 			}
 		})
 	}
@@ -250,38 +293,64 @@ func (o *Outbox) connect(ctx context.Context) (*pgx.Conn, func(), error) {
 	return conn, func() { conn.Close(context.Background()) }, nil
 }
 func (o *Outbox) process(ctx context.Context) error {
+	_, err := o.send(ctx)
+	return err
+}
+
+// send claims and submits at most one delivery and reports whether it did.
+func (o *Outbox) send(ctx context.Context) (bool, error) {
 	c, release, err := o.connect(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer release()
 	// Only claims that never reached message submission are safe to requeue.
 	_, err = c.Exec(ctx, "UPDATE relay_outbox SET state=CASE WHEN submission_started THEN 'uncertain' ELSE 'queued' END,error=CASE WHEN submission_started THEN 'Worker interrupted; reconcile provider outcome' ELSE 'Worker interrupted before submission' END,updated_at=now() WHERE state='submitting' AND updated_at<now()-interval '2 minutes'")
 	if err != nil {
-		return err
+		return false, err
 	}
 	var id int64
 	var account string
 	var raw []byte
 	var attempts int
+	var wait time.Duration
 	tx, err := c.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(context.Background())
 	// Serialize only the short claim, so concurrent snapshots cannot claim two
 	// queued rows in the same conversation before either update is visible.
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(726351021)"); err != nil {
-		return err
+		return false, err
 	}
 	err = tx.QueryRow(ctx, `UPDATE relay_outbox SET state='submitting',submission_started=false,updated_at=now()
  WHERE id=(SELECT o.id FROM relay_outbox o LEFT JOIN relay_account_send_rate r ON r.account=o.account
  LEFT JOIN relay_outbox_account_claim turn ON turn.account=o.account
- WHERE o.state='queued' AND o.next_attempt<=now() AND (r.next_at IS NULL OR r.next_at<=now())
+ WHERE o.state='queued' AND o.next_attempt<=now() AND (r.next_at IS NULL OR r.next_at<=clock_timestamp()+$1::interval)
  AND NOT EXISTS(SELECT 1 FROM relay_outbox earlier WHERE earlier.account=o.account
  AND earlier.payload->>'to'=o.payload->>'to' AND earlier.id<o.id AND earlier.state IN ('queued','submitting','uncertain'))
- ORDER BY coalesce(turn.claimed_at,'epoch'::timestamptz),o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1)
- RETURNING id,account,payload,attempts`).Scan(&id, &account, &raw, &attempts)
+ ORDER BY coalesce(turn.claimed_at,'epoch'::timestamptz),o.bulk,o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1)
+ RETURNING id,account,payload,attempts`, slotAhead.String()).Scan(&id, &account, &raw, &attempts)
+	var a Account
+	found := false
+	if err == nil {
+		for _, candidate := range o.Service.AccountsSnapshot() {
+			if candidate.ID == account {
+				a, found = candidate, true
+				break
+			}
+		}
+		// Reserve the account's next send slot with the claim, so concurrent
+		// workers never claim a row they must then defer for pacing.
+		permitted := true
+		if found {
+			permitted, wait, err = reserve(ctx, tx, a)
+		}
+		if err == nil && !permitted {
+			return false, nil
+		}
+	}
 	if err == nil {
 		_, err = tx.Exec(ctx, `INSERT INTO relay_outbox_account_claim(account,claimed_at) VALUES($1,clock_timestamp()) ON CONFLICT(account) DO UPDATE SET claimed_at=excluded.claimed_at`, account)
 		if err == nil {
@@ -289,10 +358,10 @@ func (o *Outbox) process(ctx context.Context) error {
 		}
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	var in Input
 	err = json.Unmarshal(raw, &in)
@@ -304,27 +373,13 @@ func (o *Outbox) process(ctx context.Context) error {
 		}
 		return err
 	}
-	var a Account
-	found := false
-	for _, candidate := range o.Service.AccountsSnapshot() {
-		if candidate.ID == account {
-			a = candidate
-			found = true
-			break
-		}
-	}
 	var result map[string]any
 	if err == nil && found {
-		var permitted bool
-		permitted, err = permit(ctx, c, a)
-		if err != nil {
-			err = &deferredError{err}
-		}
-		if err == nil && !permitted {
-			err = ErrBusy
-		}
-		if err == nil {
+		select {
+		case <-time.After(wait):
 			result, err = o.Service.Execute(ctx, a, in)
+		case <-ctx.Done():
+			err = &deferredError{ctx.Err()}
 		}
 	} else {
 		err = &deferredError{errors.New("account configuration unavailable")}
@@ -350,7 +405,7 @@ func (o *Outbox) process(ctx context.Context) error {
 	saveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, err = c.Exec(saveCtx, "UPDATE relay_outbox SET state=$2,result=$3,error=$4,next_attempt=now()+$5::interval,provider_error=$6,attempts=attempts+$7,updated_at=now() WHERE id=$1 AND state='submitting'", id, state, encoded, message, delay.String(), metadata, retryAttempt(err))
-	return err
+	return true, err
 }
 
 func retryAttempt(err error) int {
@@ -396,12 +451,17 @@ func sendOutcome(err error, attempts int) (string, string, time.Duration, []byte
 	return "uncertain", "Provider outcome not confirmed; reconcile before resubmitting", 0, metadata
 }
 
+// SendRate is the account's provider pacing; 50 messages per second by default.
+func (a Account) SendRate() int {
+	if a.MessagesPerSecond == 0 {
+		return 50
+	}
+	return a.MessagesPerSecond
+}
+
 // This shared PostgreSQL gate enforces account pacing across Hub replicas.
 func permit(ctx context.Context, c *pgx.Conn, a Account) (bool, error) {
-	rate := a.MessagesPerSecond
-	if rate == 0 {
-		rate = 50
-	}
+	rate := a.SendRate()
 	var next time.Time
 	err := c.QueryRow(ctx, `INSERT INTO relay_account_send_rate(account,next_at) VALUES($1,clock_timestamp()+$2::double precision*interval '1 second') ON CONFLICT(account) DO UPDATE SET next_at=clock_timestamp()+$2::double precision*interval '1 second' WHERE relay_account_send_rate.next_at<=clock_timestamp() RETURNING next_at`, a.ID, 1.0/float64(rate)).Scan(&next)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -409,6 +469,24 @@ func permit(ctx context.Context, c *pgx.Conn, a Account) (bool, error) {
 	}
 	return err == nil, err
 }
+
+// slotAhead is how far ahead a worker may reserve an account send slot.
+const slotAhead = 50 * time.Millisecond
+
+// reserve books the account's next send slot when it starts within slotAhead
+// and returns how long to wait for it.
+func reserve(ctx context.Context, tx pgx.Tx, a Account) (bool, time.Duration, error) {
+	var seconds float64
+	err := tx.QueryRow(ctx, `INSERT INTO relay_account_send_rate(account,next_at) VALUES($1,clock_timestamp()+$2::double precision*interval '1 second')
+ ON CONFLICT(account) DO UPDATE SET next_at=greatest(relay_account_send_rate.next_at,clock_timestamp())+$2::double precision*interval '1 second'
+ WHERE relay_account_send_rate.next_at<=clock_timestamp()+$3::interval
+ RETURNING greatest(0,extract(epoch FROM next_at-$2::double precision*interval '1 second'-clock_timestamp()))::double precision`, a.ID, 1.0/float64(a.SendRate()), slotAhead.String()).Scan(&seconds)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, 0, nil
+	}
+	return err == nil, time.Duration(seconds * float64(time.Second)), err
+}
+
 func (o *Outbox) Permit(ctx context.Context, a Account) (bool, error) {
 	c, release, err := o.connect(ctx)
 	if err != nil {
