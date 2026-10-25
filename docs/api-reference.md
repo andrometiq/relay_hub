@@ -124,6 +124,10 @@ The durable outbox also accepts `groups.media`, `groups.template` and `groups.pi
 
 Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`. Changing the group avatar is separate from sending a sticker or image message.
 
+## Provider errors
+
+When Meta refuses a request, `whatsapp.execute` returns an MCP tool error whose structured content is `{"provider":"WhatsApp","error":{"http_status":400,"code":132001,"subcode":2494073,"title":"<error_user_title>","message":"<error_user_msg>"}}`. The text has the same code, title and message on one line. Other provider body fields are not passed on. Rejected outbox deliveries keep the same fields in `provider_error`.
+
 ## Telegram messages
 
 `telegram.message` accepts one of five operations. It submits once and returns a confirmed provider receipt with `operation`, `chat_id`, `message_id` and `result`; it does not use the WhatsApp durable outbox.

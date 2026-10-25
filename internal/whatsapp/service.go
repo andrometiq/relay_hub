@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 type Account struct {
@@ -764,14 +765,17 @@ func (s *Service) request(req *http.Request) (map[string]any, error) {
 		rejection := &ProviderError{Status: response.StatusCode, Transient: req.Method == http.MethodGet && (response.StatusCode >= 500 || response.StatusCode == 408)}
 		var envelope struct {
 			Error struct {
-				Code      int  `json:"code"`
-				Subcode   int  `json:"error_subcode"`
-				Transient bool `json:"is_transient"`
+				Code      int    `json:"code"`
+				Subcode   int    `json:"error_subcode"`
+				Transient bool   `json:"is_transient"`
+				Title     string `json:"error_user_title"`
+				Message   string `json:"error_user_msg"`
 			} `json:"error"`
 		}
 		if json.Unmarshal(data, &envelope) == nil {
 			rejection.Code, rejection.Subcode = envelope.Error.Code, envelope.Error.Subcode
 			rejection.Transient = rejection.Transient || envelope.Error.Transient
+			rejection.Title, rejection.Message = safeText(envelope.Error.Title), safeText(envelope.Error.Message)
 		}
 		if seconds, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil {
 			rejection.RetryAfter = max(0, min(seconds, 3600))
@@ -828,13 +832,15 @@ func (s *Service) checkGroup(ctx context.Context, a Account, id string) error {
 }
 
 // ProviderError distinguishes an explicit rejection from a lost response.
-// It deliberately excludes provider bodies, which may echo sensitive data.
+// It keeps only Meta's user-facing title and message, never the raw body.
 type ProviderError struct {
-	Status     int  `json:"http_status"`
-	Code       int  `json:"code,omitempty"`
-	Subcode    int  `json:"subcode,omitempty"`
-	Transient  bool `json:"transient,omitempty"`
-	RetryAfter int  `json:"retry_after,omitempty"`
+	Status     int    `json:"http_status"`
+	Code       int    `json:"code,omitempty"`
+	Subcode    int    `json:"subcode,omitempty"`
+	Transient  bool   `json:"transient,omitempty"`
+	RetryAfter int    `json:"retry_after,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 func (e *ProviderError) Retryable() bool {
@@ -850,5 +856,28 @@ type deferredError struct{ error }
 func (e *deferredError) Unwrap() error { return e.error }
 
 func (e *ProviderError) Error() string {
-	return "provider rejected operation; inspect delivery status before retry"
+	return "provider rejected operation" + e.Detail() + "; inspect delivery status before retry"
+}
+
+// Detail is the safe provider code and user text, empty when Meta sent none.
+func (e *ProviderError) Detail() string {
+	text := ""
+	if e.Code != 0 {
+		text = " (code " + strconv.Itoa(e.Code) + ")"
+	}
+	for _, part := range []string{e.Title, e.Message} {
+		if part != "" {
+			text += ": " + part
+		}
+	}
+	return text
+}
+
+// safeText bounds provider text to one printable line for operator display.
+func safeText(value string) string {
+	value = strings.Join(strings.FieldsFunc(value, func(r rune) bool { return unicode.IsSpace(r) || !unicode.IsPrint(r) }), " ")
+	if runes := []rune(value); len(runes) > 300 {
+		value = string(runes[:300])
+	}
+	return value
 }

@@ -216,11 +216,17 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 					return nil, nil, errors.New("durable delivery unavailable")
 				}
 				result, err := wa.Outbox.Submit(ctx, account, input)
-				return nil, result, err
+				if err != nil {
+					return whatsappFailure(err)
+				}
+				return nil, result, nil
 			}
 			account.Groups, account.Calls = false, false
 			result, err := wa.Execute(ctx, account, input)
-			return nil, result, err
+			if err != nil {
+				return whatsappFailure(err)
+			}
+			return nil, result, nil
 		})
 	}
 	if wa != nil && wa.Outbox != nil {
@@ -612,6 +618,18 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		r.Body = http.MaxBytesReader(w, r.Body, 7<<20)
 		transport.ServeHTTP(w, r)
 	}), nil
+}
+
+// whatsappFailure keeps Meta's code and safe user text in the tool error, so
+// Core can show why a template or send was refused.
+func whatsappFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
+	var provider *whatsapp.ProviderError
+	if !errors.As(err, &provider) {
+		return nil, nil, err
+	}
+	result := &mcp.CallToolResult{}
+	result.SetError(err)
+	return result, map[string]any{"provider": "WhatsApp", "error": provider}, nil
 }
 
 func emailFailure(err error) (*mcp.CallToolResult, map[string]any, error) {

@@ -387,7 +387,11 @@ func sendOutcome(err error, attempts int) (string, string, time.Duration, []byte
 		return "queued", "Not accepted; retry scheduled", delay, metadata
 	}
 	if errors.As(err, &before) || (provider != nil && provider.Status < 500 && provider.Status != 408) {
-		return "rejected", "Message rejected before acceptance", 0, metadata
+		detail := ""
+		if provider != nil {
+			detail = provider.Detail()
+		}
+		return "rejected", "Message rejected before acceptance" + detail, 0, metadata
 	}
 	return "uncertain", "Provider outcome not confirmed; reconcile before resubmitting", 0, metadata
 }
