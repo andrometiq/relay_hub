@@ -465,7 +465,8 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 			query.Set("after", in.After)
 		}
 	case "templates.create":
-		if in.ParameterFormat != "" && in.ParameterFormat != "POSITIONAL" && in.ParameterFormat != "NAMED" {
+		in.ParameterFormat = strings.ToLower(in.ParameterFormat)
+		if in.ParameterFormat != "" && in.ParameterFormat != "positional" && in.ParameterFormat != "named" {
 			return nil, errors.New("invalid template parameter format")
 		}
 		if in.MessageSendTTLSeconds < 0 || in.MessageSendTTLSeconds > 2147483647 {
