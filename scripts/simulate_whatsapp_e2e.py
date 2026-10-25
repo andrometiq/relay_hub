@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 
 from simulation_fixtures import run_label
+from whatsapp_bulk_campaign import BulkCampaign
 from simulation_common import (ROOT, BENCH, loopback_origin, address, NoRedirect, request,
                                percentile, read_env, Site, Realtime, SimulationRunner)
 STEPS = {'7': 'Signed ingress', '8': 'Journal, Core projection and deduplication',
@@ -25,7 +26,8 @@ STEPS = {'7': 'Signed ingress', '8': 'Journal, Core projection and deduplication
          '11': '503, wrong acknowledgement and restart recovery', '12': 'Template lifecycle',
          '13': 'Supplier AI, scoped ledger and human handoff',
          '14': 'Business event delivery and Hub outage isolation',
-         'realtime': 'Authenticated Socket.IO message event without HTTP polling'}
+         'realtime': 'Authenticated Socket.IO message event without HTTP polling',
+         'bulk': 'Bulk campaign through Core: pause, resume, cancel and exact counters'}
 
 
 def envelope(value, field='messages'):
@@ -327,6 +329,19 @@ class Runner(SimulationRunner):
         first_payload = inbound(first, self.fixture['endpoint'])
         row = emitted = None
         started = time.monotonic_ns()
+        if self.args.bulk_recipients:
+            for key, step in self.report['steps'].items():
+                if key not in ('realtime', 'bulk'):
+                    step['status'] = 'skipped'
+            with self.step('bulk', continue_on_error=True) as evidence:
+                bulk = BulkCampaign(self, self.args.bulk_recipients)
+                try:
+                    bulk.run()
+                finally:
+                    evidence.update(bulk.evidence)
+                assert evidence['campaign']['passed'] and evidence['cancel']['passed'], 'Bulk campaign truth did not match'
+            return
+        self.report['steps']['bulk']['status'] = 'skipped'
         with self.step('7', continue_on_error=True):
             self.emit(inbound(first, self.fixture['endpoint']), invalid_signature=True)
             wrong = inbound(first, self.fixture['endpoint'])
@@ -520,7 +535,7 @@ class Runner(SimulationRunner):
                                      'p95': percentile(self.report['latencies_ms'], 95),
                                      'measurement': 'signed webhook send to observed Core row (CLOCK_MONOTONIC); 20 ms DB observation interval, no HTTP polling'}
         statuses = [s['status'] for s in self.report['steps'].values()]
-        self.report['passed'] = all(s == 'pass' for s in statuses) and 'error' not in self.report
+        self.report['passed'] = all(s in ('pass', 'skipped') for s in statuses) and 'error' not in self.report
         (self.args.report_dir / 'report.json').write_text(json.dumps(self.report, indent=2, default=str) + '\n')
         lines = ['# Connected WhatsApp simulation', '', f"Mode: {self.report['mode']}. Passed: {self.report['passed']}.", '',
                  '| Step | Status | Evidence / error |', '| --- | --- | --- |']
@@ -545,10 +560,14 @@ def arguments(argv=None):
     parser.add_argument('--meta-addr', type=address, default='127.0.0.1:18094')
     parser.add_argument('--report-dir', type=Path, default=ROOT / '.runtime/sim-report')
     parser.add_argument('--storm-receipts', type=int, default=12000, help='Receipt count for step 10b (default: 12000)')
+    parser.add_argument('--bulk-recipients', type=int, default=0,
+                        help='Run only the bulk campaign step with this many recipients (default: off)')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args(argv)
     if args.sites.resolve() != (BENCH / 'sites').resolve():
         parser.error('Sites directory must be the local development bench')
+    if not 0 <= args.bulk_recipients <= 20000:
+        parser.error('--bulk-recipients must be 0-20000')
     if args.storm_receipts <= 0:
         parser.error('--storm-receipts must be positive')
     args.report_dir = args.report_dir.resolve()

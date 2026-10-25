@@ -147,7 +147,9 @@ def main():
         return dict(messages=messages, templates=templates, events=events, actions=actions)
 
     from whatsapp_sim_acceptance import Acceptance
+    from whatsapp_sim_bulk import Bulk
     acceptance = Acceptance(frappe, fixture, insert)
+    bulk = Bulk(frappe, fixture, insert)
 
     def dispatch(req):
         action = req['action']
@@ -155,6 +157,10 @@ def main():
             method = action.removeprefix('acceptance_')
             assert method in {'seed_ai', 'set_ai_identity', 'check_identity', 'wait_ai', 'wait_paused', 'ai_state', 'seed_event', 'submit_event', 'event_state', 'wait_event', 'disable', 'diagnostics'}
             return getattr(acceptance, method)(**{key: value for key, value in req.items() if key != 'action'})
+        if action.startswith('bulk_'):
+            method = action.removeprefix('bulk_')
+            assert method in {'seed', 'now', 'tick', 'wait', 'truth', 'wait_truth', 'replies', 'reply_events', 'health', 'rows', 'cleanup'}
+            return getattr(bulk, method)(**{key: value for key, value in req.items() if key != 'action'})
         if action == 'preflight':
             assert frappe.conf.developer_mode, 'Target must be a development site'
             acceptance.preflight()

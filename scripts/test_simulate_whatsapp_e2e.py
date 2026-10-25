@@ -339,6 +339,34 @@ class RunnerTests(unittest.TestCase):
         data['templates'][0]['status'] = 'APPROVED'
         self.assertTrue(expected_rows('template', '99', data, [])[0])
 
+    def test_bulk_recipients_are_bounded_and_off_by_default(self):
+        self.assertEqual(sim.arguments([]).bulk_recipients, 0)
+        self.assertEqual(sim.arguments(['--bulk-recipients', '5000']).bulk_recipients, 5000)
+        for value in ('-1', '20001'):
+            with self.subTest(value=value), self.assertRaises(SystemExit), patch('sys.stderr'):
+                sim.arguments(['--bulk-recipients', value])
+
+    def test_bulk_seed_plans_unused_numbers_repliers_and_failures(self):
+        from whatsapp_sim_bulk import Bulk
+        f = Mock()
+        f.get_all.return_value = []
+        inserted = []
+        def insert(doctype, **values):
+            inserted.append(doctype)
+            return SimpleNamespace(name=doctype + ' fixture')
+        plan = Bulk(f, {'channel': 'channel'}, insert).seed('R1026-0100', 600, 20, 66, reply_pool=500)
+        numbers = plan['numbers']
+        self.assertEqual(len(set(numbers)), 600)
+        self.assertTrue(all(n.startswith('9162') and len(n) == 12 for n in numbers))
+        self.assertEqual(len(plan['repliers']), 20)
+        self.assertTrue(set(plan['repliers']) <= set(numbers[:500]))
+        self.assertFalse(set(plan['failures']) & set(plan['repliers']))
+        self.assertEqual(set(plan['failures'].values()), {131026, 131049})
+        self.assertEqual(inserted.count('Relay Contact Endpoint'), 20)
+        f.get_all.return_value = [{'name': 'existing'}]
+        with self.assertRaises(AssertionError):
+            Bulk(f, {'channel': 'channel'}, insert).seed('R1026-0100', 600, 20, 66, reply_pool=500)
+
     def test_percentiles_and_empty_samples(self):
         self.assertIsNone(sim.percentile([], 95))
         self.assertEqual(sim.percentile(list(range(1, 101)), 95), 95)

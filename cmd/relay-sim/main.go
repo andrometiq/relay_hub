@@ -111,6 +111,10 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", 401)
 		return
 	}
+	if r.URL.Path == "/_sim/bulk" {
+		s.bulkControl(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/_sim/telegram/") || strings.HasPrefix(r.URL.Path, "/_sim/email/") || r.URL.Path == "/_sim/providers" {
 		s.providerControl(w, r)
 		return
@@ -279,7 +283,24 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *simulation) emit(w http.ResponseWriter, r *http.Request, payload []byte, invalid bool) {
-	req, _ := http.NewRequestWithContext(r.Context(), "POST", s.hub.String()+"/webhooks/whatsapp/sim-v1", bytes.NewReader(payload))
+	started := time.Now()
+	var monotonic unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &monotonic); err != nil {
+		http.Error(w, "clock unavailable", 503)
+		return
+	}
+	req, res, reply, err := s.webhook(r.Context(), payload, invalid)
+	if err != nil {
+		http.Error(w, "webhook failed", 502)
+		return
+	}
+	s.meta.records.record(req, "webhook", payload, res.StatusCode, reply, started, "")
+	writeJSON(w, map[string]any{"status": res.StatusCode, "started_ns": started.Sub(s.meta.records.start).Nanoseconds(), "monotonic_ns": monotonic.Nano()})
+}
+
+// webhook posts one Meta-signed payload to the Hub ingress.
+func (s *simulation) webhook(ctx context.Context, payload []byte, invalid bool) (*http.Request, *http.Response, []byte, error) {
+	req, _ := http.NewRequestWithContext(ctx, "POST", s.hub.String()+"/webhooks/whatsapp/sim-v1", bytes.NewReader(payload))
 	mac := hmac.New(sha256.New, []byte("sim-app-secret"))
 	mac.Write(payload)
 	sig := hex.EncodeToString(mac.Sum(nil))
@@ -288,22 +309,14 @@ func (s *simulation) emit(w http.ResponseWriter, r *http.Request, payload []byte
 	}
 	req.Header.Set("X-Hub-Signature-256", "sha256="+sig)
 	req.Header.Set("Content-Type", "application/json")
-	started := time.Now()
-	var monotonic unix.Timespec
-	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &monotonic); err != nil {
-		http.Error(w, "clock unavailable", 503)
-		return
-	}
 	client := &http.Client{Transport: s.transport.base, Timeout: 10 * time.Second, CheckRedirect: denyRedirect}
 	res, err := client.Do(req)
 	if err != nil {
-		http.Error(w, "webhook failed", 502)
-		return
+		return req, nil, nil, err
 	}
 	defer res.Body.Close()
 	reply, _ := io.ReadAll(io.LimitReader(res.Body, 65536))
-	s.meta.records.record(req, "webhook", payload, res.StatusCode, reply, started, "")
-	writeJSON(w, map[string]any{"status": res.StatusCode, "started_ns": started.Sub(s.meta.records.start).Nanoseconds(), "monotonic_ns": monotonic.Nano()})
+	return req, res, reply, nil
 }
 func denyRedirect(*http.Request, []*http.Request) error {
 	return errors.New("simulation refuses redirects")
@@ -442,9 +455,17 @@ func runSimulation(validateDatabase func(string) error) error {
 		}
 		writeJSON(w, map[string]bool{"ready": true})
 	})
-	fake := &fakeMeta{records: records, pageSize: 1}
+	fake := &fakeMeta{records: records, pageSize: 1, bulk: newBulkReceipts()}
 	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, channelWake: channelWake, callbacks: &channels.CallbackDispatcher{URL: dsn, Wake: channelWake}}
 	sim.callbacks.Run(ctx, nil)
+	fake.bulk.post = func(ctx context.Context, payload []byte) (int, error) {
+		_, res, _, err := sim.webhook(ctx, payload, false)
+		if err != nil {
+			return 0, err
+		}
+		return res.StatusCode, nil
+	}
+	go fake.bulk.run(ctx)
 	mux.HandleFunc("POST /webhooks/telegram/{account}", sim.channelWebhook("telegram"))
 	mux.HandleFunc("POST /webhooks/email/{account}", sim.channelWebhook("email"))
 	if sim.credentialKey == "" {
