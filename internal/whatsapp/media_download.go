@@ -23,6 +23,16 @@ type MediaDownload struct {
 	Filename string
 }
 
+const MaxDownloadBytes = 16 << 20
+
+// MediaError identifies a failed check without exposing provider URLs, tokens,
+// response bodies or database errors to callers.
+type MediaError struct {
+	Check string
+}
+
+func (e *MediaError) Error() string { return "media rejected at " + e.Check }
+
 // MediaKnown restricts the sticker proxy to a media ID actually received by
 // this account. A provider token may span multiple phones, so possession of an
 // arbitrary numeric media ID is never enough to authorize the download.
@@ -60,16 +70,23 @@ func (s *Service) DownloadMedia(ctx context.Context, a Account, id string, maxBy
 }
 
 func (s *Service) DownloadAttachment(ctx context.Context, a Account, id string) (MediaDownload, error) {
-	return s.downloadMedia(ctx, a, id, 4<<20, false)
+	return s.downloadMedia(ctx, a, id, MaxDownloadBytes, false)
 }
 
-func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBytes int64, stickerOnly bool) (MediaDownload, error) {
+func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBytes int64, stickerOnly bool) (file MediaDownload, failure error) {
+	check := "input"
+	defer func() {
+		if failure != nil {
+			failure = &MediaError{Check: check}
+		}
+	}()
 	var empty MediaDownload
-	if !digits.MatchString(id) || maxBytes < 1 || maxBytes > 4<<20 {
-		return empty, errors.New("valid media ID and a limit up to 4 MiB are required")
+	if !digits.MatchString(id) || maxBytes < 1 || maxBytes > MaxDownloadBytes {
+		return empty, errors.New("valid media ID and a limit up to 16 MiB are required")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	check = "capacity"
 	select {
 	case s.slots <- struct{}{}:
 		defer func() { <-s.slots }()
@@ -78,6 +95,7 @@ func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBy
 	}
 	var known bool
 	var err error
+	check = "ownership_verification"
 	if stickerOnly {
 		store, ok := s.Events.(interface {
 			MediaKnown(context.Context, string, string) (bool, error)
@@ -95,14 +113,20 @@ func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBy
 		}
 		known, err = store.AttachmentKnown(ctx, a.ID, id)
 	}
-	if err != nil || !known {
+	if err != nil {
+		return empty, err
+	}
+	check = "ownership"
+	if !known {
 		return empty, errors.New("media does not belong to this account")
 	}
+	check = "provider_metadata"
 	metadata, err := s.graph(ctx, a, http.MethodGet, id, url.Values{"phone_number_id": {a.PhoneID}}, nil)
 	if err != nil {
 		return empty, err
 	}
 	rawURL, _ := metadata["url"].(string)
+	check = "destination"
 	endpoint, err := url.Parse(rawURL)
 	// Keep the provider bearer credential on the specific Meta media host only.
 	// Redirects are also refused by the service HTTP client.
@@ -110,10 +134,12 @@ func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBy
 		return empty, errors.New("untrusted media download destination")
 	}
 	metadataID, _ := metadata["id"].(string)
+	check = "identifier"
 	if metadataID != id {
 		return empty, errors.New("media identifier mismatch")
 	}
 	mimeType, _ := metadata["mime_type"].(string)
+	check = "content_type"
 	if stickerOnly && mimeType != "image/webp" {
 		return empty, errors.New("this proxy supports WhatsApp stickers only")
 	}
@@ -121,6 +147,7 @@ func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBy
 		return empty, errors.New("invalid media content type")
 	}
 	expectedSize := int64(-1)
+	check = "size"
 	if value, exists := metadata["file_size"]; exists {
 		switch v := value.(type) {
 		case string:
@@ -137,6 +164,7 @@ func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBy
 			return empty, errors.New("media size exceeds the proxy limit or is invalid")
 		}
 	}
+	check = "download"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return empty, errors.New("cannot build media request")
@@ -150,17 +178,21 @@ func (s *Service) downloadMedia(ctx context.Context, a Account, id string, maxBy
 	if res.StatusCode != http.StatusOK {
 		return empty, &ProviderError{Status: res.StatusCode}
 	}
+	check = "size"
 	if res.ContentLength > maxBytes {
 		return empty, errors.New("media size exceeds the proxy limit")
 	}
+	check = "content_type"
 	responseMIME, _, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
 	if err != nil || responseMIME != mimeType {
 		return empty, errors.New("media content type mismatch")
 	}
+	check = "size"
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxBytes+1))
 	if err != nil || len(data) == 0 || int64(len(data)) > maxBytes || (expectedSize >= 0 && int64(len(data)) != expectedSize) {
 		return empty, errors.New("invalid media response size")
 	}
+	check = "integrity"
 	if stickerOnly && (len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP") {
 		return empty, errors.New("invalid WebP sticker")
 	}

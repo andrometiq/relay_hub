@@ -190,7 +190,7 @@ func TestAttachmentDownloadSimulation(t *testing.T) {
 		denied     bool
 	}{
 		{"image", "image/png", 1024, true, false}, {"voice", "audio/ogg", 1024, true, false},
-		{"document", "application/pdf", 3 << 20, true, false}, {"too-large", "application/pdf", (4 << 20) + 1, true, true},
+		{"document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 7 << 20, true, false}, {"too-large", "application/pdf", MaxDownloadBytes + 1, true, true},
 		{"unknown-account", "image/png", 1024, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,6 +222,46 @@ func TestAttachmentDownloadSimulation(t *testing.T) {
 			}
 			if err != nil || !bytes.Equal(file.Data, raw) || file.MIME != tc.mime {
 				t.Fatalf("attachment: %v", err)
+			}
+		})
+	}
+}
+
+func TestMediaFailureChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name, check string
+		store       EventStore
+		busy        bool
+		status      int
+	}{
+		{name: "ownership-store-missing", check: "ownership_verification"},
+		{name: "ownership-store-error", check: "ownership_verification", store: mediaTestStore{fail: true}},
+		{name: "not-owned", check: "ownership", store: mediaTestStore{}},
+		{name: "capacity", check: "capacity", store: mediaTestStore{allow: true}, busy: true},
+		{name: "provider-permission", check: "provider_metadata", store: mediaTestStore{allow: true}, status: 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			s, _ := NewWithHTTPClient([]Account{testAccount()}, &http.Client{Transport: mediaTestTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"private-provider-error"}}`))}, nil
+			})})
+			s.Events = tc.store
+			if tc.busy {
+				for i := 0; i < cap(s.slots); i++ {
+					s.slots <- struct{}{}
+				}
+			}
+			_, err := s.DownloadAttachment(context.Background(), testAccount(), "123")
+			var rejected *MediaError
+			if !errors.As(err, &rejected) || rejected.Check != tc.check {
+				t.Fatalf("wrong rejection: %v", err)
+			}
+			if strings.Contains(err.Error(), "private-provider-error") {
+				t.Fatal("provider body leaked")
+			}
+			if tc.status == 0 && calls != 0 {
+				t.Fatal("local denial contacted provider")
 			}
 		})
 	}

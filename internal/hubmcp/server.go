@@ -48,6 +48,18 @@ func allowed(ctx context.Context, scope string) bool {
 	return !ok || p.Allows(scope)
 }
 
+func mediaFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
+	var rejected *whatsapp.MediaError
+	if !errors.As(err, &rejected) {
+		return nil, nil, errors.New("media download unavailable")
+	}
+	result := &mcp.CallToolResult{}
+	result.SetError(rejected)
+	return result, map[string]any{"provider": "Hub", "error": map[string]any{
+		"check": rejected.Check, "outcome_unknown": false,
+	}}, nil
+}
+
 // Preserve only safe provider control fields. A migration suggestion is never
 // applied automatically: Core must verify a binding for the new destination.
 func telegramFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
@@ -157,25 +169,31 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			MediaID string `json:"media_id"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			account, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok || !allowed(ctx, "messages:read") {
-				return nil, nil, errors.New("account credential with messages:read required")
+			if !ok {
+				return mediaFailure(&whatsapp.MediaError{Check: "account"})
+			}
+			if !allowed(ctx, "messages:read") {
+				return mediaFailure(&whatsapp.MediaError{Check: "scope"})
 			}
 			file, err := wa.DownloadAttachment(ctx, account, in.MediaID)
 			if err != nil {
-				return nil, nil, errors.New("attachment is unavailable for this account")
+				return mediaFailure(err)
 			}
-			return mediaResult(file.Data, file.MIME, file.Filename, 4<<20)
+			return mediaResult(file.Data, file.MIME, file.Filename, whatsapp.MaxDownloadBytes)
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.media", Description: "Read a bounded sticker already received by this account. Provider credentials and download URLs stay in Hub."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			MediaID string `json:"media_id"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			account, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok || !allowed(ctx, "messages:read") {
-				return nil, nil, errors.New("account credential with messages:read required")
+			if !ok {
+				return mediaFailure(&whatsapp.MediaError{Check: "account"})
+			}
+			if !allowed(ctx, "messages:read") {
+				return mediaFailure(&whatsapp.MediaError{Check: "scope"})
 			}
 			file, err := wa.DownloadMedia(ctx, account, in.MediaID, 2<<20)
 			if err != nil {
-				return nil, nil, errors.New("sticker is unavailable for this account")
+				return mediaFailure(err)
 			}
 			return mediaResult(file.Data, file.MIME, file.Filename)
 		})
