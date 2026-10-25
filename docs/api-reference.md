@@ -126,13 +126,13 @@ Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`.
 
 ## WhatsApp bulk template sends
 
-`whatsapp.bulk` queues 1–50 `templates.send` messages in one call. It is for campaigns: other operations are refused. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full account queue (10,000 queued or submitting intents) refuses the whole call.
+`whatsapp.bulk` queues 1–50 `templates.send` messages in one call. It is for campaigns: other operations are refused. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full account queue (10,000 queued or submitting intents) refuses the whole call, and so do 5,000 queued or submitting bulk intents: half of the account queue stays free for conversational sends.
 
 ```json
-{"deliveries":[{"id":"812","key":"winter-launch-1","state":"queued","attempts":0,"next_attempt":"0001-01-01T00:00:00Z"},{"id":"","key":"winter-launch-2","state":"rejected","error":"enabled template, recipient, name and language are required"}],"queued":731,"limit":10000,"messages_per_second":80}
+{"deliveries":[{"id":"812","key":"winter-launch-1","state":"queued","attempts":0,"next_attempt":"0001-01-01T00:00:00Z"},{"id":"","key":"winter-launch-2","state":"rejected","error":"enabled template, recipient, name and language are required"}],"queued":731,"limit":5000,"messages_per_second":80}
 ```
 
-Use `queued` for backpressure: stop pushing while it is above your own limit and pace by `messages_per_second`. Workers send bulk rows one by one at the account rate, after any non-bulk sends of the same account. Retries follow the outbox rules: only errors that Meta marks as transient or rate limits are retried.
+Use `queued` (all queued or submitting intents of the account) for backpressure: stop pushing while it is above your own limit and pace by `messages_per_second`. `limit` is the bulk share of the queue. Workers send bulk rows one by one at the account rate, after any non-bulk sends of the same account. Retries follow the outbox rules: only errors that Meta marks as transient or rate limits are retried.
 
 Bulk results do not use the realtime or status lanes. The Hub posts the latest state of each changed bulk row to `/api/method/relay_core.inbound.receive_bulk_updates`, signed like the status callbacks. A batch is sent when 500 rows changed or when the oldest change waited `RELAY_BULK_UPDATE_WINDOW` (default 30 s). Rows are in ascending `id` order:
 
