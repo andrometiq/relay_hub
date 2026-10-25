@@ -705,7 +705,7 @@ func run() error {
 		})
 		liveUpdates := live.New(browserAuth.Origin, browserAuth.Session)
 		defer liveUpdates.Close()
-		mux.Handle("/socket.io/", liveUpdates)
+		mux.Handle("GET /socket.io/", liveUpdates)
 		mux.Handle("GET /", browserAuth.Protect(http.FileServer(http.Dir(ui))))
 		server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
 		mailboxPool, err := channels.NewMailboxPool(context.Background(), authPool.Config())
