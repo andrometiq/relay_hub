@@ -11,6 +11,7 @@ import {
 import CallbackFailures from "./CallbackFailures.vue";
 import AccountPicker from "../components/AccountPicker.vue";
 import { hubApi } from "../services/hubApi";
+import { CHANNELS } from "../composables/accountForm";
 import { usePendingRefresh } from "../composables/usePendingRefresh";
 
 
@@ -150,7 +151,7 @@ defineExpose({ refresh: async () => { await refresh(); await callbacks.value?.re
     </div>
     <div class="entity-toolbar mt-6">
       <AccountPicker v-model="account" :disabled="busy" />
-      <FormControl v-model="channel" type="select" label="Channel" aria-label="Channel" :options="['WhatsApp', 'Telegram', 'Email']" :disabled="busy" />
+      <FormControl v-if="CHANNELS.length > 1" v-model="channel" type="select" label="Channel" aria-label="Channel" :options="CHANNELS" :disabled="busy" />
     </div>
     <ErrorMessage :message="error" />
     <p v-if="!account" class="entity-prompt">

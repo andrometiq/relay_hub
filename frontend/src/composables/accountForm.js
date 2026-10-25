@@ -1,4 +1,6 @@
-export const CHANNELS = ["WhatsApp", "Telegram", "Email"];
+// Channels this admin UI offers. Saving an account keeps other channels unchanged.
+export const CHANNELS = ["WhatsApp"];
+export const EXTRA_CHANNELS = CHANNELS.filter((channel) => channel !== "WhatsApp");
 export const PRIVATE_KEYS = ["app_secret", "verify_token", "core_token", "core_api_key", "core_api_secret", "callback_secret", "imap_password"];
 const WHATSAPP = "WhatsApp";
 
