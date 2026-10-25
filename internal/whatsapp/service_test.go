@@ -136,7 +136,7 @@ func TestTemplateAuthoringParametersPreserved(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["parameter_format"] != "NAMED" || body["message_send_ttl_seconds"] != float64(600) {
+		if body["parameter_format"] != "named" || body["message_send_ttl_seconds"] != float64(600) {
 			t.Errorf("authoring settings lost: %v", body)
 		}
 		components := body["components"].([]any)
