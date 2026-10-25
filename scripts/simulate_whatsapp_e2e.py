@@ -50,8 +50,10 @@ def assert_ledger_reply(text):
 
 
 def assert_handoff(state, fixture):
-    assert state['paused'] and len(state['tickets']) == 1, 'Expected one ticket and paused automation'
+    assert len(state['tickets']) == 1, 'Expected one ticket and held episode'
     ticket = state['tickets'][0]
+    assert ticket['ai_disabled'] and ticket['active_scope_key'], 'Expected an active episode hold'
+    assert not state['paused'], 'Handoff must not pause every conversation for this contact'
     assert ticket['assigned_to'] == fixture['handoff_owner']
     assert ticket['business_doctype'] == 'Supplier' and ticket['business_name'] == fixture['supplier']
     assert len(state['runs']) == 1 and ticket['source_run'] == fixture['source_run']
@@ -255,7 +257,7 @@ class Runner(SimulationRunner):
         assert len(ai_calls) == 6 and all(row['status'] == 200 for row in ai_calls), 'Expected classifier, declaration, read/result and identity-denied read/result; human request bypasses AI'
         assert all(marker not in json.dumps(ai_calls) for marker in ('SIM-OTHER-SUPPLIER-SECRET', 'SIM-OUTSIDE-RANGE', 'SIM-CANCELLED'))
         return dict(supplier=fixture['supplier'], accepted_provider_posts=2, fake_ai_calls=len(ai_calls),
-                    ticket=result['tickets'][0]['name'], statuses=['Sent', 'Delivered', 'Read'], automation_paused=True,
+                    ticket=result['tickets'][0]['name'], statuses=['Sent', 'Delivered', 'Read'], episode_held=True,
                     mismatched_identity_denied=identity_denied, search_announced_before_data=True)
 
     def business_event_acceptance(self):
