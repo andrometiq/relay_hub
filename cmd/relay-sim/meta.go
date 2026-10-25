@@ -16,6 +16,7 @@ type fakeMeta struct {
 	templates []map[string]any
 	messages  int
 	pageSize  int
+	bulk      *bulkReceipts
 }
 
 func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +33,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	status := 200
 	var result any
 	fault := m.records.fault("graph")
+	captured := true
 	m.mu.Lock()
 	switch {
 	case fault == "429" || fault == "503":
@@ -43,7 +45,15 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result = map[string]any{"error": "invalid fake provider token"}
 	case r.Method == "POST" && r.URL.Path == "/v25.0/110/messages":
 		m.messages++
-		result = map[string]any{"messages": []any{map[string]any{"id": providerID("wamid.sim")}}}
+		id := providerID("wamid.sim")
+		result = map[string]any{"messages": []any{map[string]any{"id": id}}}
+		var send struct {
+			To       string `json:"to"`
+			Type     string `json:"type"`
+			Tracking string `json:"biz_opaque_callback_data"`
+		}
+		// Campaign sends are counted by bulkReceipts instead of captured one by one.
+		captured = json.Unmarshal(body, &send) != nil || send.Type != "template" || !m.bulk.accept(send.To, id, send.Tracking)
 	case r.Method == "POST" && r.URL.Path == "/v25.0/220/message_templates":
 		var row map[string]any
 		if json.Unmarshal(body, &row) != nil || row["name"] == nil {
@@ -92,7 +102,9 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	reply, _ := json.Marshal(result)
 	m.mu.Unlock()
-	m.records.record(r, "graph", body, status, reply, started, fault)
+	if captured {
+		m.records.record(r, "graph", body, status, reply, started, fault)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	w.Write(reply)
