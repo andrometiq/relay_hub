@@ -264,7 +264,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err != nil {
 				return nil, nil, err
 			}
-			return nil, map[string]any{"deliveries": rows, "queued": queued, "limit": whatsapp.QueueLimit, "messages_per_second": a.SendRate()}, nil
+			return nil, map[string]any{"deliveries": rows, "queued": queued, "limit": whatsapp.BulkQueueLimit, "messages_per_second": a.SendRate()}, nil
 		})
 
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.resolve", Description: "Record a verified uncertain delivery outcome without resending."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {

@@ -43,6 +43,20 @@ type Delivery struct {
 // QueueLimit bounds queued and submitting intents per account.
 const QueueLimit = 10000
 
+// BulkQueueLimit bounds the bulk share of that queue, so conversational sends always have room.
+const BulkQueueLimit = QueueLimit / 2
+
+// queueRoom reports why one more intent cannot be admitted, or nil.
+func queueRoom(count, bulkCount int, bulk bool) error {
+	if count >= QueueLimit {
+		return errors.New("account queue is full; nothing in this batch was accepted")
+	}
+	if bulk && bulkCount >= BulkQueueLimit {
+		return errors.New("bulk queue is full; nothing in this batch was accepted")
+	}
+	return nil
+}
+
 func (o *Outbox) Enqueue(ctx context.Context, a Account, batch []Submission) ([]Delivery, error) {
 	rows, _, err := o.enqueue(ctx, a, batch, false)
 	return rows, err
@@ -95,8 +109,8 @@ func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bul
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", a.ID); err != nil {
 		return nil, 0, err
 	}
-	var count int
-	if err = tx.QueryRow(ctx, "SELECT count(*) FROM relay_outbox WHERE account=$1 AND state IN ('queued','submitting')", a.ID).Scan(&count); err != nil {
+	var count, bulkCount int
+	if err = tx.QueryRow(ctx, "SELECT count(*),count(*) FILTER (WHERE bulk) FROM relay_outbox WHERE account=$1 AND state IN ('queued','submitting')", a.ID).Scan(&count, &bulkCount); err != nil {
 		return nil, 0, err
 	}
 	result := make([]Delivery, 0, len(batch))
@@ -119,14 +133,17 @@ func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bul
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return nil, 0, err
 		}
-		if count >= QueueLimit {
-			return nil, 0, errors.New("account queue is full; nothing in this batch was accepted")
+		if err = queueRoom(count, bulkCount, bulk); err != nil {
+			return nil, 0, err
 		}
 		err = tx.QueryRow(ctx, "INSERT INTO relay_outbox(account,request_key,payload,bulk) VALUES($1,$2,$3,$4) RETURNING id::text,request_key,state", a.ID, item.Key, string(raw), bulk).Scan(&d.ID, &d.Key, &d.State)
 		if err != nil {
 			return nil, 0, err
 		}
 		count++
+		if bulk {
+			bulkCount++
+		}
 		result = append(result, d)
 	}
 	if err = tx.Commit(ctx); err != nil {
