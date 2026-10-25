@@ -249,7 +249,18 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		wa.Events = whatsapp.PostgresEvents{URL: os.Getenv("DATABASE_URL")}
+		eventsConfig, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return err
+		}
+		// One connection per concurrent webhook slot, released when idle.
+		eventsConfig.MaxConns, eventsConfig.MinConns, eventsConfig.MaxConnIdleTime = 4, 0, time.Minute
+		eventsPool, err := pgxpool.NewWithConfig(context.Background(), eventsConfig)
+		if err != nil {
+			return err
+		}
+		defer eventsPool.Close()
+		wa.Events = whatsapp.PostgresEvents{URL: os.Getenv("DATABASE_URL"), Pool: eventsPool}
 		workers := 4
 		if configured := os.Getenv("RELAY_OUTBOX_WORKERS"); configured != "" {
 			workers, err = strconv.Atoi(configured)
