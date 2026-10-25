@@ -12,6 +12,7 @@ import ChannelConnection from "../components/ChannelConnection.vue";
 import AccountHealth from "../components/AccountHealth.vue";
 import InfiniteList from "../components/InfiniteList.vue";
 import { hubApi } from "../services/hubApi";
+import { CHANNELS } from "../composables/accountForm";
 
 defineEmits(["navigate"]);
 const list = ref();
@@ -34,11 +35,11 @@ async function loadChannels({ cursor, direction, q }) {
         (item) => item.channel === "WhatsApp",
       );
       return {
-        channels: account.channels || [],
+        channels: (account.channels || []).filter((item) => CHANNELS.includes(item.channel)),
         id: account.id,
         account: account.id,
         site: account.site,
-        enabled: !!account.enabled && account.channels?.some(item => item.enabled),
+        enabled: !!account.enabled && (account.channels || []).some(item => item.enabled && CHANNELS.includes(item.channel)),
         configured: !!channel,
         sync: !!channel?.config?.sync_metadata,
         verified: channel?.config?.connection_status === "connected",
@@ -141,7 +142,7 @@ defineExpose({ refresh: () => list.value?.reload() });
     >
       <template #body-content>
         <div v-if="selected" class="space-y-5">
-          <FormControl label="Channel" type="select" :options="selected.channels.map(item => item.channel)" v-model="selectedChannel" />
+          <FormControl v-if="selected.channels.length > 1" label="Channel" type="select" :options="selected.channels.map(item => item.channel)" v-model="selectedChannel" />
           <ChannelConnection v-if="selectedChannel !== 'WhatsApp'" :key="selected.account + selectedChannel" :account="selected.account" :channel="selectedChannel" />
           <template v-else>
           <dl class="entity-details">

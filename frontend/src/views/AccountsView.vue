@@ -7,6 +7,7 @@ import DocumentForm from "../components/DocumentForm.vue";
 import AccountPagination from "../components/AccountPagination.vue";
 
 import { useAccountEditor, accountFields, whatsappReady } from "../composables/useAccountEditor";
+import { CHANNELS, EXTRA_CHANNELS } from "../composables/accountForm";
 
 const props = defineProps({ accounts: Array, refresh: Function, page: Object, busy: Boolean, error: String });
 const emit = defineEmits(["search", "page"]);
@@ -15,7 +16,7 @@ const query = ref(props.page.query || "");
 const activeStep = ref("account");
 const errorSummary = ref();
 const channelErrors = computed(() => Object.fromEntries(Object.entries(errors.value).filter(([key]) => key.startsWith(activeStep.value + ".")).map(([key, value]) => [key.slice(activeStep.value.length + 1), value])));
-const steps = ["account", "meta", "webhook", "features", "delivery", "Telegram", "Email"];
+const steps = ["account", "meta", "webhook", "features", "delivery", ...EXTRA_CHANNELS];
 const stepFields = {
   account: ["id", "site", "enabled"],
   meta: ["secret", "phone_id", "waba_id", "app_id", "graph_version"],
@@ -52,7 +53,7 @@ const stepIndex = computed(() => steps.indexOf(activeStep.value));
 
 function openAccount(account) {
   beginEdit(account);
-  activeStep.value = account?.channels?.find(channel => channel.enabled && channel.channel !== "WhatsApp")?.channel || (account && !configured(account) ? "meta" : "account");
+  activeStep.value = account?.channels?.find(channel => channel.enabled && EXTRA_CHANNELS.includes(channel.channel))?.channel || (account && !configured(account) ? "meta" : "account");
 }
 
 function firstInvalidStep() {
@@ -101,7 +102,7 @@ function moveStep(offset) {
         <button v-for="row in accounts" :key="row.id" type="button" class="entity-row" :aria-label="'Open account ' + row.id" @click="openAccount(row)">
           <span class="entity-primary"><span class="entity-icon" aria-hidden="true"><FeatherIcon name="briefcase" class="h-4 w-4" /></span><strong>{{ row.id }}</strong></span>
           <span class="entity-site">{{ row.site }}</span>
-          <span><Badge :label="row.channels.filter(channel => channel.enabled).map(channel => channel.channel).join(' · ') || 'None enabled'" theme="gray" /></span>
+          <span><Badge :label="row.channels.filter(channel => channel.enabled && CHANNELS.includes(channel.channel)).map(channel => channel.channel).join(' · ') || 'None enabled'" theme="gray" /></span>
           <span><Badge :label="row.enabled ? 'Enabled' : 'Disabled'" :theme="row.enabled ? 'green' : 'gray'" /></span>
           <FeatherIcon name="chevron-right" class="h-4 w-4 text-ink-gray-4" />
         </button>
@@ -140,11 +141,11 @@ function moveStep(offset) {
               <DocumentForm v-model="draft" :fields="fields" :errors="errors" />
               <div class="account-route-preview">
                 <span><FeatherIcon name="globe" /></span>
-                <div><strong>One site, multiple channels</strong><p>Messages stay scoped to this account with its own credentials, webhook and Core callback configuration.</p></div>
+                <div><strong>One site, one account</strong><p>Messages stay scoped to this account with its own credentials, webhook and Core callback configuration.</p></div>
               </div>
             </section>
             <ChannelCredentials
-              v-else-if="['Telegram', 'Email'].includes(activeStep)"
+              v-else-if="EXTRA_CHANNELS.includes(activeStep)"
               :key="activeStep"
               :channel="activeStep"
               :account-id="editingID"
