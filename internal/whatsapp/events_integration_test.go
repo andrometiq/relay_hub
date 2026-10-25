@@ -50,6 +50,15 @@ func TestDurableEventDeduplicationAndAccountIsolation(t *testing.T) {
 	if _, err = c.Exec(ctx, string(statusSQL)); err != nil {
 		t.Fatal(err)
 	}
+	for _, file := range []string{"0003_outbox.sql", "0037_whatsapp_bulk.sql"} {
+		raw, err := os.ReadFile("../database/migrations/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = c.Exec(ctx, string(raw)); err != nil {
+			t.Fatal(file, err)
+		}
+	}
 	store := PostgresEvents{URL: scoped}
 	body := []byte(`{"event":"sample"}`)
 	for _, account := range []string{"a", "a", "b"} {

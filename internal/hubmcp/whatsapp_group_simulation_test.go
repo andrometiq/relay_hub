@@ -43,14 +43,11 @@ func TestWhatsAppV1Surface(t *testing.T) {
 		return w.Body.String()
 	}
 	listed := request(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
-	for _, tool := range []string{"whatsapp.bulk", "whatsapp.enqueue"} {
-		if strings.Contains(listed, tool) {
-			t.Fatalf("v1 advertised %s", tool)
-		}
-		body := request(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":{"messages":[]}}}`, tool))
-		if !strings.Contains(body, `"error"`) {
-			t.Fatal("bulk tool still callable", body)
-		}
+	if strings.Contains(listed, "whatsapp.enqueue") || !strings.Contains(listed, "whatsapp.bulk") {
+		t.Fatal("v1 must advertise the template-only whatsapp.bulk tool and no raw enqueue", listed)
+	}
+	if body := request(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whatsapp.enqueue","arguments":{"messages":[]}}}`); !strings.Contains(body, `"error"`) {
+		t.Fatal("raw enqueue tool still callable", body)
 	}
 	for _, op := range []string{"groups.list", "groups.send", "groups.create", "calls.action", "calls.permission.get", "calls.permission.request"} {
 		for _, key := range []string{"", "durable-key"} {

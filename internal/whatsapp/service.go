@@ -271,11 +271,14 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 	}()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	default:
-		return nil, ErrBusy
+	// Validation makes no provider request, so it never competes for a slot.
+	if !validateOnly {
+		select {
+		case s.slots <- struct{}{}:
+			defer func() { <-s.slots }()
+		default:
+			return nil, ErrBusy
+		}
 	}
 	if in.Operation == "groups.react" || in.Operation == "groups.location" || in.Operation == "groups.contacts" {
 		return nil, errors.New("this message type is not documented as supported by WhatsApp Groups API")
@@ -519,7 +522,7 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 			body.(map[string]any)["message_send_ttl_seconds"] = in.MessageSendTTLSeconds
 		}
 	case "templates.send", "groups.template":
-		if !a.Templates || (in.Operation == "templates.send" && !digits.MatchString(in.To)) || !templateName.MatchString(in.Name) || !language.MatchString(in.Language) {
+		if !a.Templates || (in.Operation == "templates.send" && (!digits.MatchString(in.To) || len(in.To) < 7 || len(in.To) > 15)) || !templateName.MatchString(in.Name) || !language.MatchString(in.Language) {
 			return nil, errors.New("enabled template, recipient, name and language are required")
 		}
 		path = a.PhoneID + "/messages"

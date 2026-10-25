@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProviderErrorKeepsOnlySafeMetaText(t *testing.T) {
@@ -36,5 +37,33 @@ func TestProviderErrorKeepsOnlySafeMetaText(t *testing.T) {
 	}
 	if long := safeText(strings.Repeat("é", 400)); len([]rune(long)) != 300 {
 		t.Fatal("safe text is not bounded", len([]rune(long)))
+	}
+}
+
+func TestReceiptErrorsAndBulkLaneShape(t *testing.T) {
+	raw := []byte(`{"entry":[{"changes":[{"value":{"statuses":[{"id":"wamid.a","status":"failed","timestamp":"10","biz_opaque_callback_data":"relay-outbox:42","errors":[{"code":131049,"title":"Not delivered","message":"Not delivered","error_data":{"details":"Healthy ecosystem engagement."}}]},{"id":"wamid.b","status":"deleted","timestamp":"11"}]}}]}]}`)
+	statuses := extractStatuses(raw)
+	if len(statuses) != 1 || statuses[0].TrackingID != 42 || string(statuses[0].Error) != `{"code":131049,"message":"Healthy ecosystem engagement.","title":"Not delivered"}` {
+		t.Fatalf("unexpected receipt projection %+v %s", statuses, statuses[0].Error)
+	}
+	// An unknown receipt kind keeps the event in the status lane.
+	if statusCount(raw) != 2 {
+		t.Fatal("raw receipts must be counted")
+	}
+	if bulkError([]byte(`{"http_status":400,"code":131009,"title":"Bad","message":"Fix","retry_after":0}`)) == nil || bulkError([]byte(`{"http_status":503}`)) != nil {
+		t.Fatal("bulk error must keep coded provider errors only")
+	}
+}
+
+func TestParseBulkWindow(t *testing.T) {
+	for value, want := range map[string]time.Duration{"": DefaultBulkWindow, "45s": 45 * time.Second, "1s": time.Second, "5m": 5 * time.Minute} {
+		if got, err := ParseBulkWindow(value); err != nil || got != want {
+			t.Fatal(value, got, err)
+		}
+	}
+	for _, value := range []string{"500ms", "6m", "thirty"} {
+		if _, err := ParseBulkWindow(value); err == nil {
+			t.Fatal("accepted", value)
+		}
 	}
 }

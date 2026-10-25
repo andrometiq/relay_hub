@@ -35,7 +35,7 @@ Its structured result contains `{"status":"ready","service":"relay_hub"}` when d
 | --- | --- | --- |
 | `health.get` | `{}` | Valid API token |
 | `whatsapp.send` | `message: {key, message: {...}}` | `messages:send` |
-| `whatsapp.bulk`, `whatsapp.enqueue` | `messages: [{key, message: {...}}]`, 1–50 items | `messages:send` |
+| `whatsapp.bulk` | `messages: [{key, message: {operation: "templates.send", ...}}]`, 1–50 template sends | `messages:send` |
 | `whatsapp.deliveries` | Optional `after`; optional `cancel_id` for cancellation | `deliveries:read` or `deliveries:cancel` |
 | `whatsapp.execute` | `operation` and typed operation fields | Operation scope below |
 | `whatsapp.media` | `media_id` of a received sticker | `messages:read` |
@@ -60,7 +60,7 @@ Scopes authorize Hub account operations; they do not grant access to Frappe busi
 
 ## WhatsApp messages
 
-Use the durable outbox for delivery intents. `key` is a caller-generated stable request key: an identical submission returns its existing intent; the same key with different content is rejected. Acceptance means queued, not delivered or read. Batches are atomic and bounded to 50 items. `whatsapp.execute` requires `request_key` for sends and routes them through the durable outbox. Read and management operations can execute directly.
+Use the durable outbox for delivery intents. `key` is a caller-generated stable request key: an identical submission returns its existing intent; the same key with different content is rejected. Acceptance means queued, not delivered or read. `whatsapp.execute` requires `request_key` for sends and routes them through the durable outbox. Read and management operations can execute directly.
 
 The following is the `arguments` object for `whatsapp.send`:
 
@@ -123,6 +123,24 @@ Group message operations use **`to` for the group ID**, not a participant's phon
 The durable outbox also accepts `groups.media`, `groups.template` and `groups.pin`. Ownership and capability checks apply before provider mutation. Group reactions, locations and contact cards are rejected locally; they never fall back to a participant DM. Group invitations use `groups.invite.get` and `groups.invite.reset`, not manual participant addition. See the [group operation matrix](group-simulation-coverage.md#supported-group-operations).
 
 Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`. Changing the group avatar is separate from sending a sticker or image message.
+
+## WhatsApp bulk template sends
+
+`whatsapp.bulk` queues 1–50 `templates.send` messages in one call. It is for campaigns: other operations are refused. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full account queue (10,000 queued or submitting intents) refuses the whole call.
+
+```json
+{"deliveries":[{"id":"812","key":"winter-launch-1","state":"queued","attempts":0,"next_attempt":"0001-01-01T00:00:00Z"},{"id":"","key":"winter-launch-2","state":"rejected","error":"enabled template, recipient, name and language are required"}],"queued":731,"limit":10000,"messages_per_second":80}
+```
+
+Use `queued` for backpressure: stop pushing while it is above your own limit and pace by `messages_per_second`. Workers send bulk rows one by one at the account rate, after any non-bulk sends of the same account. Retries follow the outbox rules: only errors that Meta marks as transient or rate limits are retried.
+
+Bulk results do not use the realtime or status lanes. The Hub posts the latest state of each changed bulk row to `/api/method/relay_core.inbound.receive_bulk_updates`, signed like the status callbacks. A batch is sent when 500 rows changed or when the oldest change waited `RELAY_BULK_UPDATE_WINDOW` (default 30 s). Rows are in ascending `id` order:
+
+```json
+{"account":"essdee","updates":[{"id":812,"key":"winter-launch-1","state":"submitted","message_id":"wamid.SYNTHETIC","status":"read","updated_at":"2026-10-25T18:00:00Z"},{"id":813,"key":"winter-launch-7","state":"rejected","message_id":"","status":"","error":{"code":131009,"title":"Parameter value is not valid","message":"Header image URL could not be downloaded."},"updated_at":"2026-10-25T18:00:01Z"}]}
+```
+
+`state` is the outbox state (`queued`, `submitting`, `submitted`, `rejected`, `uncertain`, `cancelled`). `status` is the latest Meta receipt (`sent`, `delivered`, `read`, `failed`) and never moves back. `error` holds the Meta code and its user title and message, for a rejected send or a failed receipt (for example 131026, 131049 or 130472). Core acknowledges with `{"message":{"accepted":N}}`. A row that changes again is sent again in a later batch. Replies to campaign messages stay on the realtime lane.
 
 ## Provider errors
 

@@ -471,7 +471,11 @@ func runSimulation(validateDatabase func(string) error) error {
 	channels.Outbox{DB: pool, Registry: registry}.Run(ctx)
 	channels.MailboxPoller{DB: mailboxPool, Registry: registry, Wake: channelWake}.Run(ctx)
 	wa.Outbox.Run(ctx)
-	(&whatsapp.CallbackDispatcher{URL: dsn, Service: wa}).Run(ctx)
+	bulkWindow, err := whatsapp.ParseBulkWindow(os.Getenv("RELAY_BULK_UPDATE_WINDOW"))
+	if err != nil {
+		return err
+	}
+	(&whatsapp.CallbackDispatcher{URL: dsn, Service: wa, BulkWindow: bulkWindow}).Run(ctx)
 	fmt.Println("relay-sim ready (loopback only)")
 	select {
 	case <-ctx.Done():

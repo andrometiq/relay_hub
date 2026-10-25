@@ -20,15 +20,16 @@ import (
 
 // CallbackDispatcher acknowledges immutable events independently in each lane.
 type CallbackDispatcher struct {
-	URL     string
-	Service *Service
+	URL        string
+	Service    *Service
+	BulkWindow time.Duration
 }
 
 func (d *CallbackDispatcher) Run(ctx context.Context) {
-	for _, lane := range []string{"realtime", "status"} {
+	for _, lane := range []string{"realtime", "status", "bulk"} {
 		interval := 250 * time.Millisecond
 		var wake <-chan struct{} = d.Service.callbackWake
-		if lane == "status" {
+		if lane != "realtime" {
 			interval = time.Second
 			wake = nil
 		}
@@ -43,7 +44,11 @@ func (d *CallbackDispatcher) Run(ctx context.Context) {
 				sort.Slice(accounts, func(i, j int) bool { return accounts[i].ID < accounts[j].ID })
 				jobs := make([]callbackworker.Job, 0, len(accounts))
 				for _, a := range accounts {
-					jobs = append(jobs, callbackworker.Job{Key: a.ID, Run: func(jobCtx context.Context) { _ = d.deliver(jobCtx, a, lane) }})
+					run := func(jobCtx context.Context) { _ = d.deliver(jobCtx, a, lane) }
+					if lane == "bulk" {
+						run = func(jobCtx context.Context) { _ = d.deliverBulk(jobCtx, a) }
+					}
+					jobs = append(jobs, callbackworker.Job{Key: a.ID, Run: run})
 				}
 				return jobs
 			}, wake)
@@ -157,13 +162,30 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	if accepted == 0 {
 		return acknowledgeCallbacks(ctx, c, a.ID, lane, events, next)
 	}
-	payload, err := json.Marshal(values)
+	ack, err := d.post(ctx, a, endpoint, values, accepted, started)
 	if err != nil {
 		return err
 	}
+	saveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if ack {
+		return acknowledgeCallbacks(saveCtx, c, a.ID, lane, events, next)
+	}
+	if err := callbackFailure(saveCtx, c, events, lane, "Core did not acknowledge event batch", -1); err != nil {
+		return err
+	}
+	return errors.New("Core did not acknowledge event batch")
+}
+
+// post signs one callback batch and reports whether Core durably accepted it.
+func (d *CallbackDispatcher) post(ctx context.Context, a Account, endpoint string, values any, accepted int, started time.Time) (bool, error) {
+	payload, err := json.Marshal(values)
+	if err != nil {
+		return false, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(a.Site, "/")+endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return err
+		return false, err
 	}
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(a.CallbackSecret))
@@ -175,20 +197,11 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	req.Header.Set("X-Relay-Signature", hex.EncodeToString(mac.Sum(nil)))
 	req.Header.Set("X-Relay-Dispatch-Ms", strconv.FormatFloat(float64(time.Since(started).Microseconds())/1000, 'f', 3, 64))
 	response, err := d.Service.client.Do(req)
-	ack := false
-	if err == nil {
-		ack = callbackworker.Acknowledged(response, accepted)
-		response.Body.Close()
+	if err != nil {
+		return false, nil
 	}
-	saveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if ack {
-		return acknowledgeCallbacks(saveCtx, c, a.ID, lane, events, next)
-	}
-	if err := callbackFailure(saveCtx, c, events, lane, "Core did not acknowledge event batch", -1); err != nil {
-		return err
-	}
-	return errors.New("Core did not acknowledge event batch")
+	defer response.Body.Close()
+	return callbackworker.Acknowledged(response, accepted), nil
 }
 
 func acknowledgeCallbacks(ctx context.Context, c *pgx.Conn, account, lane string, events []Event, next StatusCursor) error {

@@ -62,19 +62,38 @@ func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, 
 		return e
 	}
 	defer tx.Rollback(context.Background())
-	_, e = tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane,raw_payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), eventLane(body), string(original))
+	statuses := extractStatuses(body)
+	bulk, matched, e := bulkDeliveries(ctx, tx, account, statuses)
 	if e != nil {
 		return e
 	}
-	for _, status := range extractStatuses(body) {
-		_, e = tx.Exec(ctx, `INSERT INTO relay_whatsapp_status(account,provider_id,status,status_rank,provider_timestamp) VALUES($1,$2,$3,$4,$5)
-      ON CONFLICT(account,provider_id) DO UPDATE SET status=excluded.status,status_rank=excluded.status_rank,provider_timestamp=excluded.provider_timestamp,updated_at=now()
-      WHERE excluded.status_rank>relay_whatsapp_status.status_rank OR (excluded.status_rank=relay_whatsapp_status.status_rank AND excluded.provider_timestamp>relay_whatsapp_status.provider_timestamp)`, account, status.ID, status.Status, status.Rank, status.Timestamp)
+	lane := eventLane(body)
+	if lane == "status" && matched > 0 && matched == len(statuses) && matched == statusCount(body) {
+		lane = "bulk"
+	}
+	tag, e := tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane,raw_payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), lane, string(original))
+	if e != nil {
+		return e
+	}
+	if tag.RowsAffected() == 0 {
+		return tx.Commit(ctx)
+	}
+	for _, status := range statuses {
+		_, e = tx.Exec(ctx, `INSERT INTO relay_whatsapp_status(account,provider_id,status,status_rank,provider_timestamp,error) VALUES($1,$2,$3,$4,$5,$6)
+      ON CONFLICT(account,provider_id) DO UPDATE SET status=excluded.status,status_rank=excluded.status_rank,provider_timestamp=excluded.provider_timestamp,error=excluded.error,updated_at=now()
+      WHERE excluded.status_rank>relay_whatsapp_status.status_rank OR (excluded.status_rank=relay_whatsapp_status.status_rank AND excluded.provider_timestamp>relay_whatsapp_status.provider_timestamp)`, account, status.ID, status.Status, status.Rank, status.Timestamp, status.Error)
 		if e != nil {
 			return e
 		}
 	}
-	for _, status := range extractStatuses(body) {
+	if len(bulk) > 0 {
+		_, e = tx.Exec(ctx, `INSERT INTO relay_bulk_pending(outbox_id,account) SELECT DISTINCT unnest($2::bigint[]),$1 ORDER BY 1
+      ON CONFLICT(outbox_id) DO UPDATE SET changed_at=clock_timestamp()`, account, bulk)
+		if e != nil {
+			return e
+		}
+	}
+	for _, status := range statuses {
 		if status.TrackingID > 0 {
 			_, e = tx.Exec(ctx, `UPDATE relay_outbox SET state='submitted',result=jsonb_build_object('messages',jsonb_build_array(jsonb_build_object('id',$3::text))),error='',updated_at=now() WHERE account=$1 AND id=$2 AND state IN ('submitting','uncertain')`, account, status.TrackingID, status.ID)
 			if e != nil {
@@ -245,6 +264,100 @@ type deliveryStatus struct {
 	ID, Status string
 	Rank       int
 	Timestamp  int64
+	Error      []byte
+}
+
+// bulkDeliveries maps receipts to bulk outbox rows by tracking ID or provider
+// message ID, and returns the rows plus how many receipts matched.
+func bulkDeliveries(ctx context.Context, tx pgx.Tx, account string, statuses []deliveryStatus) ([]int64, int, error) {
+	if len(statuses) == 0 {
+		return nil, 0, nil
+	}
+	tracking, providers := []int64{}, []string{}
+	for _, status := range statuses {
+		if status.TrackingID > 0 {
+			tracking = append(tracking, status.TrackingID)
+		}
+		providers = append(providers, status.ID)
+	}
+	rows, err := tx.Query(ctx, `SELECT id,coalesce(result->'messages'->0->>'id','') FROM relay_outbox
+ WHERE account=$1 AND bulk AND (id=ANY($2) OR result->'messages'->0->>'id'=ANY($3))`, account, tracking, providers)
+	if err != nil {
+		return nil, 0, err
+	}
+	byID, byProvider := map[int64]bool{}, map[string]int64{}
+	for rows.Next() {
+		var id int64
+		var provider string
+		if err = rows.Scan(&id, &provider); err != nil {
+			rows.Close()
+			return nil, 0, err
+		}
+		byID[id] = true
+		if provider != "" {
+			byProvider[provider] = id
+		}
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	ids, matched := []int64{}, 0
+	for _, status := range statuses {
+		id := byProvider[status.ID]
+		if byID[status.TrackingID] {
+			id = status.TrackingID
+		}
+		if id > 0 {
+			ids = append(ids, id)
+			matched++
+		}
+	}
+	return ids, matched, nil
+}
+
+func statusCount(raw []byte) int {
+	var event struct {
+		Entry []struct {
+			Changes []struct {
+				Value struct {
+					Statuses []json.RawMessage `json:"statuses"`
+				} `json:"value"`
+			} `json:"changes"`
+		} `json:"entry"`
+	}
+	if json.Unmarshal(raw, &event) != nil {
+		return -1
+	}
+	count := 0
+	for _, entry := range event.Entry {
+		for _, change := range entry.Changes {
+			count += len(change.Value.Statuses)
+		}
+	}
+	return count
+}
+
+type providerReceiptError struct {
+	Code      int    `json:"code"`
+	Title     string `json:"title"`
+	Message   string `json:"message"`
+	ErrorData struct {
+		Details string `json:"details"`
+	} `json:"error_data"`
+}
+
+// statusError keeps the first receipt error as code and bounded Meta text.
+func statusError(list []providerReceiptError) []byte {
+	if len(list) == 0 || list[0].Code == 0 {
+		return nil
+	}
+	message := list[0].ErrorData.Details
+	if message == "" {
+		message = list[0].Message
+	}
+	raw, _ := json.Marshal(map[string]any{"code": list[0].Code, "title": safeText(list[0].Title), "message": safeText(message)})
+	return raw
 }
 
 func extractStatuses(raw []byte) []deliveryStatus {
@@ -253,10 +366,11 @@ func extractStatuses(raw []byte) []deliveryStatus {
 			Changes []struct {
 				Value struct {
 					Statuses []struct {
-						ID        string `json:"id"`
-						Status    string `json:"status"`
-						Timestamp string `json:"timestamp"`
-						Tracking  string `json:"biz_opaque_callback_data"`
+						ID        string                 `json:"id"`
+						Status    string                 `json:"status"`
+						Timestamp string                 `json:"timestamp"`
+						Tracking  string                 `json:"biz_opaque_callback_data"`
+						Errors    []providerReceiptError `json:"errors"`
 					} `json:"statuses"`
 				} `json:"value"`
 			} `json:"changes"`
@@ -279,7 +393,7 @@ func extractStatuses(raw []byte) []deliveryStatus {
 				if strings.HasPrefix(s.Tracking, "relay-outbox:") {
 					trackingID, _ = strconv.ParseInt(strings.TrimPrefix(s.Tracking, "relay-outbox:"), 10, 64)
 				}
-				out = append(out, deliveryStatus{ID: s.ID, Status: s.Status, Rank: rank, Timestamp: timestamp, TrackingID: trackingID})
+				out = append(out, deliveryStatus{ID: s.ID, Status: s.Status, Rank: rank, Timestamp: timestamp, TrackingID: trackingID, Error: statusError(s.Errors)})
 			}
 		}
 	}
