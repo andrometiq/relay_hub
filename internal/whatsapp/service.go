@@ -723,10 +723,12 @@ func (s *Service) graphSubmission(ctx context.Context, a Account, method, path s
 	if len(encoded) > 65536 {
 		return nil, errors.New("request too large")
 	}
-	endpoint := s.base + "/" + a.Version + "/" + path
-	if len(query) > 0 {
-		endpoint += "?" + query.Encode()
+	// Meta otherwise writes error text in the business account's language.
+	params := url.Values{"locale": {"en_US"}}
+	for key, values := range query {
+		params[key] = values
 	}
+	endpoint := s.base + "/" + a.Version + "/" + path + "?" + params.Encode()
 	var requestBody io.Reader
 	if body != nil {
 		requestBody = bytes.NewReader(encoded)
