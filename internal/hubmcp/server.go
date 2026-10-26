@@ -77,11 +77,11 @@ func telegramFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
 }
 func operationScope(op string) string {
 	switch op {
-	case "messages.flow", "messages.send", "messages.media", "messages.media_upload", "messages.react", "messages.location", "messages.contacts", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
+	case "messages.flow", "messages.send", "messages.media", "messages.media_upload", "messages.read", "messages.react", "messages.location", "messages.contacts", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
 		return "messages:send"
 	case "messages.history", "events.list", "events.latest":
 		return "messages:read"
-	case "capabilities", "account.profile":
+	case "capabilities", "account.profile", "billing.pricing":
 		return "account:read"
 	case "flows.list", "flows.get", "flows.json", "flows.assets", "account.metadata", "templates.list":
 		return "templates:read"
@@ -208,11 +208,12 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if !allowed(ctx, operationScope(input.Operation)) || input.Operation == "account.metadata" && !allowed(ctx, "account:read") {
 				return nil, nil, errors.New("token scope does not permit operation")
 			}
-			upload := input.Operation == "messages.media_upload"
-			if operationScope(input.Operation) == "messages:send" && !upload && input.RequestKey == "" {
+			// Uploads and read receipts send no message, so they run directly.
+			direct := input.Operation == "messages.media_upload" || input.Operation == "messages.read"
+			if operationScope(input.Operation) == "messages:send" && !direct && input.RequestKey == "" {
 				return nil, nil, errors.New("request_key required for sends")
 			}
-			if input.RequestKey != "" && !upload {
+			if input.RequestKey != "" && !direct {
 				if wa.Outbox == nil {
 					return nil, nil, errors.New("durable delivery unavailable")
 				}
