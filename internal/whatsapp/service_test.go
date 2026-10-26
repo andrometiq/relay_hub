@@ -132,6 +132,9 @@ func TestTemplateAuthoringParametersPreserved(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if r.URL.Query().Get("locale") != "en_US" {
+			t.Errorf("provider errors not requested in English: %s", r.URL.RawQuery)
+		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
