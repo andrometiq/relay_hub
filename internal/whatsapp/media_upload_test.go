@@ -84,3 +84,65 @@ func TestPrivateAttachmentUploadAndSend(t *testing.T) {
 		t.Fatal("invalid input submitted")
 	}
 }
+
+func TestMediaUploadReturnsIDWithoutSending(t *testing.T) {
+	uploaded := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v25.0/111/media" {
+			t.Error("unexpected route", r.URL.Path)
+			w.WriteHeader(400)
+			return
+		}
+		uploaded++
+		io.WriteString(w, `{"id":"987654"}`)
+	}))
+	defer server.Close()
+	service, err := NewWithHTTPClient([]Account{testAccount()}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.base = server.URL
+	input := Input{Operation: "messages.media_upload", MediaType: "document", MIMEType: "application/pdf", Filename: "invoice.pdf", ContentBase64: base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\nsynthetic fixture"))}
+	if result, err := service.execute(context.Background(), testAccount(), input, true); err != nil || result["valid"] != true || uploaded != 0 {
+		t.Fatal("validation", result, err, uploaded)
+	}
+	result, err := service.Execute(context.Background(), testAccount(), input)
+	if err != nil || result["id"] != "987654" || uploaded != 1 {
+		t.Fatal("upload", result, err, uploaded)
+	}
+	for _, change := range []func(*Input){func(in *Input) { in.ContentBase64 = "" }, func(in *Input) { in.MediaURL = "https://example.test/a.pdf" }, func(in *Input) { in.MediaType = "image" }, func(in *Input) { in.MIMEType = "text/html" }, func(in *Input) { in.Filename = "../invoice.pdf" }} {
+		bad := input
+		change(&bad)
+		if _, err = service.Execute(context.Background(), testAccount(), bad); err == nil {
+			t.Fatal("invalid upload accepted", bad)
+		}
+	}
+	if uploaded != 1 {
+		t.Fatal("invalid input uploaded")
+	}
+}
+
+func TestBulkAcceptsTextAndReferencedMediaOnly(t *testing.T) {
+	for _, in := range []Input{
+		{Operation: "templates.send"},
+		{Operation: "messages.send"},
+		{Operation: "messages.media", MediaID: "123"},
+		{Operation: "messages.media", MediaURL: "https://example.test/a.jpg"},
+	} {
+		if err := queueable(in, true); err != nil {
+			t.Fatal("bulk refused", in.Operation, err)
+		}
+	}
+	inline := Input{Operation: "messages.media", ContentBase64: "JVBERi0="}
+	if err := queueable(inline, true); err == nil || !strings.Contains(err.Error(), "media_id or media_url") {
+		t.Fatal("bulk accepted inline bytes", err)
+	}
+	if err := queueable(inline, false); err != nil {
+		t.Fatal("conversational inline media refused", err)
+	}
+	for _, operation := range []string{"messages.react", "messages.location", "messages.media_upload"} {
+		if err := queueable(Input{Operation: operation}, true); err == nil {
+			t.Fatal("bulk accepted", operation)
+		}
+	}
+}

@@ -62,7 +62,7 @@ func (o *Outbox) Enqueue(ctx context.Context, a Account, batch []Submission) ([]
 	return rows, err
 }
 
-// EnqueueBulk admits up to 50 template sends at once. A recipient that fails
+// EnqueueBulk admits up to 50 template, text or media sends at once. A recipient that fails
 // validation is returned as rejected without blocking the others; the queue
 // depth after admission lets Core apply backpressure.
 func (o *Outbox) EnqueueBulk(ctx context.Context, a Account, batch []Submission) ([]Delivery, int, error) {
@@ -80,7 +80,7 @@ func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bul
 			return nil, 0, errors.New("unique request keys are required")
 		}
 		seen[item.Key] = true
-		err := queueable(item.Message.Operation, bulk)
+		err := queueable(item.Message, bulk)
 		if err == nil {
 			_, err = o.Service.execute(ctx, a, item.Message, true)
 		}
@@ -152,11 +152,15 @@ func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bul
 	return result, count, nil
 }
 
-func queueable(operation string, bulk bool) error {
-	if bulk && operation != "templates.send" {
-		return errors.New("bulk sends accept approved templates only")
+// Bulk media must reference uploaded or hosted media so queued rows stay small.
+func queueable(in Input, bulk bool) error {
+	if bulk && in.Operation != "templates.send" && in.Operation != "messages.send" && in.Operation != "messages.media" {
+		return errors.New("bulk sends accept templates, text and media only")
 	}
-	switch operation {
+	if bulk && in.ContentBase64 != "" {
+		return errors.New("bulk media requires media_id or media_url; upload attachments with messages.media_upload first")
+	}
+	switch in.Operation {
 	case "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin", "messages.send", "messages.react", "messages.media", "messages.location", "messages.contacts", "messages.flow":
 		return nil
 	}

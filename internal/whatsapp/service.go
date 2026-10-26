@@ -455,6 +455,19 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		body = payload
 	case "templates.media_upload":
 		return s.uploadTemplateSample(ctx, a, in, validateOnly)
+	case "messages.media_upload":
+		raw, mediaType, err := attachmentBytes(in)
+		if err != nil {
+			return nil, err
+		}
+		if validateOnly {
+			return map[string]any{"valid": true}, nil
+		}
+		id, err := s.uploadAttachment(ctx, a, in, raw, mediaType)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"id": id}, nil
 	case "templates.list":
 		if !a.Templates {
 			return nil, errors.New("templates are not enabled for this account")

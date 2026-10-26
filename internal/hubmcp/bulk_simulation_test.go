@@ -254,8 +254,9 @@ func TestWhatsAppBulkCampaignSimulation(t *testing.T) {
 	if code, result := call(readOnly, []map[string]any{recipient(1)}); code != 200 || result != nil {
 		t.Fatal("read-only token queued a bulk send", code)
 	}
-	if code, result := call(token, []map[string]any{{"key": "text-row", "message": map[string]any{"operation": "messages.send", "to": "919800000001", "body": "Hi"}}}); code != 200 || result["deliveries"].([]any)[0].(map[string]any)["error"] != "bulk sends accept approved templates only" {
-		t.Fatal("bulk accepted a free-form text send", result)
+	inline := map[string]any{"operation": "messages.media", "to": "919800000001", "media_type": "document", "mime_type": "application/pdf", "content_base64": "JVBERi0xLjQK"}
+	if code, result := call(token, []map[string]any{{"key": "inline-row", "message": inline}}); code != 200 || !strings.Contains(result["deliveries"].([]any)[0].(map[string]any)["error"].(string), "media_id or media_url") {
+		t.Fatal("bulk accepted inline media bytes", result)
 	}
 	tooMany := make([]map[string]any, 51)
 	for i := range tooMany {
