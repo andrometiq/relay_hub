@@ -13,7 +13,7 @@ services:
     volumes:
       - relay_postgres:/var/lib/postgresql
       - ./docker/postgres/init-channel.sh:/docker-entrypoint-initdb.d/init-channel.sh:ro,Z
-    command: ["postgres", "-c", "shared_buffers=32MB", "-c", "max_connections=20"]
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=100"]
     mem_limit: 256m
     cpus: 1.0
     healthcheck:
