@@ -146,7 +146,7 @@ Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`.
 {"operation":"billing.pricing","start":1767225600,"end":1769904000,"granularity":"MONTHLY","dimensions":["PRICING_CATEGORY","PRICING_TYPE"]}
 ```
 
-The result is `{"data_points":[...]}`. Each data point is returned as Meta sends it, for example with `start`, `end`, `volume`, `cost` and the requested dimension values. The list is empty when Meta has no data for the period.
+The result is `{"data_points":[...],"currency":"INR"}`. `currency` is the WABA currency, because the data points do not include one. It is empty when Meta does not return it. Each data point is returned as Meta sends it, for example with `start`, `end`, `volume`, `cost` and the requested dimension values. The list is empty when Meta has no data for the period.
 
 ## WhatsApp bulk sends
 

@@ -67,11 +67,11 @@ func TestMessagesReadValidationAndNotQueueable(t *testing.T) {
 
 func TestBillingPricingQueryAndDataPoints(t *testing.T) {
 	s := fakeGraph(t, func(r *http.Request) string {
-		want := `pricing_analytics.start(1767225600).end(1769904000).granularity(MONTHLY).dimensions(["PRICING_CATEGORY","COUNTRY"])`
+		want := `currency,pricing_analytics.start(1767225600).end(1769904000).granularity(MONTHLY).dimensions(["PRICING_CATEGORY","COUNTRY"])`
 		if r.Method != "GET" || r.URL.Path != "/v25.0/222" || r.URL.Query().Get("fields") != want {
 			t.Errorf("wrong pricing request: %s %s %s", r.Method, r.URL.Path, r.URL.Query().Get("fields"))
 		}
-		return `{"id":"222","pricing_analytics":{"data":[{"data_points":[{"start":1767225600,"end":1769904000,"volume":12,"cost":1.5,"pricing_category":"MARKETING","country":"IN"}]}]}}`
+		return `{"id":"222","currency":"INR","pricing_analytics":{"data":[{"data_points":[{"start":1767225600,"end":1769904000,"volume":12,"cost":1.5,"pricing_category":"MARKETING","country":"IN"}]}]}}`
 	})
 	result, err := s.Execute(context.Background(), testAccount(), Input{Operation: "billing.pricing", Start: 1767225600, End: 1769904000, Granularity: "MONTHLY", Dimensions: []string{"PRICING_CATEGORY", "COUNTRY"}})
 	if err != nil {
@@ -79,20 +79,20 @@ func TestBillingPricingQueryAndDataPoints(t *testing.T) {
 	}
 	points, _ := result["data_points"].([]any)
 	point, _ := points[0].(map[string]any)
-	if len(points) != 1 || point["volume"] != 12.0 || point["pricing_category"] != "MARKETING" {
+	if len(points) != 1 || point["volume"] != 12.0 || point["pricing_category"] != "MARKETING" || result["currency"] != "INR" {
 		t.Fatal("data points", result)
 	}
 }
 
 func TestBillingPricingWithoutDimensionsAndEmpty(t *testing.T) {
 	s := fakeGraph(t, func(r *http.Request) string {
-		if r.URL.Query().Get("fields") != "pricing_analytics.start(1).end(2).granularity(DAILY)" {
+		if r.URL.Query().Get("fields") != "currency,pricing_analytics.start(1).end(2).granularity(DAILY)" {
 			t.Error("wrong fields", r.URL.Query().Get("fields"))
 		}
 		return `{"id":"222"}`
 	})
 	result, err := s.Execute(context.Background(), testAccount(), Input{Operation: "billing.pricing", Start: 1, End: 2, Granularity: "DAILY"})
-	if points, _ := result["data_points"].([]any); err != nil || points == nil || len(points) != 0 {
+	if points, _ := result["data_points"].([]any); err != nil || points == nil || len(points) != 0 || result["currency"] != "" {
 		t.Fatal("empty pricing", result, err)
 	}
 }
