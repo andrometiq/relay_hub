@@ -163,3 +163,33 @@ func TestTemplateAuthoringParametersPreserved(t *testing.T) {
 		t.Fatal("invalid authoring reached provider")
 	}
 }
+
+func TestTemplateUpdateKeepsNamedParameterFormat(t *testing.T) {
+	a := testAccount()
+	s, _ := New([]Account{a})
+	var edit map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			w.Write([]byte(`{"data":[{"id":"123","name":"named_update"}]}`))
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&edit); err != nil {
+			t.Error(err)
+		}
+		w.Write([]byte(`{"success":true}`))
+	}))
+	defer server.Close()
+	s.base = server.URL
+	input := Input{Operation: "templates.update", ID: "123", Name: "named_update", ParameterFormat: "NAMED", Components: []map[string]any{{"type": "BODY", "text": "Hello {{customer}}, thanks"}}}
+	if _, err := s.Execute(context.Background(), a, input); err != nil {
+		t.Fatal(err)
+	}
+	if edit["parameter_format"] != "named" {
+		t.Fatalf("named parameter format not sent on edit: %v", edit)
+	}
+	input.ParameterFormat = "invalid"
+	if _, err := s.Execute(context.Background(), a, input); err == nil {
+		t.Fatal("invalid parameter format accepted on edit")
+	}
+}

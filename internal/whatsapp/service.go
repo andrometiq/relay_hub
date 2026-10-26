@@ -469,9 +469,8 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 			query.Set("after", in.After)
 		}
 	case "templates.create":
-		in.ParameterFormat = strings.ToLower(in.ParameterFormat)
-		if in.ParameterFormat != "" && in.ParameterFormat != "positional" && in.ParameterFormat != "named" {
-			return nil, errors.New("invalid template parameter format")
+		if e := normalizeParameterFormat(&in); e != nil {
+			return nil, e
 		}
 		if in.MessageSendTTLSeconds < 0 || in.MessageSendTTLSeconds > 2147483647 {
 			return nil, errors.New("invalid template validity")
@@ -513,8 +512,15 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		if !found {
 			return nil, errors.New("template does not belong to this account")
 		}
+		if e := normalizeParameterFormat(&in); e != nil {
+			return nil, e
+		}
 		path = in.ID
 		body = map[string]any{"components": in.Components}
+		if in.ParameterFormat != "" {
+			// Without it Meta reads named variables as positional and refuses the edit.
+			body.(map[string]any)["parameter_format"] = in.ParameterFormat
+		}
 		if in.MessageSendTTLSeconds < 0 || in.MessageSendTTLSeconds > 2147483647 {
 			return nil, errors.New("invalid template validity")
 		}
@@ -859,6 +865,14 @@ func (e *preSubmissionError) Unwrap() error { return e.error }
 type deferredError struct{ error }
 
 func (e *deferredError) Unwrap() error { return e.error }
+
+func normalizeParameterFormat(in *Input) error {
+	in.ParameterFormat = strings.ToLower(in.ParameterFormat)
+	if in.ParameterFormat != "" && in.ParameterFormat != "positional" && in.ParameterFormat != "named" {
+		return errors.New("invalid template parameter format")
+	}
+	return nil
+}
 
 func (e *ProviderError) Error() string {
 	return "provider rejected operation" + e.Detail() + "; inspect delivery status before retry"
