@@ -49,9 +49,9 @@ WhatsApp operation scopes:
 
 | Operations | Scope |
 | --- | --- |
-| `capabilities`, `account.profile` | `account:read` |
+| `capabilities`, `account.profile`, `billing.pricing` | `account:read` |
 | `messages.history`, `events.list`, `events.latest` | `messages:read` |
-| `messages.send`, `messages.media`, `messages.media_upload`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send`, `groups.send`, `groups.media`, `groups.template`, `groups.pin` | `messages:send` |
+| `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send`, `groups.send`, `groups.media`, `groups.template`, `groups.pin` | `messages:send` |
 | `templates.list`; template mutations | `templates:read`; `templates:write` |
 | `groups.list`, `groups.info`, `groups.requests.list`, `groups.invite.get`; group administration | `groups:read`; `groups:write` |
 | `calls.permission.get`; call mutations | `calls:read`; `calls:write` |
@@ -108,6 +108,12 @@ The result is `{"id":"123456789012345"}`. Use the ID as `media_id` in `messages.
 
 Clear a reaction by sending the same target with **`"emoji":""`**. A reaction is an update to a message, not a new conversational text reply.
 
+`messages.read` marks one received message as read, so the customer sees blue ticks. Set `typing` to `true` to also show a typing indicator to the customer. `message_id` is the inbound provider message ID (`wamid`). Call it through `whatsapp.execute` without `request_key`. The Hub sends it directly: it is not queued, retried or stored, and it does not use send throughput. The result is the provider result, for example `{"success":true}`:
+
+```json
+{"operation":"messages.read","message_id":"wamid.SYNTHETIC_INBOUND","typing":true}
+```
+
 ```json
 {"operation":"messages.location","to":"15555550123","location":{"latitude":0,"longitude":0,"name":"Collection point","address":"Example Road"}}
 ```
@@ -131,6 +137,16 @@ Group message operations use **`to` for the group ID**, not a participant's phon
 The durable outbox also accepts `groups.media`, `groups.template` and `groups.pin`. Ownership and capability checks apply before provider mutation. Group reactions, locations and contact cards are rejected locally; they never fall back to a participant DM. Group invitations use `groups.invite.get` and `groups.invite.reset`, not manual participant addition. See the [group operation matrix](group-simulation-coverage.md#supported-group-operations).
 
 Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`. Changing the group avatar is separate from sending a sticker or image message.
+
+## WhatsApp pricing
+
+`billing.pricing` reads the account's Meta pricing analytics. It needs `account:read`. `start` and `end` are UNIX seconds, and `end` must be after `start`. `granularity` is `DAILY` or `MONTHLY`. `dimensions` is optional and accepts distinct `PRICING_CATEGORY`, `PRICING_TYPE`, `COUNTRY` and `PHONE` values:
+
+```json
+{"operation":"billing.pricing","start":1767225600,"end":1769904000,"granularity":"MONTHLY","dimensions":["PRICING_CATEGORY","PRICING_TYPE"]}
+```
+
+The result is `{"data_points":[...]}`. Each data point is returned as Meta sends it, for example with `start`, `end`, `volume`, `cost` and the requested dimension values. The list is empty when Meta has no data for the period.
 
 ## WhatsApp bulk sends
 

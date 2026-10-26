@@ -150,6 +150,12 @@ type Input struct {
 	MIMEType              string   `json:"mime_type,omitempty"`
 	Caption               string   `json:"caption,omitempty"`
 	Filename              string   `json:"filename,omitempty"`
+	MessageID             string   `json:"message_id,omitempty"`
+	Typing                bool     `json:"typing,omitempty"`
+	Start                 int64    `json:"start,omitempty"`
+	End                   int64    `json:"end,omitempty"`
+	Granularity           string   `json:"granularity,omitempty"`
+	Dimensions            []string `json:"dimensions,omitempty"`
 
 	Operation  string           `json:"operation"`
 	ID         string           `json:"id,omitempty"`
@@ -410,6 +416,18 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 			return map[string]any{"status": "not_synced"}, nil
 		}
 		return s.Metadata.Read(ctx, a.ID)
+	case "billing.pricing":
+		return s.pricing(ctx, a, in, validateOnly)
+	case "messages.read":
+		if !callIdentifier.MatchString(in.MessageID) {
+			return nil, errors.New("valid message ID required")
+		}
+		payload := map[string]any{"messaging_product": "whatsapp", "status": "read", "message_id": in.MessageID}
+		if in.Typing {
+			payload["typing_indicator"] = map[string]string{"type": "text"}
+		}
+		path = a.PhoneID + "/messages"
+		body = payload
 	case "account.profile":
 		method = "GET"
 		path = a.PhoneID
@@ -708,7 +726,8 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 	default:
 		return nil, errors.New("unsupported WhatsApp operation")
 	}
-	if !validateOnly && in.tracking == "" && path == a.PhoneID+"/messages" && s.Outbox != nil {
+	// A read receipt sends no message, so it does not use send throughput.
+	if !validateOnly && in.tracking == "" && path == a.PhoneID+"/messages" && in.Operation != "messages.read" && s.Outbox != nil {
 		allowed, err := s.Outbox.Permit(ctx, a)
 		if err != nil {
 			return nil, errors.New("rate limiter unavailable; not submitted")
