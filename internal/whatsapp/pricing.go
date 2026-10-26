@@ -12,7 +12,8 @@ import (
 var pricingDimensions = map[string]bool{"PRICING_CATEGORY": true, "PRICING_TYPE": true, "COUNTRY": true, "PHONE": true}
 
 // pricing reads Meta's per-message pricing analytics for the account's WABA
-// and returns the provider data points unchanged.
+// and returns the provider data points unchanged, with the WABA currency
+// because the data points carry none.
 func (s *Service) pricing(ctx context.Context, a Account, in Input, validateOnly bool) (map[string]any, error) {
 	field, err := pricingField(in)
 	if err != nil {
@@ -21,7 +22,7 @@ func (s *Service) pricing(ctx context.Context, a Account, in Input, validateOnly
 	if validateOnly {
 		return nil, nil
 	}
-	result, err := s.graph(ctx, a, http.MethodGet, a.WABAID, url.Values{"fields": {field}}, nil)
+	result, err := s.graph(ctx, a, http.MethodGet, a.WABAID, url.Values{"fields": {"currency," + field}}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +34,8 @@ func (s *Service) pricing(ctx context.Context, a Account, in Input, validateOnly
 		values, _ := item["data_points"].([]any)
 		points = append(points, values...)
 	}
-	return map[string]any{"data_points": points}, nil
+	currency, _ := result["currency"].(string)
+	return map[string]any{"data_points": points, "currency": currency}, nil
 }
 
 func pricingField(in Input) (string, error) {
