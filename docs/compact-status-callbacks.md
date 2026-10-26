@@ -1,6 +1,6 @@
 # Compact delivery-status callbacks
 
-WhatsApp delivery receipts use a separate callback lane from incoming messages. The status lane wakes once per second; realtime messages retain the 250 ms lane. Both use the bounded account scheduler and per-account/lane advisory lock. Receipts that only concern `whatsapp.bulk` messages are journaled in the `bulk` lane instead and reach Core as coalesced bulk updates; see [bulk template sends](api-reference.md#whatsapp-bulk-template-sends).
+WhatsApp delivery receipts use a separate callback lane from incoming messages. The status lane wakes once per second; realtime messages retain the 250 ms lane. Both use the bounded account scheduler and per-account/lane advisory lock. Receipts that only concern `whatsapp.bulk` messages are journaled in the `bulk` lane instead and reach Core as coalesced bulk updates; see [bulk sends](api-reference.md#whatsapp-bulk-sends).
 
 The Hub posts to `/api/method/relay_core.inbound.receive_statuses` with the existing site API credential and timestamped HMAC. The JSON envelope contains `account` and `statuses`. Each status contains `event_id`, zero-based raw `position`, `message_id`, `recipient`, `status` (`sent`, `delivered`, `read`, `failed`) and integer Unix `timestamp`. Batches contain at most 500 receipts and a 512 KiB status-array budget. The source query is also byte-bounded; large source envelopes may yield smaller batches.
 

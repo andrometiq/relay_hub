@@ -35,7 +35,7 @@ Its structured result contains `{"status":"ready","service":"relay_hub"}` when d
 | --- | --- | --- |
 | `health.get` | `{}` | Valid API token |
 | `whatsapp.send` | `message: {key, message: {...}}` | `messages:send` |
-| `whatsapp.bulk` | `messages: [{key, message: {operation: "templates.send", ...}}]`, 1–50 template sends | `messages:send` |
+| `whatsapp.bulk` | `messages: [{key, message: {operation: "templates.send", ...}}]`, 1–50 template, text or media sends | `messages:send` |
 | `whatsapp.deliveries` | Optional `after`; optional `cancel_id` for cancellation | `deliveries:read` or `deliveries:cancel` |
 | `whatsapp.execute` | `operation` and typed operation fields | Operation scope below |
 | `whatsapp.media` | `media_id` of a received sticker | `messages:read` |
@@ -51,7 +51,7 @@ WhatsApp operation scopes:
 | --- | --- |
 | `capabilities`, `account.profile` | `account:read` |
 | `messages.history`, `events.list`, `events.latest` | `messages:read` |
-| `messages.send`, `messages.media`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send`, `groups.send`, `groups.media`, `groups.template`, `groups.pin` | `messages:send` |
+| `messages.send`, `messages.media`, `messages.media_upload`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send`, `groups.send`, `groups.media`, `groups.template`, `groups.pin` | `messages:send` |
 | `templates.list`; template mutations | `templates:read`; `templates:write` |
 | `groups.list`, `groups.info`, `groups.requests.list`, `groups.invite.get`; group administration | `groups:read`; `groups:write` |
 | `calls.permission.get`; call mutations | `calls:read`; `calls:write` |
@@ -94,6 +94,14 @@ Other direct-message payloads, placed in the inner `message` object or passed to
 
 Use exactly one of `media_id` or `media_url`. Media types are `image`, `video`, `audio`, `document` and `sticker`; a sticker cannot carry a caption or filename. An outbound `media_url` is sent to the provider, not fetched by the Hub's inbound sticker proxy.
 
+`messages.media_upload` uploads one private attachment to the account's phone number and returns its media ID. It sends no message. Call it through `whatsapp.execute` without `request_key`. It uses the same validation and 4 MiB limit as inline `content_base64` on `messages.media`:
+
+```json
+{"operation":"messages.media_upload","media_type":"document","mime_type":"application/pdf","filename":"invoice.pdf","content_base64":"JVBERi0xLjQK..."}
+```
+
+The result is `{"id":"123456789012345"}`. Use the ID as `media_id` in `messages.media`, for example in bulk sends.
+
 ```json
 {"operation":"messages.react","to":"15555550123","reply_to":"wamid.SYNTHETIC_ORIGINAL","emoji":"👍"}
 ```
@@ -124,9 +132,9 @@ The durable outbox also accepts `groups.media`, `groups.template` and `groups.pi
 
 Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`. Changing the group avatar is separate from sending a sticker or image message.
 
-## WhatsApp bulk template sends
+## WhatsApp bulk sends
 
-`whatsapp.bulk` queues 1–50 `templates.send` messages in one call. It is for campaigns: other operations are refused. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full account queue (10,000 queued or submitting intents) refuses the whole call, and so do 5,000 queued or submitting bulk intents: half of the account queue stays free for conversational sends.
+`whatsapp.bulk` queues 1–50 `templates.send`, `messages.send` or `messages.media` messages in one call. It is for campaigns: other operations are refused. Bulk `messages.media` must use `media_id` or `media_url`; inline `content_base64` is refused, so upload the attachment once with `messages.media_upload`. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full account queue (10,000 queued or submitting intents) refuses the whole call, and so do 5,000 queued or submitting bulk intents: half of the account queue stays free for conversational sends.
 
 ```json
 {"deliveries":[{"id":"812","key":"winter-launch-1","state":"queued","attempts":0,"next_attempt":"0001-01-01T00:00:00Z"},{"id":"","key":"winter-launch-2","state":"rejected","error":"enabled template, recipient, name and language are required"}],"queued":731,"limit":5000,"messages_per_second":80}

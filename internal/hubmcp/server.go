@@ -77,7 +77,7 @@ func telegramFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
 }
 func operationScope(op string) string {
 	switch op {
-	case "messages.flow", "messages.send", "messages.media", "messages.react", "messages.location", "messages.contacts", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
+	case "messages.flow", "messages.send", "messages.media", "messages.media_upload", "messages.react", "messages.location", "messages.contacts", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
 		return "messages:send"
 	case "messages.history", "events.list", "events.latest":
 		return "messages:read"
@@ -208,10 +208,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if !allowed(ctx, operationScope(input.Operation)) || input.Operation == "account.metadata" && !allowed(ctx, "account:read") {
 				return nil, nil, errors.New("token scope does not permit operation")
 			}
-			if operationScope(input.Operation) == "messages:send" && input.RequestKey == "" {
+			upload := input.Operation == "messages.media_upload"
+			if operationScope(input.Operation) == "messages:send" && !upload && input.RequestKey == "" {
 				return nil, nil, errors.New("request_key required for sends")
 			}
-			if input.RequestKey != "" {
+			if input.RequestKey != "" && !upload {
 				if wa.Outbox == nil {
 					return nil, nil, errors.New("durable delivery unavailable")
 				}
@@ -250,7 +251,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			return nil, map[string]any{"deliveries": rows}, nil
 		})
 
-		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.bulk", Description: "Durably queue 1-50 template sends with stable request keys. Invalid recipients are rejected individually; queued reports the account queue depth for backpressure. Results arrive in coalesced bulk update callbacks."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.bulk", Description: "Durably queue 1-50 template, text or media sends with stable request keys. Bulk media uses media_id or media_url. Invalid recipients are rejected individually; queued reports the account queue depth for backpressure. Results arrive in coalesced bulk update callbacks."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			Messages []whatsapp.Submission `json:"messages"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)

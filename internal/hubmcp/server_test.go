@@ -198,7 +198,7 @@ func TestProvisionedTokensEnforceAccountAndScopes(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://a.example") || strings.Contains(w.Body.String(), "https://b.example") || strings.Contains(w.Body.String(), "provider-secret") {
 		t.Fatal("account isolation", w.Body.String())
 	}
-	for _, operation := range []string{"templates.create", "templates.media_upload"} {
+	for _, operation := range []string{"templates.create", "templates.media_upload", "messages.media_upload"} {
 		w = request("test-token", operation)
 		if !strings.Contains(w.Body.String(), "scope does not permit") {
 			t.Fatal("scope bypass", operation, w.Body.String())
