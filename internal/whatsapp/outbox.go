@@ -338,6 +338,9 @@ func (o *Outbox) send(ctx context.Context) (bool, error) {
 	defer tx.Rollback(context.Background())
 	// Serialize only the short claim, so concurrent snapshots cannot claim two
 	// queued rows in the same conversation before either update is visible.
+	// The earlier-row check is a scalar subquery, not NOT EXISTS: with stale
+	// statistics Postgres planned NOT EXISTS as an anti join that scanned every
+	// pending row per candidate, which stalled sends at campaign start and resume.
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(726351021)"); err != nil {
 		return false, err
 	}
@@ -345,8 +348,8 @@ func (o *Outbox) send(ctx context.Context) (bool, error) {
  WHERE id=(SELECT o.id FROM relay_outbox o LEFT JOIN relay_account_send_rate r ON r.account=o.account
  LEFT JOIN relay_outbox_account_claim turn ON turn.account=o.account
  WHERE o.state='queued' AND o.next_attempt<=now() AND (r.next_at IS NULL OR r.next_at<=clock_timestamp()+$1::interval)
- AND NOT EXISTS(SELECT 1 FROM relay_outbox earlier WHERE earlier.account=o.account
- AND earlier.payload->>'to'=o.payload->>'to' AND earlier.id<o.id AND earlier.state IN ('queued','submitting','uncertain'))
+ AND (SELECT 1 FROM relay_outbox earlier WHERE earlier.account=o.account
+ AND earlier.payload->>'to'=o.payload->>'to' AND earlier.id<o.id AND earlier.state IN ('queued','submitting','uncertain') LIMIT 1) IS NULL
  ORDER BY coalesce(turn.claimed_at,'epoch'::timestamptz),o.bulk,o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1)
  RETURNING id,account,payload,attempts`, slotAhead.String()).Scan(&id, &account, &raw, &attempts)
 	var a Account
