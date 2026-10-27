@@ -4,8 +4,14 @@ Run the launcher from this checkout. It uses an operation lock to prevent overla
 
 ## Commands
 
+For a server, use the systemd service from [deployment](deployment.md). When that unit is installed, `restart`, `status`, `stop` and `logs` act on the service. Without it, they act on a process that this checkout started.
+
 | Command | Result |
 | --- | --- |
+| `./relay setup` | Configure `.env`, build, migrate and start the Hub as a systemd user service. See [deployment](deployment.md). |
+| `./relay update` | `git pull --ff-only`, build, stop, migrate, start and check readiness. Needs the service from setup. |
+| `./relay create-admin` | Ask for the first administrator's username and password and create the user. |
+| `./relay logs` | Follow the service log, or `.runtime/hub.log` without the service. |
 | `./relay install` | Check prerequisites, load/create local configuration, start the selected database, fetch dependencies, apply migrations and build the UI. Existing `.env` values are preserved. |
 | `./relay build-ui` | Run locked npm installation and the production frontend build. Restart to activate the new UI snapshot. |
 | `./relay migrate` | Start/check the configured database, compile the runner and apply pending numbered SQL migrations. |
@@ -19,7 +25,7 @@ Run the launcher from this checkout. It uses an operation lock to prevent overla
 
 The Makefile aliases `install`, `build-ui`, `restart`, `migrate`, `doctor`, `status`, `stop` and `test`. There is no `./relay serve` command; `serve` is the compiled Go binary's entry point.
 
-Restart has a brief interruption. It does not perform a zero-downtime deployment, apply pending migrations, install a boot service or scale host replicas. Database migrations must finish before restarting code that requires them.
+Restart has a brief interruption. It does not perform a zero-downtime deployment, apply pending migrations or scale host replicas. Database migrations must finish before restarting code that requires them.
 
 ## Schema changes and backups
 
@@ -27,7 +33,7 @@ Add a new sequential SQL file under [migrations](../internal/database/migrations
 
 Use additive migrations and a reviewed data transition for incompatible changes. There is no reset/down command or automatic database major upgrade. Readiness validates the expected migration ledger, not every database catalog object.
 
-Back up the database and its encryption key together under separate access controls, and verify restoration in an isolated environment. The Hub does not automatically delete event journals or old release snapshots. Use the offline credential-key rotation workflow below. Replacing the key without re-encrypting readable rows is not a rotation.
+Back up the database and its encryption key together under separate access controls, and verify restoration in an isolated environment. The Hub does not automatically delete event journals. The service launcher keeps the three newest releases. Use the offline credential-key rotation workflow below. Replacing the key without re-encrypting readable rows is not a rotation.
 
 ## Logs and diagnostics
 

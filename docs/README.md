@@ -6,6 +6,7 @@ Use the [quickstart](quickstart.md) for a new installation. The guides and refer
 
 - [Quickstart](quickstart.md): prerequisites, PostgreSQL, configuration, first login and expected readiness output.
 - [Authentication](authentication.md): users, sessions, account grants and API tokens.
+- [Deployment](deployment.md): server setup, updates, restarts, logs and `.env` backup.
 - [Operations](operations.md): UI builds, migrations, restarts, logs and troubleshooting.
 - [Testing](testing.md): bounded local checks and integrated simulations.
 - [Review access](review-access.md): the environment-specific review gateway and preview harness.
