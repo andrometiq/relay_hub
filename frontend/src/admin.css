@@ -31,6 +31,13 @@ button.admin-row:hover{background:var(--surface-gray-1)}
 .cols-wa{grid-template-columns:minmax(170px,1fr) minmax(160px,1fr) minmax(190px,1.1fr) minmax(160px,1fr) 110px 20px}
 .cols-tg{grid-template-columns:minmax(170px,1fr) minmax(170px,1fr) minmax(170px,1fr) minmax(160px,1fr) 110px 20px}
 .cols-em{grid-template-columns:minmax(200px,1.2fr) minmax(170px,1fr) minmax(170px,1fr) minmax(160px,1fr) 110px 20px}
+.cols-fw{grid-template-columns:minmax(150px,1fr) minmax(180px,1.4fr) minmax(130px,1fr) 50px minmax(140px,1fr)}
+.forward-targets{display:flex;flex-direction:column;gap:12px}
+.forward-list{display:flex;flex-direction:column;gap:8px}
+.forward-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;border:1px solid var(--outline-gray-2);border-radius:8px}
+.forward-list code{font-size:12px;overflow-wrap:anywhere;min-width:0}
+.forward-add{display:flex;gap:8px;align-items:center}
+.forward-add>:first-child{flex:1;min-width:0}
 .cols-sites{grid-template-columns:minmax(200px,1.1fr) minmax(220px,1.3fr) minmax(220px,1.3fr) 90px 100px 20px}
 .cols-linked{grid-template-columns:30px minmax(170px,1.1fr) minmax(170px,1fr) minmax(150px,1fr) 110px 90px}
 .admin-pill{display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:0 9px;border-radius:6px;background:var(--surface-gray-2);color:var(--ink-gray-8);font-size:12px;font-weight:500}
