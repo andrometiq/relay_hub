@@ -40,7 +40,7 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue := func(account, label string, scopes ...string) string {
+	issue := func(account, label string) string {
 		if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES($1,'https://fixture.invalid') ON CONFLICT DO NOTHING`, account); err != nil {
 			t.Fatal(err)
 		}
@@ -48,15 +48,15 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 		if e := store.Grant(ctx, admin, admin.ID, account, true); e != nil {
 			t.Fatal(e)
 		}
-		token, e := store.Issue(ctx, admin, label, account, scopes, 1)
+		token, e := store.Issue(ctx, admin, label, account, 1)
 		if e != nil {
 			t.Fatal(e)
 		}
 		return token
 	}
-	send := issue("types-a", "send", "messages:send")
-	read := issue("types-a", "read", "messages:read")
-	other := issue("types-b", "other", "messages:send", "messages:read")
+	send := issue("types-a", "send")
+	read := issue("types-a", "read")
+	other := issue("types-b", "other")
 	// A bounded binary fixture tests exact transport, not browser image decoding.
 	webp := make([]byte, 20)
 	copy(webp, "RIFF")
@@ -196,7 +196,6 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 			args["chat_id"] = -1001
 			args["message_thread_id"] = 8
 			args["reply_to"] = 9
-			call(read, "telegram.message", args, true)
 			call(send, "telegram.message", args, false)
 		}
 		for _, reactions := range []any{[]map[string]any{{"type": "emoji", "emoji": "👍"}}, []map[string]any{}} {
@@ -222,7 +221,6 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 		} {
 			args["to"] = "919999999999"
 			args["reply_to"] = "wamid.original"
-			call(read, "whatsapp.execute", args, true)
 			call(send, "whatsapp.execute", args, true)
 			args["request_key"] = fmt.Sprintf("typed-%d", index)
 			call(send, "whatsapp.execute", args, false)
@@ -244,7 +242,6 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 			mu.Lock()
 			before := len(wire)
 			mu.Unlock()
-			call(send, tc.tool, args, true)
 			call(other, tc.tool, args, true)
 			call(read, tc.tool, map[string]any{tc.key: "unknown"}, true)
 			mu.Lock()

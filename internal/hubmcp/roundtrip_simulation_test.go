@@ -112,7 +112,7 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue := func(account, label string, scopes []string) string {
+	issue := func(account, label string) string {
 		if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES($1,'https://fixture.invalid') ON CONFLICT DO NOTHING`, account); err != nil {
 			t.Fatal(err)
 		}
@@ -120,16 +120,14 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 		if e := store.Grant(ctx, admin, admin.ID, account, true); e != nil {
 			t.Fatal(e)
 		}
-		token, e := store.Issue(ctx, admin, label, account, scopes, 1)
+		token, e := store.Issue(ctx, admin, label, account, 1)
 		if e != nil {
 			t.Fatal(e)
 		}
 		return token
 	}
-	scopes := []string{"messages:send", "messages:read", "deliveries:read", "deliveries:cancel"}
-	tokenA := issue("sim-a", "core-a", scopes)
-	tokenB := issue("sim-b", "core-b", scopes)
-	readToken := issue("sim-a", "read-only", []string{"messages:read"})
+	tokenA := issue("sim-a", "core-a")
+	tokenB := issue("sim-b", "core-b")
 
 	type callbackBatch struct {
 		Account  string                   `json:"account"`
@@ -346,7 +344,6 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	args := map[string]any{"messages": batch}
 	call("invalid-token", "whatsapp.bulk", args, true)
 	call(session, "whatsapp.bulk", args, true)
-	call(readToken, "whatsapp.bulk", args, true)
 	first := call(tokenA, "whatsapp.bulk", args, false)
 	replay := call(tokenA, "whatsapp.bulk", args, false)
 	if len(first) != 3 || len(replay) != 3 {

@@ -177,7 +177,7 @@ func (s *simulation) siteToken(ctx context.Context, site string) (string, error)
 			return "", errors.New("token rotation failed")
 		}
 	}
-	token, err := authStore.Issue(ctx, admin, "simulation", site, []string{"account:read", "messages:send", "messages:read", "deliveries:read", "deliveries:cancel", "templates:read", "templates:write"}, 1)
+	token, err := authStore.Issue(ctx, admin, "simulation", site, 1)
 	if err != nil {
 		return "", errors.New("token issue failed")
 	}

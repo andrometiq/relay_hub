@@ -31,7 +31,7 @@ func TestSelfPasswordRotationTokenChoice(t *testing.T) {
 	if err = s.Grant(ctx, user, user.ID, "test-account", true); err != nil {
 		t.Fatal(err)
 	}
-	token, err := s.Issue(ctx, user, "integration", "test-account", []string{"messages:send"}, 0)
+	token, err := s.Issue(ctx, user, "integration", "test-account", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestAdminPasswordResetCannotPreserveTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := s.Issue(ctx, member, "integration", "test-account", []string{"messages:send"}, 0)
+	token, err := s.Issue(ctx, member, "integration", "test-account", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

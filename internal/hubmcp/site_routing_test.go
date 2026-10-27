@@ -77,7 +77,7 @@ func TestSendsNameTheChannelOfTheSite(t *testing.T) {
 		"Telegram/bot-a1": {Site: "site-a"}, "Telegram/bot-a2": {Site: "site-a"}, "Telegram/bot-b": {Site: "site-b"}}}
 	handler := func(site string) http.Handler {
 		h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, wa, func(context.Context, string) (auth.Principal, error) {
-			return auth.Principal{UserID: 1, Site: site, Scopes: []string{"messages:send"}}, nil
+			return auth.Principal{UserID: 1, Site: site}, nil
 		}, registry)
 		if err != nil {
 			t.Fatal(err)
@@ -145,7 +145,7 @@ func TestChannelsListShowsOnlyTheSiteChannels(t *testing.T) {
 		}
 	}
 	h, err := NewAuthenticatedChannels(db.Ping, nil, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Site: "site-a", Scopes: []string{"account:read"}}, nil
+		return auth.Principal{Site: "site-a"}, nil
 	}, nil, channels.Store{DB: db})
 	if err != nil {
 		t.Fatal(err)

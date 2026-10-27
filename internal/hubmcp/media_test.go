@@ -60,13 +60,13 @@ func TestAttachmentHTTPContract(t *testing.T) {
 			}
 			service.Events = attachmentStore{}
 			handler, err := NewAuthenticated(func(context.Context) error { return nil }, service, func(_ context.Context, token string) (auth.Principal, error) {
-				scopes := []string{"messages:read"}
-				if token == "no-read" {
-					scopes = []string{"account:read"}
-				} else if token != "reader" {
-					return auth.Principal{}, auth.ErrDenied
+				switch token {
+				case "reader":
+					return auth.Principal{Site: "site-a"}, nil
+				case "other-site":
+					return auth.Principal{Site: "site-b"}, nil
 				}
-				return auth.Principal{Site: "site-a", Scopes: scopes}, nil
+				return auth.Principal{}, auth.ErrDenied
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -122,7 +122,7 @@ func TestAttachmentHTTPContract(t *testing.T) {
 					}
 				}
 			}
-			request("no-read", "whatsapp.attachment", "123", 200, "scope")
+			request("other-site", "whatsapp.attachment", "123", 200, "account")
 			request("reader", "whatsapp.attachment", "999", 200, "ownership")
 			request("reader", "whatsapp.attachment", "../123", 200, "input")
 			request("reader", "whatsapp.media", "123", 200, "ownership")

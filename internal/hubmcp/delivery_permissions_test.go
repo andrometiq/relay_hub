@@ -13,12 +13,11 @@ import (
 	"github.com/andrometiq/relay_hub/internal/channels"
 )
 
-func TestChannelDeliveryScopesAndResolutionEvidence(t *testing.T) {
+func TestChannelDeliveryResolutionEvidenceAndSiteBinding(t *testing.T) {
 	db, _ := simulationDatabase(t, t.Context())
-	var scopes []string
 	account := "local"
 	h, err := NewAuthenticatedChannels(db.Ping, nil, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Site: account, Scopes: scopes}, nil
+		return auth.Principal{Site: account}, nil
 	}, &channels.Registry{}, channels.Store{DB: db})
 	if err != nil {
 		t.Fatal(err)
@@ -51,18 +50,6 @@ func TestChannelDeliveryScopesAndResolutionEvidence(t *testing.T) {
 		}
 		return w.Body.String()
 	}
-	for _, allowed := range [][]string{{"messages:read", "messages:send"}, {"messages:read", "deliveries:read"}} {
-		scopes = allowed
-		denial := "deliveries:read and messages:read required"
-		if len(allowed) > 1 && allowed[1] == "deliveries:read" {
-			denial = "deliveries:cancel required"
-		}
-		call("channels.deliveries", map[string]any{"cancel_id": 1}, denial)
-		call("channels.resolve", map[string]any{"id": 1, "outcome": "rejected", "note": "Verified rejection"}, "deliveries:read and deliveries:cancel required")
-	}
-	scopes = []string{"messages:read", "messages:send"}
-	call("channels.deliveries", map[string]any{}, "deliveries:read")
-	scopes = []string{"deliveries:read", "deliveries:cancel"}
 	for _, operation := range []string{"telegram.message", "email.send"} {
 		payload := `{"operation":"text","chat_id":-123,"text":"test"}`
 		provider := "42"
@@ -102,17 +89,9 @@ func TestChannelDeliveryScopesAndResolutionEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range []map[string]any{{}, {"request_key": "telegram-message"}} {
-		for _, tokenScopes := range [][]string{{"deliveries:read"}, {"deliveries:read", "deliveries:cancel"}} {
-			scopes = tokenScopes
-			body := call("channels.deliveries", args, "messages:read required")
-			if strings.Contains(body, privateText) || strings.Contains(body, privateReply) {
-				t.Fatal("delivery-only token exposed message content")
-			}
-		}
-		scopes = []string{"deliveries:read", "messages:read"}
 		body := call("channels.deliveries", args, "")
 		if !strings.Contains(body, privateText) || !strings.Contains(body, privateReply) {
-			t.Fatal("message reader did not receive full provider result")
+			t.Fatal("site key did not receive full provider result")
 		}
 		account = "other"
 		body = call("channels.deliveries", args, "")

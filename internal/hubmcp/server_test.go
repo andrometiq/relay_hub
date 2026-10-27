@@ -168,7 +168,7 @@ func TestOutboxToolsRequireAccountCredential(t *testing.T) {
 	}
 }
 
-func TestProvisionedTokensEnforceAccountAndScopes(t *testing.T) {
+func TestProvisionedTokensAreBoundToOneSite(t *testing.T) {
 	accounts := []whatsapp.Account{{ID: "site-a", Site: "https://a.example", AccessToken: "provider-secret", Version: "v25.0", PhoneID: "111", WABAID: "222", Templates: true}, {ID: "site-b", Site: "https://b.example", AccessToken: "other-secret", Version: "v25.0", PhoneID: "333", WABAID: "444"}}
 	wa, e := whatsapp.New(accounts)
 	if e != nil {
@@ -176,16 +176,25 @@ func TestProvisionedTokensEnforceAccountAndScopes(t *testing.T) {
 	}
 	revoked := false
 	h, e := NewAuthenticated(func(context.Context) error { return nil }, wa, func(ctx context.Context, token string) (auth.Principal, error) {
-		if token != "test-token" || revoked {
+		switch {
+		case revoked:
 			return auth.Principal{}, auth.ErrDenied
+		case token == "test-token":
+			return auth.Principal{UserID: 1, Site: "site-a"}, nil
+		case token == "token-b":
+			return auth.Principal{UserID: 1, Site: "site-b"}, nil
 		}
-		return auth.Principal{UserID: 1, Site: "site-a", Scopes: []string{"account:read"}}, nil
+		return auth.Principal{}, auth.ErrDenied
 	})
 	if e != nil {
 		t.Fatal(e)
 	}
-	request := func(token, op string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest("POST", "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whatsapp.execute","arguments":{"operation":"`+op+`"}}}`))
+	request := func(token, op string, channel ...string) *httptest.ResponseRecorder {
+		arguments := `{"operation":"` + op + `"}`
+		if len(channel) > 0 {
+			arguments = `{"operation":"` + op + `","channel":"` + channel[0] + `"}`
+		}
+		r := httptest.NewRequest("POST", "http://localhost/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whatsapp.execute","arguments":`+arguments+`}}`))
 		r.Header.Set("Authorization", "Bearer "+token)
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Accept", "application/json, text/event-stream")
@@ -198,10 +207,15 @@ func TestProvisionedTokensEnforceAccountAndScopes(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://a.example") || strings.Contains(w.Body.String(), "https://b.example") || strings.Contains(w.Body.String(), "provider-secret") {
 		t.Fatal("account isolation", w.Body.String())
 	}
-	for _, operation := range []string{"templates.create", "templates.media_upload", "messages.media_upload"} {
-		w = request("test-token", operation)
-		if !strings.Contains(w.Body.String(), "scope does not permit") {
-			t.Fatal("scope bypass", operation, w.Body.String())
+	w = request("token-b", "capabilities")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "https://b.example") || strings.Contains(w.Body.String(), "https://a.example") {
+		t.Fatal("site B key did not reach only site B", w.Body.String())
+	}
+	// A site key may call any operation of its own site, never one of another site.
+	for _, operation := range []string{"capabilities", "templates.create", "templates.media_upload", "messages.media_upload", "billing.pricing"} {
+		w = request("test-token", operation, "site-b")
+		if !strings.Contains(w.Body.String(), "channel is not available to this site") {
+			t.Fatal("site A key reached site B", operation, w.Body.String())
 		}
 	}
 	if request(strings.Repeat("a", 64), "capabilities").Code != 401 {

@@ -15,7 +15,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 )
 
-func readPricingHandler(t *testing.T, scopes []string, calls *atomic.Int32) http.Handler {
+func readPricingHandler(t *testing.T, calls *atomic.Int32) http.Handler {
 	t.Helper()
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -41,7 +41,7 @@ func readPricingHandler(t *testing.T, scopes []string, calls *atomic.Int32) http
 		t.Fatal(err)
 	}
 	handler, err := NewAuthenticated(func(context.Context) error { return nil }, wa, func(ctx context.Context, token string) (auth.Principal, error) {
-		return auth.Principal{UserID: 1, Site: "site-a", Scopes: scopes}, nil
+		return auth.Principal{UserID: 1, Site: "site-a"}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,27 +70,18 @@ func callExecute(handler http.Handler, arguments map[string]any) (bool, map[stri
 
 func TestMessagesReadRunsDirectlyWithoutRequestKey(t *testing.T) {
 	var calls atomic.Int32
-	handler := readPricingHandler(t, []string{"messages:send"}, &calls)
+	handler := readPricingHandler(t, &calls)
 	ok, result, body := callExecute(handler, map[string]any{"operation": "messages.read", "message_id": "wamid.SYNTHETIC", "typing": true})
 	if !ok || result["success"] != true || calls.Load() != 1 {
 		t.Fatal("read receipt", body)
 	}
 }
 
-func TestBillingPricingNeedsAccountRead(t *testing.T) {
+func TestBillingPricingRunsForSiteKey(t *testing.T) {
 	var calls atomic.Int32
 	arguments := map[string]any{"operation": "billing.pricing", "start": 1, "end": 2, "granularity": "DAILY"}
-	ok, result, body := callExecute(readPricingHandler(t, []string{"account:read"}, &calls), arguments)
-	if points, _ := result["data_points"].([]any); !ok || len(points) != 1 {
+	ok, result, body := callExecute(readPricingHandler(t, &calls), arguments)
+	if points, _ := result["data_points"].([]any); !ok || len(points) != 1 || calls.Load() != 1 {
 		t.Fatal("pricing", body)
-	}
-	if _, _, body = callExecute(readPricingHandler(t, []string{"messages:send"}, &calls), arguments); !strings.Contains(body, "scope does not permit") {
-		t.Fatal("pricing scope bypass", body)
-	}
-	if _, _, body = callExecute(readPricingHandler(t, []string{"account:read"}, &calls), map[string]any{"operation": "messages.read", "message_id": "wamid.SYNTHETIC"}); !strings.Contains(body, "scope does not permit") {
-		t.Fatal("read scope bypass", body)
-	}
-	if calls.Load() != 1 {
-		t.Fatal("denied calls reached the provider", calls.Load())
 	}
 }

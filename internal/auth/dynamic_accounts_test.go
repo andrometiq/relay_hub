@@ -63,7 +63,7 @@ func TestAccountGrantsSeeNewNonWhatsAppAccounts(t *testing.T) {
 		if w.Code != 200 {
 			t.Fatal(w.Code, w.Body.String())
 		}
-		if _, e = s.Issue(ctx, admin, "test", account, []string{"messages:send"}, 1); e != nil {
+		if _, e = s.Issue(ctx, admin, "test", account, 1); e != nil {
 			t.Fatal("new account grant not usable", e)
 		}
 	}

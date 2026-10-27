@@ -43,11 +43,6 @@ func mediaResult(data []byte, mime, name string, limits ...int) (*mcp.CallToolRe
 	}, nil
 }
 
-func allowed(ctx context.Context, scope string) bool {
-	p, ok := ctx.Value(principalKey{}).(auth.Principal)
-	return !ok || p.Allows(scope)
-}
-
 func mediaFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
 	var rejected *whatsapp.MediaError
 	if !errors.As(err, &rejected) {
@@ -75,31 +70,14 @@ func telegramFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
 		"outcome_unknown": providerError.OutcomeUnknown,
 	}}, nil
 }
-func operationScope(op string) string {
+
+// sendsMessage reports whether an operation delivers a message and so needs a request key.
+func sendsMessage(op string) bool {
 	switch op {
-	case "messages.flow", "messages.send", "messages.media", "messages.media_upload", "messages.read", "messages.react", "messages.location", "messages.contacts", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
-		return "messages:send"
-	case "messages.history", "events.list", "events.latest":
-		return "messages:read"
-	case "capabilities", "account.profile", "billing.pricing":
-		return "account:read"
-	case "flows.list", "flows.get", "flows.json", "flows.assets", "account.metadata", "templates.list":
-		return "templates:read"
-	case "groups.list", "groups.info", "groups.requests.list", "groups.invite.get":
-		return "groups:read"
-	case "calls.permission.get":
-		return "calls:read"
+	case "messages.flow", "messages.send", "messages.media", "messages.location", "messages.contacts", "messages.react", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
+		return true
 	}
-	if strings.HasPrefix(op, "templates.") || strings.HasPrefix(op, "flows.") {
-		return "templates:write"
-	}
-	if strings.HasPrefix(op, "groups.") {
-		return "groups:write"
-	}
-	if strings.HasPrefix(op, "calls.") {
-		return "calls:write"
-	}
-	return "invalid"
+	return false
 }
 
 func New(token string, check func(context.Context) error) (http.Handler, error) {
@@ -146,8 +124,8 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		db := mediaStores[0].DB
 		siteTool := func(ctx context.Context, r *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]any, error) {
 			principal, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "account:read") {
-				return nil, nil, errors.New("account:read required")
+			if !ok {
+				return nil, nil, errors.New("site credential required")
 			}
 			var site string
 			var enabled bool
@@ -164,8 +142,8 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		mcp.AddTool(server, &mcp.Tool{Name: "account.get", Description: "Alias of site.get for older clients."}, siteTool)
 		mcp.AddTool(server, &mcp.Tool{Name: "channels.list", Description: "List the WhatsApp numbers, Telegram bots and mailboxes this site uses. Pass a key as the channel argument of a send when the site has several channels of one type."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]any, error) {
 			principal, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "account:read") {
-				return nil, nil, errors.New("account:read required")
+			if !ok {
+				return nil, nil, errors.New("site credential required")
 			}
 			list, err := siteChannels(ctx, db, principal.Site)
 			if err != nil {
@@ -191,9 +169,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err != nil {
 				return mediaFailure(&whatsapp.MediaError{Check: "account"})
 			}
-			if !allowed(ctx, "messages:read") {
-				return mediaFailure(&whatsapp.MediaError{Check: "scope"})
-			}
 			file, err := wa.DownloadAttachment(ctx, account, in.MediaID)
 			if err != nil {
 				return mediaFailure(err)
@@ -207,9 +182,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			account, err := whatsappNumber(ctx, wa, in.Channel)
 			if err != nil {
 				return mediaFailure(&whatsapp.MediaError{Check: "account"})
-			}
-			if !allowed(ctx, "messages:read") {
-				return mediaFailure(&whatsapp.MediaError{Check: "scope"})
 			}
 			file, err := wa.DownloadMedia(ctx, account, in.MediaID, 2<<20)
 			if err != nil {
@@ -226,12 +198,9 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if strings.HasPrefix(input.Operation, "groups.") || strings.HasPrefix(input.Operation, "calls.") {
 				return nil, nil, errors.New("WhatsApp groups and calls are disabled in v1")
 			}
-			if !allowed(ctx, operationScope(input.Operation)) || input.Operation == "account.metadata" && !allowed(ctx, "account:read") {
-				return nil, nil, errors.New("token scope does not permit operation")
-			}
 			// Uploads and read receipts send no message, so they run directly.
 			direct := input.Operation == "messages.media_upload" || input.Operation == "messages.read"
-			if operationScope(input.Operation) == "messages:send" && !direct && input.RequestKey == "" {
+			if sendsMessage(input.Operation) && input.RequestKey == "" {
 				return nil, nil, errors.New("request_key required for sends")
 			}
 			if input.RequestKey != "" && !direct {
@@ -261,9 +230,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err != nil {
 				return nil, nil, err
 			}
-			if !allowed(ctx, "messages:send") {
-				return nil, nil, errors.New("messages:send scope required")
-			}
 			if strings.HasPrefix(in.Message.Message.Operation, "groups.") || strings.HasPrefix(in.Message.Message.Operation, "calls.") {
 				return nil, nil, errors.New("only individual WhatsApp sends are available in v1")
 			}
@@ -282,9 +248,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err != nil {
 				return nil, nil, err
 			}
-			if !allowed(ctx, "messages:send") {
-				return nil, nil, errors.New("messages:send scope required")
-			}
 			rows, queued, err := wa.Outbox.EnqueueBulk(ctx, a, in.Messages)
 			if err != nil {
 				return nil, nil, err
@@ -300,8 +263,8 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
 			a, err := whatsappScope(ctx, wa, in.Channel)
-			if err != nil || !allowed(ctx, "deliveries:read") || !allowed(ctx, "deliveries:cancel") {
-				return nil, nil, errors.New("delivery read and cancellation scopes required")
+			if err != nil {
+				return nil, nil, err
 			}
 			if err := wa.Outbox.Resolve(ctx, a, in.ID, in.Outcome, in.Note, in.ProviderID); err != nil {
 				return nil, nil, err
@@ -319,17 +282,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				return nil, nil, err
 			}
 			if in.CancelID != "" {
-				if !allowed(ctx, "deliveries:cancel") {
-					return nil, nil, errors.New("deliveries:cancel scope required")
-				}
 				err := wa.Outbox.Cancel(ctx, a, in.CancelID)
 				if err != nil {
 					return nil, nil, errors.New("queued delivery could not be cancelled")
 				}
 				return nil, map[string]any{"cancelled": err == nil}, err
-			}
-			if !allowed(ctx, "deliveries:read") {
-				return nil, nil, errors.New("deliveries:read scope required")
 			}
 			if in.RequestKey != "" {
 				d, err := wa.Outbox.Lookup(ctx, a, in.RequestKey)
@@ -347,9 +304,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 	}
 	if registry != nil {
 		mcp.AddTool(server, &mcp.Tool{Name: "telegram.typing", Description: "Briefly indicate typing using the account bot. Ephemeral; never queued or replayed."}, func(ctx context.Context, r *mcp.CallToolRequest, routed telegramTyping) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:send") {
-				return nil, nil, errors.New("account credential with messages:send required")
-			}
 			bot, err := channelKey(ctx, registry, "Telegram", routed.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -361,9 +315,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			return nil, result, nil
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "telegram.message", Description: "Send text, sticker, reaction, location or contact using the account bot. Replies preserve their group and topic. Mutations are sent once."}, func(ctx context.Context, r *mcp.CallToolRequest, routed telegramMessage) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:send") {
-				return nil, nil, errors.New("account credential with messages:send required")
-			}
 			bot, err := channelKey(ctx, registry, "Telegram", routed.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -387,9 +338,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			FileID  string `json:"file_id"`
 			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:read") {
-				return nil, nil, errors.New("messages:read required")
-			}
 			bot, err := channelKey(ctx, registry, "Telegram", in.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -408,9 +356,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			FileID  string `json:"file_id"`
 			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:read") {
-				return nil, nil, errors.New("account credential with messages:read required")
-			}
 			bot, err := channelKey(ctx, registry, "Telegram", in.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -433,9 +378,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			ThreadID   int64  `json:"message_thread_id,omitempty"`
 			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:send") {
-				return nil, nil, errors.New("messages:send scope required")
-			}
 			bot, err := channelKey(ctx, registry, "Telegram", in.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -454,13 +396,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "telegram.groups", Description: "Manage Telegram groups, members, invitations and forum topics through the account-scoped bot. Requires the corresponding Telegram administrator permissions; mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, routed telegramGroup) (*mcp.CallToolResult, map[string]any, error) {
 			in := routed.GroupInput
-			scope := "groups:write"
-			if telegram.GroupReadOperation(in.Operation) {
-				scope = "groups:read"
-			}
-			if !allowed(ctx, scope) {
-				return nil, nil, errors.New(scope + " scope required")
-			}
 			bot, err := channelKey(ctx, registry, "Telegram", routed.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -476,7 +411,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			Index      int    `json:"index"`
 			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:read") || mediaStore.DB == nil || in.Index < 0 || in.Index > 7 || len(in.ProviderID) > 300 {
+			if mediaStore.DB == nil || in.Index < 0 || in.Index > 7 || len(in.ProviderID) > 300 {
 				return nil, nil, errors.New("attachment unavailable")
 			}
 			mailbox, err := channelKey(ctx, registry, "Email", in.Channel)
@@ -493,8 +428,8 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		mcp.AddTool(server, &mcp.Tool{Name: "email.mailbox", Description: "Read mailbox sync status and the twenty latest rejected messages for this account."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:read") || mediaStore.DB == nil {
-				return nil, nil, errors.New("messages:read required")
+			if mediaStore.DB == nil {
+				return nil, nil, errors.New("mailbox status unavailable")
 			}
 			mailbox, err := channelKey(ctx, registry, "Email", in.Channel)
 			if err != nil {
@@ -534,9 +469,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			return nil, map[string]any{"mailboxes": states, "rejections": issues}, rejected.Err()
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "email.send", Description: "Send an email through the account-scoped SMTP adapter."}, func(ctx context.Context, r *mcp.CallToolRequest, routed emailMessage) (*mcp.CallToolResult, map[string]any, error) {
-			if !allowed(ctx, "messages:send") {
-				return nil, nil, errors.New("messages:send scope required")
-			}
 			mailbox, err := channelKey(ctx, registry, "Email", routed.Channel)
 			if err != nil {
 				return nil, nil, err
@@ -564,9 +496,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				CancelID   int64  `json:"cancel_id,omitempty"`
 				Channel    string `json:"channel,omitempty"`
 			}) (*mcp.CallToolResult, map[string]any, error) {
-				if !allowed(ctx, "deliveries:read") || !allowed(ctx, "messages:read") {
-					return nil, nil, errors.New("deliveries:read and messages:read required")
-				}
 				key, site, err := deliveryKey(ctx, registry, in.Channel)
 				if err != nil {
 					return nil, nil, err
@@ -587,9 +516,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 					return nil, map[string]any{"deliveries": rows}, nil
 				}
 				if in.CancelID > 0 {
-					if !allowed(ctx, "deliveries:cancel") {
-						return nil, nil, errors.New("deliveries:cancel required")
-					}
 					if err := queue.Cancel(ctx, key, in.CancelID); err != nil {
 						return nil, nil, err
 					}
@@ -612,9 +538,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				ChatID     int64  `json:"chat_id,omitempty"`
 				Channel    string `json:"channel,omitempty"`
 			}) (*mcp.CallToolResult, map[string]any, error) {
-				if !allowed(ctx, "deliveries:cancel") || !allowed(ctx, "deliveries:read") {
-					return nil, nil, errors.New("deliveries:read and deliveries:cancel required")
-				}
 				key, site, err := deliveryKey(ctx, registry, in.Channel)
 				if err != nil {
 					return nil, nil, err
