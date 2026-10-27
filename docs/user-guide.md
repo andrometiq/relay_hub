@@ -180,6 +180,10 @@ Secrets are write-only. The page never shows them again. Leave a saved secret bl
 | WABA ID | The numeric WhatsApp Business Account ID from Meta. Required. |
 | Access token | A system-user token with `whatsapp_business_messaging`. Required unless the container has a system-user token. Blank uses the container token. |
 | Use the container's Meta app | Keep this on in most cases. Clear it only when this number belongs to a different Meta app. Then type that app's secret and verify token. |
+| Templates | On for a new number. Core can list, create and send templates for this number only when it is on. It changes nothing in Meta by itself. |
+| Hourly sync | On for a new number. The Hub reads the number's profile and templates from Meta every hour. |
+| Groups | Off for a new number. Turn it on to let Core use WhatsApp groups on this number. |
+| Calls | Off for a new number. Turn it on to let Core use WhatsApp calls on this number. |
 | Link to site | Optional. Pick the site that must get the messages, or keep "Not linked" and link it later on the Sites page. |
 | Account enabled | Shows only when you edit. Clear it to stop this number. |
 
@@ -417,7 +421,7 @@ You manage WhatsApp templates in Core, not in the Hub. In Core open Relay → **
 
 Core reads the template list from the Hub every 10 minutes. The Hub keeps a copy per WABA and marks it old after each change, so the next read gets the new list.
 
-The template feature must be on for the number in the Hub. A number added on the Hub pages starts with it off. See [section 8](#8-things-the-hub-pages-cannot-do-yet).
+The **Templates** switch must be on for the number in the Hub. A new number starts with it on. To change it, open the number in its container.
 
 ### 5.6 Add a forward target
 
@@ -531,7 +535,6 @@ The Hub has no billing page. Billing is in Core: Relay → **WhatsApp** → **Bi
 
 These tasks need an operator with the admin API in the [API reference](api-reference.md#administration-routes):
 
-- **Turn on templates, groups, calls or hourly Meta sync for a WhatsApp number.** The number dialog has no switch for them, and a number added on the page starts with all of them off. Without the template switch, Core cannot list, create or send templates for that number. Editing the number on the page keeps the switches that the operator set.
 - **Replay unassigned messages.** Messages that came while a number had no site stay in the Hub. `POST /api/unassigned-events/replay` gives them to the number's current site.
 - **Delete** containers, accounts or sites.
 - **Change a Site ID** or a channel key.

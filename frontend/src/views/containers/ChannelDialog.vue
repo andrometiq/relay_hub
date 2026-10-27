@@ -87,6 +87,11 @@ async function save() {
             <FormControl v-model="form.secret" type="password" aria-label="Access token" autocomplete="new-password" :placeholder="placeholder('secret', containerToken ? 'Blank uses the container token' : 'EAAG…')" />
             <ErrorMessage :message="errors.secret" />
           </div>
+          <div class="admin-sub">Features</div>
+          <FormControl v-model="form.config.templates" type="checkbox" label="Templates · Core can list, create and send templates" class="admin-full" />
+          <FormControl v-model="form.config.sync_metadata" type="checkbox" label="Hourly sync · read the profile and templates from Meta every hour" class="admin-full" />
+          <FormControl v-model="form.config.groups" type="checkbox" label="Groups" />
+          <FormControl v-model="form.config.calls" type="checkbox" label="Calls" />
           <div class="admin-sub">Webhook security</div>
           <FormControl :model-value="!form.override" type="checkbox" label="Use the container's Meta app (App secret and verify token)" class="admin-full" @update:model-value="form.override = !$event" />
           <template v-if="form.override">
