@@ -6,6 +6,9 @@ const DEFAULTS = {
   Telegram: {},
   Email: { port: 465, imap_port: 993, imap_folder: "INBOX" },
 };
+// A new WhatsApp number can use templates and syncs them hourly; groups and calls stay off.
+const NEW_CHANNEL = { WhatsApp: { templates: true, sync_metadata: true, groups: false, calls: false } };
+const WHATSAPP_FEATURES = ["templates", "sync_metadata", "groups", "calls"];
 const OVERRIDE_KEYS = ["app_secret", "verify_token"];
 
 // The form copies stored public config so saving keeps fields this dialog does not show.
@@ -20,7 +23,7 @@ export function channelForm(channelName, channel = null) {
     secret: "",
     configured,
     override: OVERRIDE_KEYS.some((name) => configured.includes(name)),
-    config: { ...DEFAULTS[channelName], ...(channel?.config || {}), app_secret: "", verify_token: "" },
+    config: { ...DEFAULTS[channelName], ...(channel ? channel.config || {} : NEW_CHANNEL[channelName]), app_secret: "", verify_token: "" },
   };
 }
 
@@ -44,6 +47,7 @@ export function validateChannelForm(form, { containerToken = false } = {}) {
 export function channelPayload(form, takenKeys = []) {
   const config = { ...form.config };
   for (const name of OVERRIDE_KEYS) if (!form.override || !config[name]) delete config[name];
+  if (form.channel === "WhatsApp") for (const name of WHATSAPP_FEATURES) config[name] = !!config[name];
   if (form.channel === "Email") {
     config.from = String(config.from || "").trim().toLowerCase();
     for (const name of ["port", "imap_port"]) if (config[name] !== "" && config[name] != null) config[name] = Number(config[name]);

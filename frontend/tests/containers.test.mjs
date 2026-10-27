@@ -100,6 +100,14 @@ test('editing keeps stored config and saved secrets', () => {
   assert.equal(payload.secret, '');
 });
 
+test('a new number starts with templates and hourly sync on, and edits send every switch', () => {
+  const added = channelPayload(Object.assign(channelForm('WhatsApp'), { label: 'Sales' }));
+  assert.deepEqual([added.config.templates, added.config.sync_metadata, added.config.groups, added.config.calls], [true, true, false, false]);
+  const stored = channelForm('WhatsApp', whatsapp({ config: { phone_id: '108', waba_id: '220', groups: true } }));
+  const edited = channelPayload(stored);
+  assert.deepEqual([edited.config.templates, edited.config.sync_metadata, edited.config.groups, edited.config.calls], [false, false, true, false]);
+});
+
 test('mailbox and bot checks reuse the channel rules', () => {
   const mail = channelForm('Email');
   Object.assign(mail, { label: 'Orders desk', secret: 'app-password' });

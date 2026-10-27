@@ -170,6 +170,13 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 			public[key] = stored[key]
 		}
 	}
+	if !exists && c.Channel == "WhatsApp" {
+		for _, key := range []string{"templates", "sync_metadata"} {
+			if _, set := public[key]; !set {
+				public[key] = true
+			}
+		}
+	}
 	nextAddress := channelAddress(c.Channel, public, secret, address)
 	if c.Label == "" && exists {
 		c.Label = label
@@ -179,7 +186,7 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 	if err = s.writeChannel(ctx, tx, c, public, private, secret, nextAddress); err != nil {
 		return err
 	}
-	if exists && site != "" && (label != c.Label || enabled != c.Enabled || address != nextAddress) {
+	if exists && site != "" && (label != c.Label || enabled != c.Enabled || address != nextAddress || featuresChanged(stored, public)) {
 		return notifyChannels(ctx, tx, site)
 	}
 	return nil
@@ -209,6 +216,18 @@ func (s *Store) writeChannel(ctx context.Context, tx pgx.Tx, c Channel, public m
 		return errors.New("this number, bot or mailbox is already configured in another channel")
 	}
 	return err
+}
+
+// featuresChanged reports a change of the WhatsApp features that Core reads in its channel list.
+func featuresChanged(stored, public map[string]any) bool {
+	for _, key := range []string{"templates", "groups", "calls"} {
+		before, _ := stored[key].(bool)
+		after, _ := public[key].(bool)
+		if before != after {
+			return true
+		}
+	}
+	return false
 }
 
 // channelAddress is the provider identity: WhatsApp phone_id, Telegram bot id or mailbox address.
