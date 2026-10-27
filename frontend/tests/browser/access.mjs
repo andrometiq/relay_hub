@@ -40,7 +40,7 @@ await page.route('**/auth/**',async route=>{
   data.More=matches.length>50;
   if(cursor&&pausePage)await new Promise(release=>{const resolve=pausePage;pausePage=null;resolve({release,cursor,before});});
  }
- if(view==='tokens'){data.Scopes=['messages:send'];data.Tokens=[{ID:1,Name:'local-only-key',Account:'local-active',Expires:'2020-01-01 00:00:00+00',Scopes:'messages:send',Revoked:false}];}
+ if(view==='tokens'){data.Tokens=[{ID:1,Name:'local-only-key',Account:'local-active',Expires:'2020-01-01 00:00:00+00',Revoked:false}];}
  if(view==='sessions')data.Sessions=[{ID:1,Current:true,Agent:'Local mobile browser',Seen:'2026-10-24'}];
  return route.fulfill({json:data});
 });

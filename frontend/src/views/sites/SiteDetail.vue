@@ -14,7 +14,7 @@ let ticket = 0;
 
 const secrets = computed(() => site.value?.configured_secrets || []);
 const containerName = (id) => containers.value.find((row) => row.id === id)?.name || id;
-const scopes = (token) => token.Scopes + " · " + (token.Expires === "Never" ? "no expiry" : "until " + new Date(token.Expires).toLocaleDateString());
+const expiry = (token) => token.Expires === "Never" ? "no expiry" : "until " + new Date(token.Expires).toLocaleDateString();
 
 async function refresh() {
   const current = ++ticket;
@@ -106,7 +106,7 @@ defineExpose({ refresh });
           <ErrorMessage :message="tokenError" />
           <div v-for="token in tokens.tokens" :key="token.ID" class="admin-secret">
             <span class="admin-label">{{ token.Name }}</span>
-            <span class="admin-value">{{ tokenState(token) === "Revoked" ? "revoked" : scopes(token) }}</span>
+            <span class="admin-value">{{ tokenState(token) === "Revoked" ? "revoked" : expiry(token) }}</span>
             <Badge :label="tokenState(token)" :theme="tokenState(token) === 'Active' ? 'green' : 'gray'" />
           </div>
           <p v-if="!tokens.tokens.length && !tokenError" class="admin-hint">You have no auth keys for this site.</p>
