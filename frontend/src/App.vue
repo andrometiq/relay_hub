@@ -64,11 +64,11 @@ onUnmounted(() => unsubscribe?.());
     </aside>
     <main class="min-w-0 flex flex-col min-h-0">
       <header class="hub-header">
-        <ThemeSwitcher />
         <button class="hub-mobile-menu" aria-label="Toggle navigation" :aria-expanded="mobile" @click="mobile=!mobile"><FeatherIcon name="menu" class="h-4 w-4"/></button><span class="hub-breadcrumb">Relay Hub</span><span class="hub-breadcrumb text-ink-gray-3">/</span><h1 class="text-base font-medium">{{ view }}</h1>
         <HubStatus :status="status" :error="error" :updated="updated" />
         <div class="ml-auto flex gap-2">
           <Button label="Refresh" :loading="busy" @click="refreshView" />
+          <ThemeSwitcher />
         </div>
       </header>
       <div class="hub-page">
