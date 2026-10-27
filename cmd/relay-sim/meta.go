@@ -40,13 +40,18 @@ type fakeMeta struct {
 	records   *recorder
 	templates []map[string]any
 	messages  int
+	media     int
 	pageSize  int
 	bulk      *bulkReceipts
 }
 
 func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
+	limit := int64(2 << 20)
+	if strings.HasSuffix(r.URL.Path, "/media") {
+		limit = 5 << 20 // A media upload carries up to 4 MiB of file bytes in a multipart body.
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		reply := []byte(`{"error":"body too large"}`)
 		m.records.record(r, "graph", body, http.StatusRequestEntityTooLarge, reply, started, "body_too_large")
@@ -60,6 +65,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	node, edge, phone, waba := graphNode(r.URL.Path)
 	fault := m.records.fault("graph")
 	captured := true
+	recorded := body
 	m.mu.Lock()
 	switch {
 	case fault == "429" || fault == "503":
@@ -80,6 +86,11 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// Campaign sends are counted by bulkReceipts instead of captured one by one.
 		captured = json.Unmarshal(body, &send) != nil || send.Type != "template" || !m.bulk.accept(node, send.To, id, send.Tracking)
+	case r.Method == "POST" && phone && edge == "media":
+		// Captures keep the upload size, not the file bytes.
+		m.media++
+		recorded, _ = json.Marshal(map[string]any{"media_upload_bytes": len(body), "content_type": r.Header.Get("Content-Type")})
+		result = map[string]any{"id": fmt.Sprint(m.records.start.UnixMicro() + int64(m.media))}
 	case r.Method == "POST" && waba && edge == "message_templates":
 		var row map[string]any
 		if json.Unmarshal(body, &row) != nil || row["name"] == nil {
@@ -129,7 +140,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply, _ := json.Marshal(result)
 	m.mu.Unlock()
 	if captured {
-		m.records.record(r, "graph", body, status, reply, started, fault)
+		m.records.record(r, "graph", recorded, status, reply, started, fault)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

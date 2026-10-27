@@ -288,3 +288,30 @@ func TestMetaRecordsRefusedRequests(t *testing.T) {
 		t.Fatal("refusal not recorded or generated provider ID")
 	}
 }
+
+func TestMetaMediaUploadReturnsIDsAndKeepsOnlyTheSize(t *testing.T) {
+	records := newRecorder()
+	meta := &fakeMeta{records: records}
+	pdf := "%PDF-1.4 " + strings.Repeat("x", 3<<20)
+	ids := map[string]bool{}
+	for range 2 {
+		r := httptest.NewRequest("POST", "/v25.0/110/media", strings.NewReader(pdf))
+		r.Header.Set("Authorization", "Bearer sim-provider-token")
+		w := httptest.NewRecorder()
+		meta.ServeHTTP(w, r)
+		var v map[string]any
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &v) != nil {
+			t.Fatal(w.Code, w.Body.String())
+		}
+		id, _ := v["id"].(string)
+		if id == "" || strings.Trim(id, "0123456789") != "" || ids[id] {
+			t.Fatal("media id must be a new digit string", v)
+		}
+		ids[id] = true
+	}
+	for _, row := range records.snapshot() {
+		if strings.Contains(string(row.Body), "%PDF") || !strings.Contains(string(row.Body), "media_upload_bytes") {
+			t.Fatal("capture must keep the size, not the file", string(row.Body))
+		}
+	}
+}
