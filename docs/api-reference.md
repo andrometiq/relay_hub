@@ -43,34 +43,32 @@ A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send
 
 ## Tool inventory
 
-| Tool | Arguments | Required scope |
-| --- | --- | --- |
-| `health.get` | `{}` | Valid API token |
-| `site.get` (alias `account.get`) | `{}` | `account:read` |
-| `channels.list` | `{}` | `account:read` |
-| `whatsapp.send` | `message: {key, message: {...}}` | `messages:send` |
-| `whatsapp.bulk` | `messages: [{key, message: {operation: "templates.send", ...}}]`, 1–50 template, text or media sends | `messages:send` |
-| `whatsapp.deliveries` | Optional `after`; optional `cancel_id` for cancellation | `deliveries:read` or `deliveries:cancel` |
-| `whatsapp.execute` | `operation` and typed operation fields | Operation scope below |
-| `whatsapp.media` | `media_id` of a received sticker | `messages:read` |
-| `telegram.message` | `operation`, `chat_id` and typed message fields | `messages:send` |
-| `telegram.send` | Compatibility text tool: `chat_id`, `text`, optional `reply_to`, `message_thread_id` | `messages:send` |
-| `telegram.groups` | `operation`, `chat_id` and typed group fields | `groups:read` for `info`, `member`, `count`, `administrators`; otherwise `groups:write` |
-| `telegram.media` | `file_id` of a received sticker | `messages:read` |
-| `email.send` | `to[]`, `subject`, `body`; optional `cc[]`, `bcc[]` | `messages:send` |
-
-WhatsApp operation scopes:
-
-| Operations | Scope |
+| Tool | Arguments |
 | --- | --- |
-| `capabilities`, `account.profile`, `billing.pricing` | `account:read` |
-| `messages.history`, `events.list`, `events.latest` | `messages:read` |
-| `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send`, `groups.send`, `groups.media`, `groups.template`, `groups.pin` | `messages:send` |
-| `templates.list`; template mutations | `templates:read`; `templates:write` |
-| `groups.list`, `groups.info`, `groups.requests.list`, `groups.invite.get`; group administration | `groups:read`; `groups:write` |
-| `calls.permission.get`; call mutations | `calls:read`; `calls:write` |
+| `health.get` | `{}` |
+| `site.get` (alias `account.get`) | `{}` |
+| `channels.list` | `{}` |
+| `whatsapp.send` | `message: {key, message: {...}}` |
+| `whatsapp.bulk` | `messages: [{key, message: {operation: "templates.send", ...}}]`, 1–50 template, text or media sends |
+| `whatsapp.deliveries` | Optional `after`; optional `cancel_id` for cancellation |
+| `whatsapp.execute` | `operation` and typed operation fields |
+| `whatsapp.media` | `media_id` of a received sticker |
+| `telegram.message` | `operation`, `chat_id` and typed message fields |
+| `telegram.send` | Compatibility text tool: `chat_id`, `text`, optional `reply_to`, `message_thread_id` |
+| `telegram.groups` | `operation`, `chat_id` and typed group fields |
+| `telegram.media` | `file_id` of a received sticker |
+| `email.send` | `to[]`, `subject`, `body`; optional `cc[]`, `bcc[]` |
 
-Scopes authorize Hub operations for the token's site; they do not grant access to Frappe business records. Core checks those permissions separately. Channel enablement, provider capability and provider permissions must also pass.
+`whatsapp.execute` operations:
+
+| Group | Operations |
+| --- | --- |
+| Account | `capabilities`, `account.profile`, `account.metadata`, `billing.pricing` |
+| Read | `messages.history`, `events.list`, `events.latest` |
+| Send | `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send` |
+| Templates and flows | `templates.list` and template mutations; `flows.*` |
+
+A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
 
 ## WhatsApp messages
 
@@ -306,6 +304,6 @@ The administration routes are browser-session APIs, not a second public messagin
 
 Source contracts: [MCP registration](../internal/hubmcp/server.go), [WhatsApp inputs](../internal/whatsapp/service.go), [Telegram messages](../internal/telegram/messages.go), [Telegram groups](../internal/telegram/groups.go), [route handlers](../cmd/relay-hub/main.go). Use the [support matrix](provider-support.md) to distinguish implemented paths from unimplemented provider features.
 
-## Delivery scopes
+## Delivery resolution
 
-Telegram/email delivery reads require both `deliveries:read` and `messages:read`, since stored provider results can contain message text and replies. Cancellation additionally requires `deliveries:cancel`. Resolution requires `deliveries:read` and `deliveries:cancel`. Message-only tokens no longer authorize delivery administration. `channels.resolve` requires `provider_id` for accepted messages and `chat_id` for accepted Telegram messages. Rejections require neither provider field.
+`channels.resolve` requires `provider_id` for accepted messages and `chat_id` for accepted Telegram messages. Rejections require neither provider field.

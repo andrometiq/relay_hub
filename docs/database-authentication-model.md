@@ -32,7 +32,7 @@ primary key for a message or queue row.
 | --- | --- |
 | `relay_users` | Hub browser identities: bigint identity, unique username, PBKDF2 salt/hash, role (`admin`/`member`), enabled flag, auth-version and creation time. Passwords and raw tokens are never stored. |
 | `relay_user_accounts` | Account grants keyed by `(user_id, account_id)`. |
-| `relay_api_tokens` | Hashed `relay_` token, owning user/account, scopes array, expiry, revocation and creation times. Tokens are account-scoped. |
+| `relay_api_tokens` | Hashed `relay_` token, owning user/account, expiry, revocation and creation times. Tokens are account-scoped. |
 | `relay_auth_sessions` | Hashed browser session token, user/auth version, creation/last-seen/expiry timestamps and bounded user agent. Sessions expire after the configured absolute/idle windows and are invalidated by auth-version changes. |
 | `relay_auth_audit` | Compatibility security audit with actor, action, target and timestamp; migration 0011 adds optional account and JSON metadata. |
 | `relay_operational_audit` | Normalized append-only operational trail. It records actor type/id, account/channel, action, outcome, request/trace ids, source address, user agent, safe metadata and error codes/messages. Outcomes are `accepted`, `completed`, `rejected`, `failed`, or `uncertain`. |
