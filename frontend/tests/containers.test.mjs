@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adminApi, assignedRefs, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
+import { adminApi, assignedRefs, connectionRows, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
 import { channelForm, channelPayload, validateChannelForm } from '../src/composables/channelForm.js';
 import { parseRoute, routePath } from '../src/useViewRoute.js';
 
@@ -152,4 +152,19 @@ test('turning off an old address deletes it for the container or one channel', a
     ['DELETE', './api/containers/ct%201/old-address'],
     ['DELETE', './api/containers/ct%201/channels/Telegram/sales%2Fbot/old-address'],
   ]);
+});
+
+test('connections list one row per channel with its container and site', () => {
+  const containers = [{ id: 'ct_1', name: 'Essdee', channels: [
+    { channel: 'WhatsApp', key: 'sales', label: 'Sales', site: 'site-a', config: { display_number: '+91 90000 00101' } },
+    { channel: 'Telegram', key: 'bot-b', label: 'Bot', site: '', config: { username: 'essdee_bot' } },
+  ] }];
+  const sites = [{ id: 'site-a', origin: 'https://a.example.invalid' }];
+  const rows = connectionRows(containers, sites);
+  assert.deepEqual(rows.map(row => [row.id, row.containerName, row.siteName, row.address]), [
+    ['WhatsApp/sales', 'Essdee', 'a.example.invalid', '+91 90000 00101'],
+    ['Telegram/bot-b', 'Essdee', '', '@essdee_bot'],
+  ]);
+  assert.deepEqual(connectionRows(containers, sites, 'a.example').map(row => row.key), ['sales']);
+  assert.deepEqual(connectionRows(containers, sites, 'essdee_bot').map(row => row.key), ['bot-b']);
 });

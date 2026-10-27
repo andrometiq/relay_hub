@@ -47,6 +47,15 @@ export function channelAddress(channel) {
   return config.from || channel.address || "";
 }
 
+// Connection rows: one per channel of every container, with its container and site names.
+export function connectionRows(containers = [], sites = [], query = "") {
+  const needle = query.trim().toLowerCase();
+  return containers.flatMap((container) => (container.channels || []).map((channel) => ({
+    ...channel, id: `${channel.channel}/${channel.key}`, containerName: container.name || container.id,
+    siteName: channel.site ? siteLabel(channel.site, sites) : "", address: channelAddress(channel),
+  }))).filter((row) => !needle || [row.key, row.label, row.address, row.containerName, row.siteName].join(" ").toLowerCase().includes(needle));
+}
+
 export function channelKey(label, taken = []) {
   const base = String(label || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 90) || "account";
   let key = base;

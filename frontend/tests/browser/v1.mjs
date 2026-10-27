@@ -66,7 +66,7 @@ try {
  await page.waitForTimeout(150);
  assert.ok(reads.filter(path=>path==='sites').length > before);
  await nav('Connections');
- await page.getByRole('button',{name:'Open WhatsApp connection local-only-review',exact:true}).click();
+ await page.getByRole('button',{name:'Open WhatsApp connection Local number',exact:true}).click();
  await page.getByText('+1555010100',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Close',exact:true}).last().click();
  await nav('Deliveries');
