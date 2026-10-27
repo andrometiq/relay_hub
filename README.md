@@ -10,6 +10,7 @@ The Hub provides a Frappe-style administration UI, PostgreSQL-backed users and s
 | --- | --- |
 | Understand the system | [Architecture](docs/architecture.md) |
 | Install and configure | [Quickstart](docs/quickstart.md), [configuration](docs/configuration.md) |
+| Deploy a server, update or restart | [Deployment](docs/deployment.md) |
 | Manage users and tokens | [Authentication](docs/authentication.md) |
 | Integrate an application | [MCP and message reference](docs/api-reference.md) |
 | Check channel support | [Provider support matrix](docs/provider-support.md) |
@@ -17,12 +18,12 @@ The Hub provides a Frappe-style administration UI, PostgreSQL-backed users and s
 | Run local simulations | [Testing](docs/testing.md) |
 | Browse everything | [Documentation index](docs/README.md) |
 
-After setup, the daily commands are:
+On a server, `./relay setup` installs the Hub as a systemd user service. After that, the daily commands are:
 
 ```sh
-./relay build-ui
-./relay migrate
-./relay restart
+./relay update    # pull, build, migrate and restart
+./relay restart   # rebuild and restart
+./relay logs
 ```
 
 The connected release checkpoint passes 10/10 WhatsApp, 11/11 Telegram and 13/13 email cases. All three channels support durable sends and incoming callbacks. Telegram reports bot acceptance; email reports SMTP acceptance and trusted DSNs. Core updates use Socket.IO. See [provider support](docs/provider-support.md) for channel limits and [release evidence](docs/simulation-validation.md) for measurements and rerun commands.
