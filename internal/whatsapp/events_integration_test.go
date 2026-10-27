@@ -28,7 +28,7 @@ func TestDurableEventDeduplicationAndAccountIsolation(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer c.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
-	_, e = c.Exec(ctx, "CREATE TABLE "+schema+".relay_whatsapp_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,account text,digest text,payload jsonb,raw_payload jsonb,lane text NOT NULL DEFAULT 'realtime',UNIQUE(account,digest))")
+	_, e = c.Exec(ctx, "CREATE TABLE "+schema+".relay_whatsapp_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,account text,digest text,payload jsonb,raw_payload jsonb,lane text NOT NULL DEFAULT 'realtime',site_id text,container_id text,UNIQUE(account,digest))")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -50,8 +50,8 @@ func TestDurableEventDeduplicationAndAccountIsolation(t *testing.T) {
 	if _, err = c.Exec(ctx, string(statusSQL)); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"0003_outbox.sql", "0037_whatsapp_bulk.sql"} {
-		raw, err := os.ReadFile("../database/migrations/" + file)
+	for _, file := range []string{"0003_outbox.sql", "0037_whatsapp_bulk.sql", siteColumnsFile} {
+		raw, err := migrationSQL(file)
 		if err != nil {
 			t.Fatal(err)
 		}

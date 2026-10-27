@@ -70,6 +70,10 @@ func (o *Outbox) EnqueueBulk(ctx context.Context, a Account, batch []Submission)
 }
 
 func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bulk bool) ([]Delivery, int, error) {
+	normalizeAccount(&a)
+	if a.SiteID == "" {
+		return nil, 0, errors.New("this WhatsApp number is not assigned to a site")
+	}
 	if len(batch) == 0 || len(batch) > 50 {
 		return nil, 0, errors.New("submit between 1 and 50 messages")
 	}
@@ -136,7 +140,7 @@ func (o *Outbox) enqueue(ctx context.Context, a Account, batch []Submission, bul
 		if err = queueRoom(count, bulkCount, bulk); err != nil {
 			return nil, 0, err
 		}
-		err = tx.QueryRow(ctx, "INSERT INTO relay_outbox(account,request_key,payload,bulk) VALUES($1,$2,$3,$4) RETURNING id::text,request_key,state", a.ID, item.Key, string(raw), bulk).Scan(&d.ID, &d.Key, &d.State)
+		err = tx.QueryRow(ctx, "INSERT INTO relay_outbox(account,request_key,payload,bulk,site_id) VALUES($1,$2,$3,$4,nullif($5,'')) RETURNING id::text,request_key,state", a.ID, item.Key, string(raw), bulk, a.SiteID).Scan(&d.ID, &d.Key, &d.State)
 		if err != nil {
 			return nil, 0, err
 		}

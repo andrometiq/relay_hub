@@ -148,8 +148,8 @@ func TestOutboxRetriesAndPushesDurableOutcomes(t *testing.T) {
 		}
 	}
 	// Crash recovery and manual resolution must also journal in the same transaction.
-	if _, err := db.Exec(ctx, `INSERT INTO relay_outbox(account,request_key,payload,state,submission_started,updated_at)
- VALUES($1,'crashed','{"operation":"messages.send","to":"919999999998"}','submitting',true,now()-interval '3 minutes')`, a.ID); err != nil {
+	if _, err := db.Exec(ctx, `INSERT INTO relay_outbox(account,request_key,payload,state,submission_started,updated_at,site_id)
+ VALUES($1,'crashed','{"operation":"messages.send","to":"919999999998"}','submitting',true,now()-interval '3 minutes',$1)`, a.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := o.process(ctx); err != nil {

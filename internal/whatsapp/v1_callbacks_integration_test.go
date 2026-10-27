@@ -86,7 +86,7 @@ func TestCallbacksSurviveReversedCommits(t *testing.T) {
 			}
 			insert := func(tx pgx.Tx, digest string) int64 {
 				var id int64
-				if err := tx.QueryRow(ctx, `INSERT INTO relay_whatsapp_events(account,digest,payload,lane) VALUES($1,$2,$3,$4) RETURNING id`, a.ID, digest, payload, lane).Scan(&id); err != nil {
+				if err := tx.QueryRow(ctx, `INSERT INTO relay_whatsapp_events(account,digest,payload,lane,site_id) VALUES($1,$2,$3,$4,$1) RETURNING id`, a.ID, digest, payload, lane).Scan(&id); err != nil {
 					t.Fatal(err)
 				}
 				return id
@@ -269,8 +269,8 @@ func TestMalformedReceiptBacklogDoesNotStarveValidStatuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := `{"entry":[{"changes":[{"value":{"statuses":[{"id":"bad","status":"read","timestamp":"invalid","recipient_id":"1"}]}}]}]}`
-	if _, err := db.Exec(ctx, `INSERT INTO relay_whatsapp_events(account,digest,payload,lane)
- SELECT $1,'bad-' || n,$2::jsonb,'status' FROM generate_series(1,300) n`, a.ID, bad); err != nil {
+	if _, err := db.Exec(ctx, `INSERT INTO relay_whatsapp_events(account,digest,payload,lane,site_id)
+ SELECT $1,'bad-' || n,$2::jsonb,'status',$1 FROM generate_series(1,300) n`, a.ID, bad); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Save(ctx, a.ID, statusFixture(2, 1).Payload); err != nil {
@@ -335,18 +335,22 @@ func TestDisabledAccountDoesNotBlockSharedWebhook(t *testing.T) {
 			t.Fatal("disabled destination blocked envelope", w.Code, w.Body.String())
 		}
 	}
-	var body []byte
+	var body, unknown []byte
 	var original bool
-	if err := db.QueryRow(ctx, `SELECT payload,raw_payload=$1::jsonb FROM relay_whatsapp_events`, raw).Scan(&body, &original); err != nil || !original {
+	if err := db.QueryRow(ctx, `SELECT payload,raw_payload=$1::jsonb FROM relay_whatsapp_events WHERE account=$2`, raw, a.ID).Scan(&body, &original); err != nil || !original {
 		t.Fatal("raw journal lost", err)
 	}
 	if strings.Contains(string(body), "disabled") || !strings.Contains(string(body), "wamid.active") || !strings.Contains(string(body), "APPROVED") {
 		t.Fatal("incorrect account projection", string(body))
 	}
+	// The removed number's changes are kept unrouted for an admin replay.
+	if err := db.QueryRow(ctx, `SELECT payload FROM relay_whatsapp_events WHERE account='' AND site_id IS NULL AND container_id=$1`, a.ID).Scan(&unknown); err != nil || !strings.Contains(string(unknown), "wamid.disabled") {
+		t.Fatal("unknown number not kept unrouted", string(unknown), err)
+	}
 	var events, incoming, statuses int
 	if err := db.QueryRow(ctx, `SELECT (SELECT count(*) FROM relay_whatsapp_events),
  (SELECT count(*) FROM relay_whatsapp_incoming WHERE account=$1 AND provider_id='wamid.active'),
- (SELECT count(*) FROM relay_whatsapp_status)`, a.ID).Scan(&events, &incoming, &statuses); err != nil || events != 1 || incoming != 1 || statuses != 0 {
+ (SELECT count(*) FROM relay_whatsapp_status)`, a.ID).Scan(&events, &incoming, &statuses); err != nil || events != 2 || incoming != 1 || statuses != 0 {
 		t.Fatal("disabled changes projected or retry duplicated", events, incoming, statuses, err)
 	}
 	for _, lane := range []string{"realtime", "status"} {
