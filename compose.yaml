@@ -1,0 +1,25 @@
+name: relay-hub
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RELAY_DB_PORT:-18433}:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      CHANNEL_DB_PASSWORD: ${CHANNEL_DB_PASSWORD:?Set CHANNEL_DB_PASSWORD in .env}
+    volumes:
+      - relay_postgres:/var/lib/postgresql
+      - ./docker/postgres/init-channel.sh:/docker-entrypoint-initdb.d/init-channel.sh:ro,Z
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=100"]
+    mem_limit: 768m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+volumes:
+  relay_postgres:

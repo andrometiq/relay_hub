@@ -1,0 +1,20 @@
+[
+  {
+    "target_rps": 50,
+    "duration_s": 15,
+    "sent": 750,
+    "admission_drops": 0,
+    "errors": 0,
+    "scheduled_p95_ms": 4.993,
+    "scheduled_p99_ms": 6.576
+  },
+  {
+    "target_rps": 100,
+    "duration_s": 15,
+    "sent": 1500,
+    "admission_drops": 0,
+    "errors": 0,
+    "scheduled_p95_ms": 5.272,
+    "scheduled_p99_ms": 15.815
+  }
+]
