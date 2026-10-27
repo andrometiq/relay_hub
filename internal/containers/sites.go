@@ -129,6 +129,15 @@ func (s *Store) CallbackSites(ctx context.Context) ([]SiteCallback, error) {
 // SaveSite creates or updates a site. Secrets holds write-only core_api_key,
 // core_api_secret and callback_secret; blank values keep stored values.
 func (s *Store) SaveSite(ctx context.Context, site Site, secrets map[string]any, create bool) error {
+	return s.commitSite(ctx, site, secrets, create, 0)
+}
+
+// CreateSite creates a site and grants the creating administrator access to it.
+func (s *Store) CreateSite(ctx context.Context, site Site, secrets map[string]any, adminID int64) error {
+	return s.commitSite(ctx, site, secrets, true, adminID)
+}
+
+func (s *Store) commitSite(ctx context.Context, site Site, secrets map[string]any, create bool, adminID int64) error {
 	if err := validate(site.ID, site.Origin); err != nil {
 		return err
 	}
@@ -139,6 +148,13 @@ func (s *Store) SaveSite(ctx context.Context, site Site, secrets map[string]any,
 	defer tx.Rollback(ctx)
 	if err = s.saveSite(ctx, tx, site, secrets, create); err != nil {
 		return err
+	}
+	if adminID != 0 {
+		_, err = tx.Exec(ctx, `INSERT INTO relay_user_sites(user_id,site_id) SELECT id,$2 FROM relay_users WHERE id=$1 AND role='admin' AND enabled
+ ON CONFLICT DO NOTHING`, adminID, site.ID)
+		if err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

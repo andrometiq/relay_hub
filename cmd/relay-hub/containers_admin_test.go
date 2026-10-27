@@ -158,6 +158,20 @@ func TestDirectoryAdminRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestDirectoryAdminGrantsCreatorTheNewSite(t *testing.T) {
+	c := newDirectoryClient(t)
+	ctx := context.Background()
+	if _, err := c.store.DB.Exec(ctx, `INSERT INTO relay_users(username,password_salt,password_hash,role) VALUES('admin','salt','hash','admin')`); err != nil {
+		t.Fatal(err)
+	}
+	c.expect(204, "POST", "/api/sites", map[string]any{"id": "yrp", "name": "YRP", "origin": "https://yrp.invalid", "enabled": true})
+	c.expect(204, "PUT", "/api/sites/yrp", map[string]any{"name": "YRP", "origin": "https://yrp.invalid", "enabled": true})
+	var grants int
+	if err := c.store.DB.QueryRow(ctx, `SELECT count(*) FROM relay_user_sites WHERE user_id=1 AND site_id='yrp'`).Scan(&grants); err != nil || grants != 1 {
+		t.Fatal("creating administrator was not granted the new site", grants, err)
+	}
+}
+
 func TestDirectoryAdminKeepsCheckStatusAndClearsNumberApp(t *testing.T) {
 	c := newDirectoryClient(t)
 	ctx := context.Background()

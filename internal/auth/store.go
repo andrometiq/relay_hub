@@ -226,7 +226,7 @@ func (s *Store) Authenticate(ctx context.Context, token string) (Principal, erro
 	if !strings.HasPrefix(token, "relay_") || len(token) != 70 {
 		return p, ErrDenied
 	}
-	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.site_id,t.scopes FROM relay_api_tokens t JOIN relay_sites a ON a.site_id=t.site_id AND a.enabled JOIN relay_users u ON u.id=t.user_id JOIN relay_user_sites g ON g.user_id=u.id AND g.site_id=t.site_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled`, Hash(token)).Scan(&p.UserID, &p.Site, &p.Scopes)
+	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.site_id,t.scopes FROM relay_api_tokens t JOIN relay_sites a ON a.site_id=t.site_id AND a.enabled JOIN relay_users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled AND (u.role='admin' OR EXISTS(SELECT 1 FROM relay_user_sites g WHERE g.user_id=u.id AND g.site_id=t.site_id))`, Hash(token)).Scan(&p.UserID, &p.Site, &p.Scopes)
 	if e != nil {
 		return p, ErrDenied
 	}
@@ -374,9 +374,11 @@ func (s *Store) Issue(ctx context.Context, u User, name, site string, scopes []s
 	if _, e = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(726351020)"); e != nil {
 		return "", e
 	}
-	var granted bool
-	e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM relay_user_sites g JOIN relay_users u ON u.id=g.user_id WHERE g.user_id=$1 AND g.site_id=$2 AND u.enabled AND u.auth_version=$3)", u.ID, site, u.Version).Scan(&granted)
-	if e != nil || !granted {
+	// Administrators may issue keys for any site; members only for granted sites.
+	var allowed bool
+	e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM relay_users u WHERE u.id=$1 AND u.enabled AND u.auth_version=$3 AND (
+ (u.role='admin' AND EXISTS(SELECT 1 FROM relay_sites WHERE site_id=$2)) OR EXISTS(SELECT 1 FROM relay_user_sites g WHERE g.user_id=u.id AND g.site_id=$2)))`, u.ID, site, u.Version).Scan(&allowed)
+	if e != nil || !allowed {
 		return "", ErrDenied
 	}
 	var n int
