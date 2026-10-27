@@ -4,6 +4,7 @@ Use the [quickstart](quickstart.md) for a new installation. The guides and refer
 
 ## Guides
 
+- [User guide](user-guide.md): every Hub page, what each button does, step-by-step setup recipes and a "what happens if" list for owners and administrators.
 - [Quickstart](quickstart.md): prerequisites, PostgreSQL, configuration, first login and expected readiness output.
 - [Authentication](authentication.md): users, sessions, account grants and API tokens.
 - [Deployment](deployment.md): server setup, updates, restarts, logs and `.env` backup.

@@ -8,6 +8,7 @@ The Hub provides a Frappe-style administration UI, PostgreSQL-backed users and s
 
 | Task | Documentation |
 | --- | --- |
+| Use the admin pages (owner and administrators) | [User guide](docs/user-guide.md) |
 | Understand the system | [Architecture](docs/architecture.md) |
 | Install and configure | [Quickstart](docs/quickstart.md), [configuration](docs/configuration.md) |
 | Deploy a server, update or restart | [Deployment](docs/deployment.md) |
