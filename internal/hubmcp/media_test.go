@@ -66,7 +66,7 @@ func TestAttachmentHTTPContract(t *testing.T) {
 				} else if token != "reader" {
 					return auth.Principal{}, auth.ErrDenied
 				}
-				return auth.Principal{Account: "site-a", Scopes: scopes}, nil
+				return auth.Principal{Site: "site-a", Scopes: scopes}, nil
 			})
 			if err != nil {
 				t.Fatal(err)

@@ -24,7 +24,7 @@ func TestWhatsAppV1Surface(t *testing.T) {
 	}
 	wa.Outbox = &whatsapp.Outbox{Service: wa}
 	h, err := NewAuthenticated(func(context.Context) error { return nil }, wa, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Account: "a", Scopes: []string{"messages:send", "groups:read", "groups:write", "calls:read", "calls:write", "account:read"}}, nil
+		return auth.Principal{Site: "a", Scopes: []string{"messages:send", "groups:read", "groups:write", "calls:read", "calls:write", "account:read"}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

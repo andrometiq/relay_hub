@@ -30,7 +30,7 @@ func TestAccountBindingIsScopedAndContainsNoCredentials(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, err := NewAuthenticatedChannels(db.Ping, nil, func(context.Context, string) (auth.Principal, error) {
-				return auth.Principal{Account: tc.account, Scopes: tc.scopes}, nil
+				return auth.Principal{Site: tc.account, Scopes: tc.scopes}, nil
 			}, nil, channels.Store{DB: db})
 			if err != nil {
 				t.Fatal(err)

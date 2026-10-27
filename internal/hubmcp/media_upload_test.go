@@ -36,7 +36,7 @@ func TestMediaUploadNeedsNoRequestKeyAndReturnsID(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := NewAuthenticated(func(context.Context) error { return nil }, wa, func(ctx context.Context, token string) (auth.Principal, error) {
-		return auth.Principal{UserID: 1, Account: "site-a", Scopes: []string{"messages:send"}}, nil
+		return auth.Principal{UserID: 1, Site: "site-a", Scopes: []string{"messages:send"}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

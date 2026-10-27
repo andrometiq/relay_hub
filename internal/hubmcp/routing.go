@@ -28,7 +28,7 @@ func siteNumbers(ctx context.Context, wa *whatsapp.Service) ([]whatsapp.Account,
 	}
 	numbers := []whatsapp.Account{}
 	for _, a := range wa.AccountsSnapshot() {
-		if a.SiteID == p.Account {
+		if a.SiteID == p.Site {
 			numbers = append(numbers, a)
 		}
 	}
@@ -71,7 +71,7 @@ func whatsappScope(ctx context.Context, wa *whatsapp.Service, channel string) (w
 	if !ok {
 		return whatsapp.Account{}, errors.New("account credential required")
 	}
-	return whatsapp.Account{SiteID: p.Account}, nil
+	return whatsapp.Account{SiteID: p.Site}, nil
 }
 
 // channelKey resolves the Telegram bot or mailbox of one call: the named
@@ -82,12 +82,12 @@ func channelKey(ctx context.Context, registry *channels.Registry, provider, chan
 		return "", errors.New("account credential required")
 	}
 	if channel != "" {
-		if registry.Binding(provider, channel).Site != p.Account {
+		if registry.Binding(provider, channel).Site != p.Site {
 			return "", errForeignChannel
 		}
 		return channel, nil
 	}
-	keys := registry.SiteKeys(provider, p.Account)
+	keys := registry.SiteKeys(provider, p.Site)
 	switch len(keys) {
 	case 1:
 		return keys[0], nil
@@ -104,10 +104,10 @@ func deliveryKey(ctx context.Context, registry *channels.Registry, channel strin
 	if !ok {
 		return "", "", errors.New("account credential required")
 	}
-	if channel != "" && registry.Binding("Telegram", channel).Site != p.Account && registry.Binding("Email", channel).Site != p.Account {
+	if channel != "" && registry.Binding("Telegram", channel).Site != p.Site && registry.Binding("Email", channel).Site != p.Site {
 		return "", "", errForeignChannel
 	}
-	return channel, p.Account, nil
+	return channel, p.Site, nil
 }
 
 // Tool inputs with an optional channel key. The embedded input is what the

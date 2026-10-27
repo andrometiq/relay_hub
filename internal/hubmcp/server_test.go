@@ -179,7 +179,7 @@ func TestProvisionedTokensEnforceAccountAndScopes(t *testing.T) {
 		if token != "test-token" || revoked {
 			return auth.Principal{}, auth.ErrDenied
 		}
-		return auth.Principal{UserID: 1, Account: "site-a", Scopes: []string{"account:read"}}, nil
+		return auth.Principal{UserID: 1, Site: "site-a", Scopes: []string{"account:read"}}, nil
 	})
 	if e != nil {
 		t.Fatal(e)

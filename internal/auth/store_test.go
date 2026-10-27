@@ -105,8 +105,14 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 		t.Fatal(e)
 	}
 	p, e := s.Authenticate(ctx, token)
-	if e != nil || p.Account != "site-a" || !p.Allows("messages:send") || p.Allows("templates:write") {
+	if e != nil || p.Site != "site-a" || !p.Allows("messages:send") || p.Allows("templates:write") {
 		t.Fatal("scope isolation", e)
+	}
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('site-b','https://b.invalid') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	if _, e = s.Issue(ctx, member, "foreign", "site-b", []string{"messages:send"}, 30); e == nil {
+		t.Fatal("token issued for a site the user was not granted")
 	}
 
 	for _, enabled := range []bool{false, true} {

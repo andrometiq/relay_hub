@@ -18,7 +18,7 @@ func TestChannelDeliveryScopesAndResolutionEvidence(t *testing.T) {
 	var scopes []string
 	account := "local"
 	h, err := NewAuthenticatedChannels(db.Ping, nil, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Account: account, Scopes: scopes}, nil
+		return auth.Principal{Site: account, Scopes: scopes}, nil
 	}, &channels.Registry{}, channels.Store{DB: db})
 	if err != nil {
 		t.Fatal(err)
