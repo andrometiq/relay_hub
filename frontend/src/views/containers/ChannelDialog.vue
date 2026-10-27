@@ -8,7 +8,7 @@ import { channelForm, channelPayload, validateChannelForm } from "../../composab
 const props = defineProps({ modelValue: Boolean, container: Object, channelName: String, channel: Object, sites: { type: Array, default: () => [] } });
 const emit = defineEmits(["update:modelValue", "saved"]);
 const form = ref(channelForm("WhatsApp")), errors = ref({}), error = ref(""), notice = ref(""), saving = ref(false);
-const stored = ref(null);
+const stored = ref(null), held = ref(0), replaying = ref(false);
 
 const noun = computed(() => ({ WhatsApp: "WhatsApp number", Telegram: "Telegram bot", Email: "mailbox" })[form.value.channel]);
 const title = computed(() => (stored.value ? stored.value.label || stored.value.key : "Add " + noun.value) + " · " + (props.container?.name || props.container?.id || ""));
@@ -31,8 +31,22 @@ watch(() => props.modelValue, (open) => {
   if (!open) return;
   stored.value = props.channel || null;
   form.value = channelForm(props.channel?.channel || props.channelName, props.channel);
-  errors.value = {}; error.value = ""; notice.value = "";
+  errors.value = {}; error.value = ""; notice.value = ""; held.value = 0;
+  if (props.channel?.site) adminApi.heldEvents(props.channel).then((data) => { held.value = data.count; }).catch(() => {});
 });
+
+async function replayHeld() {
+  replaying.value = true; error.value = "";
+  try {
+    const data = await adminApi.replayHeld(stored.value);
+    notice.value = `${data.replayed} held messages sent to the site.`;
+    held.value = 0;
+  } catch (exception) {
+    error.value = exception.message;
+  } finally {
+    replaying.value = false;
+  }
+}
 
 async function check(channel) {
   try {
@@ -133,6 +147,7 @@ async function save() {
         <FormControl v-if="stored" v-model="form.enabled" type="checkbox" label="Account enabled" class="admin-full" />
       </form>
       <div v-if="stored && form.channel !== 'WhatsApp'" class="mt-4"><ForwardTargets :provider="form.channel" :scope-key="stored.key" /></div>
+      <div v-if="held > 0 && stored?.site" class="admin-note mt-4"><FeatherIcon name="inbox" /><p>{{ held }} messages came while this account had no site. They are held in the Hub.</p><Button :label="`Replay held messages (${held})`" :loading="replaying" @click="replayHeld" /></div>
       <p v-if="notice" role="status" class="feedback-panel mt-4">{{ notice }}</p>
       <ErrorMessage :message="error" />
     </template>

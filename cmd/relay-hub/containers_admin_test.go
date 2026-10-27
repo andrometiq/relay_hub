@@ -282,3 +282,31 @@ func TestPublicWebhookIDsNeverChange(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectoryAdminReplaysHeldMessages(t *testing.T) {
+	c := newDirectoryClient(t)
+	ctx := context.Background()
+	c.expect(201, "POST", "/api/containers", map[string]any{"id": "box", "enabled": true})
+	c.expect(204, "POST", "/api/containers/box/channels", map[string]any{"key": "sales", "channel": "WhatsApp", "label": "Sales", "enabled": false, "config": map[string]any{"phone_id": "101", "waba_id": "201"}})
+	c.expect(204, "POST", "/api/sites", map[string]any{"id": "shop", "origin": "https://shop.invalid", "enabled": true})
+	if _, err := c.store.DB.Exec(ctx, `INSERT INTO relay_whatsapp_events(account,digest,payload,lane) VALUES('sales','held','{}','realtime')`); err != nil {
+		t.Fatal(err)
+	}
+	if body := c.expect(200, "GET", "/api/channels/WhatsApp/sales/held", nil).Body.String(); strings.TrimSpace(body) != `{"count":1}` {
+		t.Fatalf("held count: %s", body)
+	}
+	c.expect(409, "POST", "/api/channels/WhatsApp/sales/held/replay", map[string]any{})
+	c.expect(404, "GET", "/api/channels/WhatsApp/missing/held", nil)
+	c.role = "member"
+	c.expect(403, "POST", "/api/channels/WhatsApp/sales/held/replay", map[string]any{})
+	c.role = "admin"
+	if _, err := c.store.DB.Exec(ctx, `UPDATE relay_channel_credentials SET site_id='shop' WHERE channel_key='sales'`); err != nil {
+		t.Fatal(err)
+	}
+	if body := c.expect(200, "POST", "/api/channels/WhatsApp/sales/held/replay", map[string]any{}).Body.String(); strings.TrimSpace(body) != `{"replayed":1}` {
+		t.Fatalf("replay: %s", body)
+	}
+	if body := c.expect(200, "GET", "/api/channels/WhatsApp/sales/held", nil).Body.String(); strings.TrimSpace(body) != `{"count":0}` {
+		t.Fatalf("held after replay: %s", body)
+	}
+}

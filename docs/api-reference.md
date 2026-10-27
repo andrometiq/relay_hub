@@ -295,6 +295,7 @@ The administration routes are browser-session APIs, not a second public messagin
 | `GET`, `POST /api/sites`; `GET`, `PUT /api/sites/{site}` | List, create, read and edit sites and their Core credentials |
 | `PUT /api/sites/{site}/channels` | Set the full channel list of a site; 409 when a channel is on another site or has unfinished sends |
 | `GET /api/unassigned-events`; `POST /api/unassigned-events/replay` | List events of channels without a site; replay `{channel, ids}` to the channel's site now |
+| `GET /api/channels/{channel}/{key}/held`; `POST /api/channels/{channel}/{key}/held/replay` | Count the held events of one account (`{count}`); give all of them to its linked site (`{replayed}`). The replay returns 409 when the account has no site. Linking an account to a site replays its held events by itself |
 | `GET`, `POST /api/forwards/{provider}/{key}`; `DELETE /api/forwards/{provider}/{key}/{id}` | List the forward targets, the newest 50 results (`?before={id}` for older) and counts; add a target `{url}` (201); remove a target and its results (204). `provider` is `whatsapp` with the container ID, or `telegram`/`email` with the channel key. See [webhook forwarding](configuration.md#webhook-forwarding). |
 | `GET /api/accounts`, `POST /api/accounts`, `POST /api/accounts/reload` | Older account view and save |
 | `GET /api/accounts/{key}/telegram/webhook`, `GET /api/accounts/{key}/email/webhook` | Derived ingress secret and path of a bot or mailbox |
