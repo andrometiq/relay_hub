@@ -140,20 +140,6 @@ test('delivery and event pickers list one channel type of each site', () => {
   assert.deepEqual(siteChannelOptions(sites, 'Email'), []);
 });
 
-test('turning off an old address deletes it for the container or one channel', async t => {
-  const requests = [];
-  t.mock.method(globalThis, 'fetch', async (url, options) => {
-    requests.push([options.method, url]);
-    return new Response(null, { status: 204 });
-  });
-  await adminApi.turnOffOldAddress('ct 1');
-  await adminApi.turnOffOldAddress('ct 1', { channel: 'Telegram', key: 'sales/bot' });
-  assert.deepEqual(requests, [
-    ['DELETE', './api/containers/ct%201/old-address'],
-    ['DELETE', './api/containers/ct%201/channels/Telegram/sales%2Fbot/old-address'],
-  ]);
-});
-
 test('connections list one row per channel with its container and site', () => {
   const containers = [{ id: 'ct_1', name: 'Essdee', channels: [
     { channel: 'WhatsApp', key: 'sales', label: 'Sales', site: 'site-a', config: { display_number: '+91 90000 00101' } },

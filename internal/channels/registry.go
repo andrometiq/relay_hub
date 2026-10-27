@@ -135,9 +135,6 @@ func Load(rows []containers.RuntimeCredential) (*Registry, error) {
 		if v.Channel == "Telegram" || v.Channel == "Email" {
 			r.Bindings[v.Channel+"/"+v.Key] = Binding{Site: v.Site, To: DisplayAddress(v), Path: v.WebhookID}
 			r.Paths[v.Channel+"/"+v.WebhookID] = v.Key
-			if v.LegacyPath {
-				r.Paths[v.Channel+"/"+v.Key] = v.Key
-			}
 		}
 		switch v.Channel {
 		case "Telegram":

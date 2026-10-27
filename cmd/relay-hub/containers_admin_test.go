@@ -229,47 +229,42 @@ func TestNewContainersGetRandomPublicWebhookPaths(t *testing.T) {
 	}
 }
 
-func TestTurnOffOldAddressStopsTheReadablePath(t *testing.T) {
+func TestPublicWebhookIDsNeverChange(t *testing.T) {
 	c := newDirectoryClient(t)
 	ctx := context.Background()
 	var body map[string]string
-	json.Unmarshal(c.expect(201, "POST", "/api/containers", map[string]any{"name": "Old", "enabled": true}).Body.Bytes(), &body)
+	json.Unmarshal(c.expect(201, "POST", "/api/containers", map[string]any{"name": "Stable", "enabled": true}).Body.Bytes(), &body)
 	id := body["id"]
-	c.expect(204, "POST", "/api/containers/"+id+"/channels", map[string]any{"secret": "500002:bot-two-secret-abcdefghijklmnopqrstu",
-		"key": "old-bot", "channel": "Telegram", "label": "Old bot", "enabled": true, "config": map[string]any{"username": "old_bot"}})
-	if _, err := c.store.DB.Exec(ctx, `UPDATE relay_containers SET legacy_path=true WHERE container_id=$1`, id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.store.DB.Exec(ctx, `UPDATE relay_channel_credentials SET legacy_path=true WHERE channel_key='old-bot'`); err != nil {
-		t.Fatal(err)
-	}
-	answers := func() bool {
-		rows, err := c.store.Runtime(ctx)
+	bot := map[string]any{"secret": "500002:bot-two-secret-abcdefghijklmnopqrstu",
+		"key": "stable-bot", "channel": "Telegram", "label": "Stable bot", "enabled": true, "config": map[string]any{"username": "stable_bot"}}
+	c.expect(204, "POST", "/api/containers/"+id+"/channels", bot)
+	paths := func() (string, string) {
+		container, err := c.store.GetContainer(ctx, id)
 		if err != nil {
 			t.Fatal(err)
 		}
-		registry, err := channels.Load(rows)
+		channel, err := c.store.GetChannel(ctx, containers.ChannelRef{Channel: "Telegram", Key: "stable-bot"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, ok := registry.WebhookKey("Telegram", "old-bot")
-		return ok
+		return container.WebhookPath, channel.WebhookPath
 	}
-	container, _ := c.store.GetContainer(ctx, id)
-	bot, _ := c.store.GetChannel(ctx, containers.ChannelRef{Channel: "Telegram", Key: "old-bot"})
-	if !container.OldAddress || !bot.OldAddress || !answers() {
-		t.Fatal("old address is not on before the action")
+	containerPath, botPath := paths()
+	if containerPath != body["webhook_path"] || botPath == "" {
+		t.Fatalf("paths at creation: %q %q", containerPath, botPath)
 	}
-
-	reloads := c.reloads
-	c.expect(204, "DELETE", "/api/containers/"+id+"/channels/Telegram/old-bot/old-address", nil)
-	c.expect(204, "DELETE", "/api/containers/"+id+"/old-address", nil)
-	container, _ = c.store.GetContainer(ctx, id)
-	bot, _ = c.store.GetChannel(ctx, containers.ChannelRef{Channel: "Telegram", Key: "old-bot"})
-	if container.OldAddress || bot.OldAddress || answers() || c.reloads != reloads+2 {
-		t.Fatalf("old address still on: container=%v bot=%v reloads=%d", container.OldAddress, bot.OldAddress, c.reloads-reloads)
+	delete(bot, "secret")
+	for _, name := range []string{"Stable one", "Stable two"} {
+		c.expect(204, "PUT", "/api/containers/"+id, map[string]any{"name": name, "enabled": true})
+		bot["label"] = name
+		c.expect(204, "PUT", "/api/containers/"+id+"/channels/Telegram/stable-bot", bot)
+		c.expect(200, "GET", "/api/containers/"+id, nil)
+		c.expect(200, "GET", "/api/containers/"+id+"/whatsapp/webhook", nil)
+		if _, err := c.store.Runtime(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if container, channel := paths(); container != containerPath || channel != botPath {
+			t.Fatalf("public id changed: %q -> %q, %q -> %q", containerPath, container, botPath, channel)
+		}
 	}
-	c.expect(404, "DELETE", "/api/containers/missing/old-address", nil)
-	c.role = "viewer"
-	c.expect(403, "DELETE", "/api/containers/"+id+"/old-address", nil)
 }

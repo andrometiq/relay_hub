@@ -21,18 +21,6 @@ const webhookURL = computed(() => (stored.value?.webhook_path ? hubURL(stored.va
 async function copyWebhook() {
   try { await navigator.clipboard.writeText(webhookURL.value); notice.value = "Webhook URL copied."; } catch { notice.value = "Copy failed; select the URL and copy it."; }
 }
-async function turnOffOldAddress() {
-  if (!window.confirm("Turn off the old readable webhook address? Only the random address will work.")) return;
-  error.value = "";
-  try {
-    await adminApi.turnOffOldAddress(props.container.id, stored.value);
-    stored.value = { ...stored.value, old_address: false };
-    notice.value = "Old address turned off.";
-    emit("saved");
-  } catch (exception) {
-    error.value = exception.message;
-  }
-}
 const placeholder = (name, blank) => (form.value.configured.includes(name) ? "Saved — leave blank to keep" : blank);
 
 function withCurrent(options, value) {
@@ -137,7 +125,6 @@ async function save() {
           <FormControl v-model="form.site" type="select" aria-label="Link to site" placeholder="Not linked" :options="siteOptions" />
         </div>
         <div v-if="form.channel === 'Email' && webhookURL" class="webhook-address admin-full"><div><span>Inbound webhook URL</span><code>{{ webhookURL }}</code></div><Button label="Copy" icon-left="copy" @click="copyWebhook" /></div>
-        <div v-if="stored?.old_address" class="webhook-address admin-full"><div><span>Old address</span><code>{{ hubURL(`/webhooks/${form.channel.toLowerCase()}/${stored.key}`) }}</code></div><Button label="Turn off old address" @click="turnOffOldAddress" /></div>
         <FormControl v-if="stored" v-model="form.enabled" type="checkbox" label="Account enabled" class="admin-full" />
       </form>
       <div v-if="stored && form.channel !== 'WhatsApp'" class="mt-4"><ForwardTargets :provider="form.channel" :scope-key="stored.key" /></div>

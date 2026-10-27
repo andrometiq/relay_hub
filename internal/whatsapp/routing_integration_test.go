@@ -169,10 +169,6 @@ func TestContainerKeyIsNotAPublicPath(t *testing.T) {
 	if len(webhookAccounts([]Account{a}, "essdee-main")) != 0 || len(webhookAccounts([]Account{a}, a.WebhookID)) != 1 {
 		t.Fatal("new container answered on its key")
 	}
-	a.LegacyWebhook = true
-	if len(webhookAccounts([]Account{a}, "essdee-main")) != 1 {
-		t.Fatal("an existing container lost its old path")
-	}
 	s, err := New([]Account{a})
 	if err != nil {
 		t.Fatal(err)
