@@ -49,7 +49,7 @@ func TestTelegramGroupMCPFailureMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, nil, func(context.Context, string) (auth.Principal, error) {
-				return auth.Principal{Account: "a", Scopes: []string{"groups:write"}}, nil
+				return auth.Principal{Site: "a", Scopes: []string{"groups:write"}}, nil
 			}, &channels.Registry{Telegram: map[string]*telegram.Client{"a": client}})
 			if err != nil {
 				t.Fatal(err)
@@ -110,7 +110,7 @@ func TestTelegramCredentialReloadReachesExistingMCPHandler(t *testing.T) {
 	newToken := "123456:" + strings.Repeat("b", 24)
 	registry := &channels.Registry{Telegram: map[string]*telegram.Client{"a": newClient(oldToken)}}
 	h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, nil, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Account: "a", Scopes: []string{"messages:send"}}, nil
+		return auth.Principal{Site: "a", Scopes: []string{"messages:send"}}, nil
 	}, registry)
 	if err != nil {
 		t.Fatal(err)

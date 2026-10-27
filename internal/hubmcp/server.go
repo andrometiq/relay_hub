@@ -151,14 +151,14 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			}
 			var site string
 			var enabled bool
-			if e := db.QueryRow(ctx, `SELECT origin,enabled FROM relay_sites WHERE site_id=$1`, principal.Account).Scan(&site, &enabled); e != nil || !enabled {
+			if e := db.QueryRow(ctx, `SELECT origin,enabled FROM relay_sites WHERE site_id=$1`, principal.Site).Scan(&site, &enabled); e != nil || !enabled {
 				return nil, nil, errors.New("account unavailable")
 			}
-			list, err := siteChannels(ctx, db, principal.Account)
+			list, err := siteChannels(ctx, db, principal.Site)
 			if err != nil {
 				return nil, nil, errors.New("channels unavailable")
 			}
-			return nil, map[string]any{"account": principal.Account, "site": site, "enabled": enabled, "channels": list}, nil
+			return nil, map[string]any{"account": principal.Site, "site": site, "enabled": enabled, "channels": list}, nil
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: "site.get", Description: "Read this token's site and its channels; no credentials are returned."}, siteTool)
 		mcp.AddTool(server, &mcp.Tool{Name: "account.get", Description: "Alias of site.get for older clients."}, siteTool)
@@ -167,7 +167,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if !ok || !allowed(ctx, "account:read") {
 				return nil, nil, errors.New("account:read required")
 			}
-			list, err := siteChannels(ctx, db, principal.Account)
+			list, err := siteChannels(ctx, db, principal.Site)
 			if err != nil {
 				return nil, nil, errors.New("channels unavailable")
 			}

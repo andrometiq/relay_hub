@@ -23,7 +23,7 @@ func TestWhatsAppToolErrorsCarryMetaDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, err := NewAuthenticated(func(context.Context) error { return nil }, wa, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Account: "a", Scopes: []string{"templates:read"}}, nil
+		return auth.Principal{Site: "a", Scopes: []string{"templates:read"}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

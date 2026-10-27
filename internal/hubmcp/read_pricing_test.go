@@ -41,7 +41,7 @@ func readPricingHandler(t *testing.T, scopes []string, calls *atomic.Int32) http
 		t.Fatal(err)
 	}
 	handler, err := NewAuthenticated(func(context.Context) error { return nil }, wa, func(ctx context.Context, token string) (auth.Principal, error) {
-		return auth.Principal{UserID: 1, Account: "site-a", Scopes: scopes}, nil
+		return auth.Principal{UserID: 1, Site: "site-a", Scopes: scopes}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

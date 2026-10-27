@@ -29,10 +29,11 @@ type User struct {
 	Enabled  bool   `json:"enabled"`
 	Version  int64  `json:"-"`
 }
+// Principal is an API token holder: the user, the site the token is bound to and its scopes.
 type Principal struct {
-	UserID  int64
-	Account string
-	Scopes  []string
+	UserID int64
+	Site   string
+	Scopes []string
 }
 
 func (p Principal) Allows(scope string) bool {
@@ -224,7 +225,7 @@ func (s *Store) Authenticate(ctx context.Context, token string) (Principal, erro
 	if !strings.HasPrefix(token, "relay_") || len(token) != 70 {
 		return p, ErrDenied
 	}
-	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.site_id,t.scopes FROM relay_api_tokens t JOIN relay_sites a ON a.site_id=t.site_id AND a.enabled JOIN relay_users u ON u.id=t.user_id JOIN relay_user_sites g ON g.user_id=u.id AND g.site_id=t.site_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled`, Hash(token)).Scan(&p.UserID, &p.Account, &p.Scopes)
+	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.site_id,t.scopes FROM relay_api_tokens t JOIN relay_sites a ON a.site_id=t.site_id AND a.enabled JOIN relay_users u ON u.id=t.user_id JOIN relay_user_sites g ON g.user_id=u.id AND g.site_id=t.site_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled`, Hash(token)).Scan(&p.UserID, &p.Site, &p.Scopes)
 	if e != nil {
 		return p, ErrDenied
 	}
@@ -316,9 +317,9 @@ func (s *Store) SetEnabled(ctx context.Context, actor User, target int64, enable
 	}
 	return tx.Commit(ctx)
 }
-func (s *Store) Grant(ctx context.Context, actor User, target int64, account string, allow bool) error {
-	if account == "" || len(account) > 100 {
-		return errors.New("invalid account")
+func (s *Store) Grant(ctx context.Context, actor User, target int64, site string, allow bool) error {
+	if site == "" || len(site) > 100 {
+		return errors.New("invalid site")
 	}
 	tx, e := s.DB.Begin(ctx)
 	if e != nil {
@@ -332,11 +333,11 @@ func (s *Store) Grant(ctx context.Context, actor User, target int64, account str
 		return e
 	}
 	if allow {
-		_, e = tx.Exec(ctx, "INSERT INTO relay_user_sites(user_id,site_id) VALUES($1,$2) ON CONFLICT DO NOTHING", target, account)
+		_, e = tx.Exec(ctx, "INSERT INTO relay_user_sites(user_id,site_id) VALUES($1,$2) ON CONFLICT DO NOTHING", target, site)
 	} else {
-		_, e = tx.Exec(ctx, "DELETE FROM relay_user_sites WHERE user_id=$1 AND site_id=$2", target, account)
+		_, e = tx.Exec(ctx, "DELETE FROM relay_user_sites WHERE user_id=$1 AND site_id=$2", target, site)
 		if e == nil {
-			_, e = tx.Exec(ctx, "UPDATE relay_api_tokens SET revoked_at=now() WHERE user_id=$1 AND site_id=$2 AND revoked_at IS NULL", target, account)
+			_, e = tx.Exec(ctx, "UPDATE relay_api_tokens SET revoked_at=now() WHERE user_id=$1 AND site_id=$2 AND revoked_at IS NULL", target, site)
 		}
 	}
 	if e != nil {
@@ -347,7 +348,7 @@ func (s *Store) Grant(ctx context.Context, actor User, target int64, account str
 	}
 	return tx.Commit(ctx)
 }
-func (s *Store) Issue(ctx context.Context, u User, name, account string, scopes []string, days int) (string, error) {
+func (s *Store) Issue(ctx context.Context, u User, name, site string, scopes []string, days int) (string, error) {
 	if len(name) < 1 || len(name) > 100 || days < 0 || days > 90 || len(scopes) == 0 || len(scopes) > len(Scopes) {
 		return "", errors.New("token requires a name, scopes and expiry of 0 (no expiry) or 1–90 days")
 	}
@@ -373,7 +374,7 @@ func (s *Store) Issue(ctx context.Context, u User, name, account string, scopes 
 		return "", e
 	}
 	var granted bool
-	e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM relay_user_sites g JOIN relay_users u ON u.id=g.user_id WHERE g.user_id=$1 AND g.site_id=$2 AND u.enabled AND u.auth_version=$3)", u.ID, account, u.Version).Scan(&granted)
+	e = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM relay_user_sites g JOIN relay_users u ON u.id=g.user_id WHERE g.user_id=$1 AND g.site_id=$2 AND u.enabled AND u.auth_version=$3)", u.ID, site, u.Version).Scan(&granted)
 	if e != nil || !granted {
 		return "", ErrDenied
 	}
@@ -390,7 +391,7 @@ func (s *Store) Issue(ctx context.Context, u User, name, account string, scopes 
 	if days == 0 {
 		expiry = pgtype.Timestamptz{InfinityModifier: pgtype.Infinity, Valid: true}
 	}
-	e = tx.QueryRow(ctx, "INSERT INTO relay_api_tokens(user_id,name,token_hash,site_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id", u.ID, name, Hash(token), account, scopes, expiry).Scan(&id)
+	e = tx.QueryRow(ctx, "INSERT INTO relay_api_tokens(user_id,name,token_hash,site_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id", u.ID, name, Hash(token), site, scopes, expiry).Scan(&id)
 	if e != nil {
 		return "", e
 	}

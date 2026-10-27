@@ -73,7 +73,7 @@ func TestChannelMCPPendingRetryWithoutRequestKey(t *testing.T) {
 				}
 			}
 			handler, err := NewAuthenticatedChannels(db.Ping, nil, func(context.Context, string) (auth.Principal, error) {
-				return auth.Principal{Account: "fixture", Scopes: []string{"messages:send", "messages:read", "deliveries:read"}}, nil
+				return auth.Principal{Site: "fixture", Scopes: []string{"messages:send", "messages:read", "deliveries:read"}}, nil
 			}, registry, channels.Store{DB: db})
 			if err != nil {
 				t.Fatal(err)

@@ -27,7 +27,7 @@ func TestTypingAccountAndScope(t *testing.T) {
 		fail           bool
 	}{{"a", "messages:send", false}, {"a", "messages:read", true}, {"other", "messages:send", true}} {
 		h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, nil, func(context.Context, string) (auth.Principal, error) {
-			return auth.Principal{Account: tc.account, Scopes: []string{tc.scope}}, nil
+			return auth.Principal{Site: tc.account, Scopes: []string{tc.scope}}, nil
 		}, &channels.Registry{Telegram: map[string]*telegram.Client{"a": client}})
 		if err != nil {
 			t.Fatal(err)
