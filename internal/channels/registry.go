@@ -82,7 +82,7 @@ func Load(rows []containers.RuntimeCredential) (*Registry, error) {
 	r := &Registry{Telegram: map[string]*telegram.Client{}, Email: map[string]*relayemail.Client{}, Bindings: map[string]Binding{}}
 	for _, v := range rows {
 		if v.Channel == "Telegram" || v.Channel == "Email" {
-			r.Bindings[v.Channel+"/"+v.Key] = Binding{Site: v.Site, To: displayAddress(v)}
+			r.Bindings[v.Channel+"/"+v.Key] = Binding{Site: v.Site, To: DisplayAddress(v)}
 		}
 		switch v.Channel {
 		case "Telegram":
@@ -279,7 +279,8 @@ func (r *Registry) TelegramTyping(ctx context.Context, account string, input tel
 }
 
 // displayAddress is the bot username or mailbox shown to Core as "to".
-func displayAddress(v containers.RuntimeCredential) string {
+// DisplayAddress is the bot username, mailbox address or stored address of a channel.
+func DisplayAddress(v containers.RuntimeCredential) string {
 	if v.Channel == "Telegram" {
 		if name, _ := v.Config["username"].(string); name != "" {
 			return "@" + strings.TrimPrefix(name, "@")

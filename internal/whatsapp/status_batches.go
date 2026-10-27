@@ -28,6 +28,8 @@ type CompactStatus struct {
 	RecipientType string `json:"recipient_type,omitempty"`
 	Status        string `json:"status"`
 	Timestamp     int64  `json:"timestamp"`
+	ChannelKey    string `json:"channel_key,omitempty"`
+	To            string `json:"to,omitempty"`
 }
 
 // buildStatusBatch works only on immutable, ascending status-lane events.
@@ -104,7 +106,7 @@ func buildStatusBatchLimit(events []Event, start StatusCursor, byteLimit, limit 
 			if err != nil || stamp < 0 || len(raw.ID) == 0 || len(raw.ID) > 300 || len(raw.Recipient) == 0 || len(raw.Recipient) > 200 || len(raw.Participant) > 200 || (raw.RecipientType != "" && raw.RecipientType != "group" && raw.RecipientType != "individual") || (raw.Participant != "" && raw.RecipientType != "group") {
 				return nil, start, &receiptError{Position: i}
 			}
-			row := CompactStatus{EventID: event.ID, Position: i, MessageID: raw.ID, Recipient: raw.Recipient, Participant: raw.Participant, RecipientType: raw.RecipientType, Status: raw.Status, Timestamp: stamp}
+			row := CompactStatus{EventID: event.ID, Position: i, MessageID: raw.ID, Recipient: raw.Recipient, Participant: raw.Participant, RecipientType: raw.RecipientType, Status: raw.Status, Timestamp: stamp, ChannelKey: event.ChannelKey, To: event.To}
 			encoded, err := json.Marshal(row)
 			if err != nil {
 				return nil, start, err

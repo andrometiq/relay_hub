@@ -19,6 +19,9 @@ import (
 type Event struct {
 	ID      int64           `json:"id"`
 	Payload json.RawMessage `json:"payload"`
+	// ChannelKey and To name the number that received or sent the event.
+	ChannelKey string `json:"channel_key,omitempty"`
+	To         string `json:"to,omitempty"`
 }
 type EventStore interface {
 	Save(context.Context, string, []byte) error

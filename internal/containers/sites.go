@@ -94,6 +94,38 @@ func (s *Store) SiteCredentials(ctx context.Context, id string) (CoreCredentials
 	return CoreCredentials{APIKey: private["core_api_key"], APISecret: private["core_api_secret"], CallbackSecret: private["callback_secret"]}, nil
 }
 
+// SiteCallback is an enabled site that can receive callbacks.
+type SiteCallback struct {
+	ID, Origin string
+	Core       CoreCredentials
+}
+
+// CallbackSites lists enabled sites with complete Core credentials, for in-process use only.
+func (s *Store) CallbackSites(ctx context.Context) ([]SiteCallback, error) {
+	rows, err := s.DB.Query(ctx, `SELECT site_id,origin,secret_ciphertext,secret_nonce FROM relay_sites WHERE enabled ORDER BY site_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []SiteCallback{}
+	for rows.Next() {
+		var site SiteCallback
+		var cipher, nonce []byte
+		if err = rows.Scan(&site.ID, &site.Origin, &cipher, &nonce); err != nil {
+			return nil, err
+		}
+		private, err := s.configSecrets(cipher, nonce)
+		if err != nil {
+			return nil, err
+		}
+		site.Core = CoreCredentials{APIKey: private["core_api_key"], APISecret: private["core_api_secret"], CallbackSecret: private["callback_secret"]}
+		if site.Core.Complete() {
+			result = append(result, site)
+		}
+	}
+	return result, rows.Err()
+}
+
 // SaveSite creates or updates a site. Secrets holds write-only core_api_key,
 // core_api_secret and callback_secret; blank values keep stored values.
 func (s *Store) SaveSite(ctx context.Context, site Site, secrets map[string]any, create bool) error {

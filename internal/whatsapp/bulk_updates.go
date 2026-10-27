@@ -17,14 +17,16 @@ const DefaultBulkWindow = 30 * time.Second
 
 // BulkUpdate is the latest coalesced state of one bulk outbox row.
 type BulkUpdate struct {
-	ID        int64           `json:"id"`
-	Key       string          `json:"key"`
-	State     string          `json:"state"`
-	MessageID string          `json:"message_id"`
-	Status    string          `json:"status"`
-	Error     json.RawMessage `json:"error,omitempty"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	changed   time.Time
+	ID         int64           `json:"id"`
+	Key        string          `json:"key"`
+	State      string          `json:"state"`
+	MessageID  string          `json:"message_id"`
+	Status     string          `json:"status"`
+	Error      json.RawMessage `json:"error,omitempty"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	ChannelKey string          `json:"channel_key,omitempty"`
+	To         string          `json:"to,omitempty"`
+	changed    time.Time
 }
 
 // ParseBulkWindow reads RELAY_BULK_UPDATE_WINDOW; empty keeps the default.
@@ -49,6 +51,7 @@ func (d *CallbackDispatcher) bulkWindow() time.Duration {
 // deliverBulk sends one window of bulk changes. A row changed after it was
 // read stays pending, so its newer state is reported in a later window.
 func (d *CallbackDispatcher) deliverBulk(ctx context.Context, a Account) error {
+	normalizeAccount(&a)
 	started := time.Now()
 	c, err := pgx.Connect(ctx, d.URL)
 	if err != nil {
@@ -73,7 +76,10 @@ func (d *CallbackDispatcher) deliverBulk(ctx context.Context, a Account) error {
 	if err != nil || len(updates) == 0 {
 		return err
 	}
-	ack, err := d.post(ctx, a, "/api/method/relay_core.inbound.receive_bulk_updates", map[string]any{"account": a.ID, "updates": updates}, len(updates), started)
+	for i := range updates {
+		updates[i].ChannelKey, updates[i].To = a.ID, a.To()
+	}
+	ack, err := d.post(ctx, a, "/api/method/relay_core.inbound.receive_bulk_updates", map[string]any{"account": a.SiteID, "channel_key": a.ID, "updates": updates}, len(updates), started)
 	if err != nil {
 		return err
 	}
@@ -87,7 +93,10 @@ func (d *CallbackDispatcher) deliverBulk(ctx context.Context, a Account) error {
 		}
 		return errors.New("Core did not acknowledge bulk updates")
 	}
-	return acknowledgeBulk(saveCtx, c, a.ID, updates)
+	if err = acknowledgeBulk(saveCtx, c, a.ID, updates); err != nil {
+		return err
+	}
+	return touchSite(saveCtx, c, a.SiteID)
 }
 
 func pendingBulkUpdates(ctx context.Context, c *pgx.Conn, account string) ([]BulkUpdate, error) {

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"maps"
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
@@ -25,18 +26,34 @@ func (d *CallbackDispatcher) runStatusCallbacks(ctx context.Context) {
 			accounts := append([]RuntimeCallback(nil), d.Accounts...)
 			d.mu.RUnlock()
 			jobs := []callbackworker.Job{}
-			seen := map[string]bool{}
-			for _, a := range accounts {
-				if seen[a.Account] {
-					continue
-				}
-				seen[a.Account] = true
+			for _, a := range statusTargets(accounts) {
 				jobs = append(jobs, callbackworker.Job{Key: a.Account + ":statuses", Run: func(jobCtx context.Context) { _ = d.deliverStatuses(jobCtx, a) }})
 			}
 			return jobs
 		})
 	})
 }
+// statusTargets joins the entries of one key: the status journal is per key,
+// and a legacy key serves both a bot and a mailbox.
+func statusTargets(accounts []RuntimeCallback) []RuntimeCallback {
+	byKey := map[string]int{}
+	result := []RuntimeCallback{}
+	for _, a := range accounts {
+		i, seen := byKey[a.Account]
+		if !seen {
+			byKey[a.Account] = len(result)
+			a.To = maps.Clone(a.To)
+			result = append(result, a)
+			continue
+		}
+		if result[i].To == nil {
+			result[i].To = map[string]string{}
+		}
+		maps.Copy(result[i].To, a.To)
+	}
+	return result
+}
+
 func (d *CallbackDispatcher) deliverStatuses(ctx context.Context, a RuntimeCallback) error {
 	c, err := pgx.Connect(ctx, d.URL)
 	if err != nil {
@@ -79,11 +96,21 @@ func (d *CallbackDispatcher) deliverStatuses(ctx context.Context, a RuntimeCallb
 	if err = AcknowledgeStatusReceipts(saveCtx, c, a.Account, ids); err != nil {
 		return err
 	}
-	_, err = c.Exec(saveCtx, `UPDATE relay_channel_status_schedule SET failures=0,next_attempt=now() WHERE account=$1`, a.Account)
-	return err
+	if _, err = c.Exec(saveCtx, `UPDATE relay_channel_status_schedule SET failures=0,next_attempt=now() WHERE account=$1`, a.Account); err != nil {
+		return err
+	}
+	return touchSite(saveCtx, c, a.SiteID)
 }
 func postStatusBatch(ctx context.Context, a RuntimeCallback, batch []StatusReceipt) error {
-	raw, err := json.Marshal(map[string]any{"account": a.Account, "statuses": batch})
+	for i := range batch {
+		batch[i].ChannelKey = a.Account
+		if strings.HasPrefix(batch[i].Operation, "telegram.") {
+			batch[i].To = a.to("Telegram")
+		} else {
+			batch[i].To = a.to("Email")
+		}
+	}
+	raw, err := json.Marshal(map[string]any{"account": a.site(), "channel_key": a.Account, "statuses": batch})
 	if err != nil {
 		return err
 	}
