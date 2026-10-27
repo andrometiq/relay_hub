@@ -170,6 +170,7 @@ func queueable(in Input, bulk bool) error {
 	}
 	return errors.New("operation cannot be queued")
 }
+
 // outboxScope is the filter of a delivery read or change: one number, the
 // numbers of one site, or one number within one site. A site sees only the
 // sends it made, also after a number moves to another site.

@@ -39,6 +39,7 @@ func (o Outbox) scope(account string) error {
 	}
 	return nil
 }
+
 type Delivery struct {
 	ID        int64          `json:"id"`
 	Operation string         `json:"operation"`

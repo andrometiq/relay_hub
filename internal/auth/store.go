@@ -29,6 +29,7 @@ type User struct {
 	Enabled  bool   `json:"enabled"`
 	Version  int64  `json:"-"`
 }
+
 // Principal is an API token holder: the user, the site the token is bound to and its scopes.
 type Principal struct {
 	UserID int64

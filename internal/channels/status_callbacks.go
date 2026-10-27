@@ -8,10 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"maps"
 	"github.com/andrometiq/relay_hub/internal/callbackworker"
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -33,6 +33,7 @@ func (d *CallbackDispatcher) runStatusCallbacks(ctx context.Context) {
 		})
 	})
 }
+
 // statusTargets joins the entries of one key: the status journal is per key,
 // and a legacy key serves both a bot and a mailbox.
 func statusTargets(accounts []RuntimeCallback) []RuntimeCallback {

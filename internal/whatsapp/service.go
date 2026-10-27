@@ -23,12 +23,12 @@ import (
 // site it is assigned to (empty while unassigned), and ContainerID the Meta app
 // container whose app secret signs its webhooks.
 type Account struct {
-	SiteID            string `json:"site_id,omitempty"`
-	ContainerID       string `json:"container_id,omitempty"`
+	SiteID      string `json:"site_id,omitempty"`
+	ContainerID string `json:"container_id,omitempty"`
 	// WebhookID is the random public callback path of the container. A
 	// container from before random paths also answers on its key (LegacyWebhook).
-	WebhookID     string `json:"webhook_id,omitempty"`
-	LegacyWebhook bool   `json:"legacy_webhook,omitempty"`
+	WebhookID         string `json:"webhook_id,omitempty"`
+	LegacyWebhook     bool   `json:"legacy_webhook,omitempty"`
 	Label             string `json:"label,omitempty"`
 	DisplayNumber     string `json:"display_number,omitempty"`
 	AppID             string `json:"app_id,omitempty"`
