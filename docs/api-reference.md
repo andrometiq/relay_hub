@@ -1,19 +1,19 @@
 # MCP and message API reference
 
-This reference describes the registered Hub tools and typed adapter inputs reviewed on **2026-09-23**. Examples use synthetic identifiers. Sending examples make provider mutations when used with configured accounts; they are not a simulation switch.
+This reference describes the registered Hub tools and typed adapter inputs reviewed on **2026-09-23**. Examples use synthetic identifiers. Sending examples make provider mutations when used with configured channels; they are not a simulation switch.
 
-## Transport and account binding
+## Transport and site binding
 
 Connect a server-side MCP client to `/mcp`, or `/hub/mcp` through the review mount. Relay uses stateless Streamable HTTP with JSON responses and protocol version `2025-06-18`. Send:
 
 ```text
-Authorization: Bearer <account-scoped Hub API token>
+Authorization: Bearer <site-scoped Hub API token>
 Content-Type: application/json
 Accept: application/json, text/event-stream
 MCP-Protocol-Version: 2025-06-18
 ```
 
-Initialize the MCP connection before listing or calling tools. The client is bound to the token's account; message inputs cannot override that account or supply provider credentials. Browser `Origin` requests are rejected. Browser cookies, the legacy `.env` service token and provider tokens do not authenticate MCP. See [authentication](authentication.md) for provisioning.
+Initialize the MCP connection before listing or calling tools. The client is bound to the token's site. It can use only the channels of that site; message inputs cannot supply provider credentials. Browser `Origin` requests are rejected. Browser cookies, the legacy `.env` service token and provider tokens do not authenticate MCP. See [authentication](authentication.md) for provisioning.
 
 An initialization request is:
 
@@ -29,11 +29,25 @@ Follow with the `notifications/initialized` notification, then `tools/list` for 
 
 Its structured result contains `{"status":"ready","service":"relay_hub"}` when database readiness passes. A tool failure can arrive in HTTP 200 with MCP `isError: true`; inspect the tool result, not only the HTTP status.
 
+## Channels of a site
+
+A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send, read and delivery tool takes an optional `channel` argument: the channel key from `channels.list`. Without it, the tool uses the only channel of that type that the site has. When the site has more than one, the tool fails with `channel required: ...`. A key of another site's channel fails with `channel is not available to this site`. To answer an inbound message, pass the `channel_key` of its callback.
+
+`channels.list` returns `{"channels":[...]}`. Each row has `key`, `provider` (`WhatsApp`, `Telegram` or `Email`), `label`, `address`, `display_number`, `waba_id`, `container`, `enabled` and `capabilities` (`templates`, `groups`, `calls`). No credentials are returned:
+
+```json
+{"channels":[{"key":"sales","provider":"WhatsApp","label":"Sales desk","address":"108927364710","display_number":"+91 90000 00101","waba_id":"220119002","container":"ct_4f1c2a9b0d3e5f67","enabled":true,"capabilities":{"templates":true,"groups":false,"calls":false}}]}
+```
+
+`site.get` returns `{account, site, enabled, channels}`: `account` is the site ID, `site` is its origin and `channels` is the same list. `account.get` is the same tool for older clients. A disabled or missing site is refused.
+
 ## Tool inventory
 
 | Tool | Arguments | Required scope |
 | --- | --- | --- |
 | `health.get` | `{}` | Valid API token |
+| `site.get` (alias `account.get`) | `{}` | `account:read` |
+| `channels.list` | `{}` | `account:read` |
 | `whatsapp.send` | `message: {key, message: {...}}` | `messages:send` |
 | `whatsapp.bulk` | `messages: [{key, message: {operation: "templates.send", ...}}]`, 1–50 template, text or media sends | `messages:send` |
 | `whatsapp.deliveries` | Optional `after`; optional `cancel_id` for cancellation | `deliveries:read` or `deliveries:cancel` |
@@ -56,7 +70,7 @@ WhatsApp operation scopes:
 | `groups.list`, `groups.info`, `groups.requests.list`, `groups.invite.get`; group administration | `groups:read`; `groups:write` |
 | `calls.permission.get`; call mutations | `calls:read`; `calls:write` |
 
-Scopes authorize Hub account operations; they do not grant access to Frappe business records. Core checks those permissions separately. Channel enablement, provider capability and provider permissions must also pass.
+Scopes authorize Hub operations for the token's site; they do not grant access to Frappe business records. Core checks those permissions separately. Channel enablement, provider capability and provider permissions must also pass.
 
 ## WhatsApp messages
 
@@ -94,7 +108,7 @@ Other direct-message payloads, placed in the inner `message` object or passed to
 
 Use exactly one of `media_id` or `media_url`. Media types are `image`, `video`, `audio`, `document` and `sticker`; a sticker cannot carry a caption or filename. An outbound `media_url` is sent to the provider, not fetched by the Hub's inbound sticker proxy.
 
-`messages.media_upload` uploads one private attachment to the account's phone number and returns its media ID. It sends no message. Call it through `whatsapp.execute` without `request_key`. It uses the same validation and 4 MiB limit as inline `content_base64` on `messages.media`:
+`messages.media_upload` uploads one private attachment to the number and returns its media ID. It sends no message. Call it through `whatsapp.execute` without `request_key`. It uses the same validation and 4 MiB limit as inline `content_base64` on `messages.media`:
 
 ```json
 {"operation":"messages.media_upload","media_type":"document","mime_type":"application/pdf","filename":"invoice.pdf","content_base64":"JVBERi0xLjQK..."}
@@ -140,31 +154,43 @@ Group photo administration uses `groups.photo` with bounded JPEG `photo_base64`.
 
 ## WhatsApp pricing
 
-`billing.pricing` reads the account's Meta pricing analytics. It needs `account:read`. `start` and `end` are UNIX seconds, and `end` must be after `start`. `granularity` is `DAILY` or `MONTHLY`. `dimensions` is optional and accepts distinct `PRICING_CATEGORY`, `PRICING_TYPE`, `COUNTRY` and `PHONE` values:
+`billing.pricing` reads the Meta pricing analytics of the number's WABA. It needs `account:read`. `start` and `end` are UNIX seconds, and `end` must be after `start`. `granularity` is `DAILY` or `MONTHLY`. `dimensions` is optional and accepts distinct `PRICING_CATEGORY`, `PRICING_TYPE`, `COUNTRY` and `PHONE` values:
 
 ```json
 {"operation":"billing.pricing","start":1767225600,"end":1769904000,"granularity":"MONTHLY","dimensions":["PRICING_CATEGORY","PRICING_TYPE"]}
 ```
 
+When another site shares the number's WABA, add `PHONE` to `dimensions`, or the call fails. The Hub then returns only the rows of the site's own numbers and adds their `channel_key`. Rows that Meta does not split by number go to the Hub administrator only.
+
 The result is `{"data_points":[...],"currency":"INR"}`. `currency` is the WABA currency, because the data points do not include one. It is empty when Meta does not return it. Each data point is returned as Meta sends it, for example with `start`, `end`, `volume`, `cost` and the requested dimension values. The list is empty when Meta has no data for the period.
 
 ## WhatsApp bulk sends
 
-`whatsapp.bulk` queues 1–50 `templates.send`, `messages.send` or `messages.media` messages in one call. It is for campaigns: other operations are refused. Bulk `messages.media` must use `media_id` or `media_url`; inline `content_base64` is refused, so upload the attachment once with `messages.media_upload`. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full account queue (10,000 queued or submitting intents) refuses the whole call, and so do 5,000 queued or submitting bulk intents: half of the account queue stays free for conversational sends.
+`whatsapp.bulk` queues 1–50 `templates.send`, `messages.send` or `messages.media` messages in one call. It is for campaigns: other operations are refused. Bulk `messages.media` must use `media_id` or `media_url`; inline `content_base64` is refused, so upload the attachment once with `messages.media_upload`. Each item uses the same stable `key` rules as `whatsapp.send`. A recipient that fails validation, for example a number that is not 7–15 digits, comes back with `state: "rejected"`, an empty `id` and an `error`; the other items are queued. A full number queue (10,000 queued or submitting intents) refuses the whole call, and so do 5,000 queued or submitting bulk intents: half of the number's queue stays free for conversational sends.
 
 ```json
 {"deliveries":[{"id":"812","key":"winter-launch-1","state":"queued","attempts":0,"next_attempt":"0001-01-01T00:00:00Z"},{"id":"","key":"winter-launch-2","state":"rejected","error":"enabled template, recipient, name and language are required"}],"queued":731,"limit":5000,"messages_per_second":80}
 ```
 
-Use `queued` (all queued or submitting intents of the account) for backpressure: stop pushing while it is above your own limit and pace by `messages_per_second`. `limit` is the bulk share of the queue. Workers send bulk rows one by one at the account rate, after any non-bulk sends of the same account. Retries follow the outbox rules: only errors that Meta marks as transient or rate limits are retried.
+Use `queued` (all queued or submitting intents of the number) for backpressure: stop pushing while it is above your own limit and pace by `messages_per_second`. `limit` is the bulk share of the queue. Workers send bulk rows one by one at the number's rate, after any non-bulk sends of the same number. Retries follow the outbox rules: only errors that Meta marks as transient or rate limits are retried.
 
 Bulk results do not use the realtime or status lanes. The Hub posts the latest state of each changed bulk row to `/api/method/relay_core.inbound.receive_bulk_updates`, signed like the status callbacks. A batch is sent when 500 rows changed or when the oldest change waited `RELAY_BULK_UPDATE_WINDOW` (default 30 s). Rows are in ascending `id` order:
 
 ```json
-{"account":"essdee","updates":[{"id":812,"key":"winter-launch-1","state":"submitted","message_id":"wamid.SYNTHETIC","status":"read","updated_at":"2026-10-25T18:00:00Z"},{"id":813,"key":"winter-launch-7","state":"rejected","message_id":"","status":"","error":{"code":131009,"title":"Parameter value is not valid","message":"Header image URL could not be downloaded."},"updated_at":"2026-10-25T18:00:01Z"}]}
+{"account":"essdee","channel_key":"sales","updates":[{"id":812,"key":"winter-launch-1","state":"submitted","message_id":"wamid.SYNTHETIC","status":"read","updated_at":"2026-10-25T18:00:00Z","channel_key":"sales","to":"+91 90000 00101"},{"id":813,"key":"winter-launch-7","state":"rejected","message_id":"","status":"","error":{"code":131009,"title":"Parameter value is not valid","message":"Header image URL could not be downloaded."},"updated_at":"2026-10-25T18:00:01Z","channel_key":"sales","to":"+91 90000 00101"}]}
 ```
 
 `state` is the outbox state (`queued`, `submitting`, `submitted`, `rejected`, `uncertain`, `cancelled`). `status` is the latest Meta receipt (`sent`, `delivered`, `read`, `failed`) and never moves back. `error` holds the Meta code and its user title and message, for a rejected send or a failed receipt (for example 131026, 131049 or 130472). Core acknowledges with `{"message":{"accepted":N}}`. A row that changes again is sent again in a later batch. Replies to campaign messages stay on the realtime lane.
+
+## Callbacks to Core
+
+The Hub posts signed batches to the site's Core endpoints: `relay_core.inbound.receive` (events), `relay_core.inbound.receive_statuses` (WhatsApp statuses), `relay_core.inbound.receive_channel_statuses` (Telegram and email statuses) and `relay_core.inbound.receive_bulk_updates`. One batch holds the rows of one channel. The top-level `account` is the site ID and `channel_key` is the channel key. Each row also has `channel_key` and `to`, the number, bot username or mailbox address that the row belongs to:
+
+```json
+{"account":"essdee","channel_key":"sales","events":[{"id":812,"channel_key":"sales","to":"+91 90000 00101","payload":{}}]}
+```
+
+Older Core versions can ignore the new fields. A site also gets a `{"object":"relay_channels","changed":true}` event when its channel list changes; read `channels.list` again then.
 
 ## Provider errors
 
@@ -232,7 +258,7 @@ Provider failures preserve safe structured metadata: `http_status`, `code`, `ret
 
 ## Read an incoming sticker
 
-Use `whatsapp.media` with `{"media_id":"123456789012345"}` or `telegram.media` with `{"file_id":"CAACAgIAAxkBAAIBDemoSyntheticFileID"}`. The account must have a persisted inbound sticker referencing that exact ID, and the API token needs `messages:read`.
+Use `whatsapp.media` with `{"media_id":"123456789012345"}` or `telegram.media` with `{"file_id":"CAACAgIAAxkBAAIBDemoSyntheticFileID"}`. One of the site's channels must have a stored inbound sticker with that exact ID, and the API token needs `messages:read`.
 
 The response uses MCP `structuredContent`:
 
@@ -242,7 +268,7 @@ The response uses MCP `structuredContent`:
 
 Maximum decoded content is **2 MiB**. WhatsApp currently returns WebP only. Telegram can return `image/webp`, `video/webm` or `application/x-tgsticker`. Treat TGS as an animation file/download, not a directly displayable image. This is not an arbitrary URL downloader or general attachment endpoint.
 
-The Hub fetches from constrained provider origins with deadlines, size/type validation and no redirects; tokens and provider download URLs are not returned. Core additionally checks the requesting user's access to the source message before serving bytes to a browser. `messages:read` is account-level access at the Hub, not a substitute for that Core permission check.
+The Hub fetches from constrained provider origins with deadlines, size/type validation and no redirects; tokens and provider download URLs are not returned. Core additionally checks the requesting user's access to the source message before serving bytes to a browser. `messages:read` is site-level access at the Hub, not a substitute for that Core permission check.
 
 ## Email
 
@@ -254,28 +280,32 @@ The Hub fetches from constrained provider origins with deadlines, size/type vali
 
 ## Inbound events and browser routes
 
-Provider webhooks use their own [verification contracts](configuration.md#webhook-registration). The Hub persists raw provider payloads and normalized journal fields before acknowledging receipt. Signed callbacks preserve account/channel, event identity and original message data for Core deduplication.
+Provider webhooks use their own [verification contracts](configuration.md#webhook-registration). The Hub persists raw provider payloads and normalized journal fields before acknowledging receipt. Signed callbacks keep the site, the channel, the event identity and original message data for Core deduplication.
 
 Telegram retains chat type, participant or anonymous sender, topic, quote target, edited-message kind, membership/service events and reaction changes. Sticker, location and contact fields remain structured. Unsupported message content is retained as such; it is not promoted into a supported outbound type. Edits, reactions and membership events must not become new text prompts merely because they contain text fields.
 
-The administration routes are browser-session APIs, not a second public messaging API:
+## Administration routes
+
+The administration routes are browser-session APIs, not a second public messaging API. Writes need an administrator session, the exact Origin and `X-Relay-CSRF`. Each write reloads the runtime.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/accounts`, `POST /api/accounts` | Read authorized accounts; administrator save |
-| `POST /api/accounts/reload` | Administrator runtime activation |
-| `GET /api/accounts/{account}/telegram/webhook` | Administrator retrieves derived registration secret |
-| `GET /api/channels`, `/api/channel-events`, `/api/deliveries` | Runtime/channel state and bounded account-filtered history |
+| `GET`, `POST /api/containers`; `GET`, `PUT /api/containers/{container}` | List, create, read and edit containers and their WhatsApp app. Create takes only a name and returns `{id, webhook_path, csrf}` with status 201. |
+| `GET /api/containers/{container}/whatsapp/webhook` | Callback path and verify token to paste in Meta |
+| `POST /api/containers/{container}/channels`; `PUT /api/containers/{container}/channels/{channel}/{key}` | Add and edit a number, bot or mailbox |
+| `DELETE /api/containers/{container}/old-address`; `DELETE /api/containers/{container}/channels/{channel}/{key}/old-address` | Turn off the old readable webhook path; answers 204 |
+| `GET`, `POST /api/channels/{channel}/{key}/connection` | Read or run a connection check (`test`, or `repair` for a Telegram webhook) |
+| `GET`, `POST /api/sites`; `GET`, `PUT /api/sites/{site}` | List, create, read and edit sites and their Core credentials |
+| `PUT /api/sites/{site}/channels` | Set the full channel list of a site; 409 when a channel is on another site or has unfinished sends |
+| `GET /api/unassigned-events`; `POST /api/unassigned-events/replay` | List events of channels without a site; replay `{channel, ids}` to the channel's site now |
+| `GET /api/accounts`, `POST /api/accounts`, `POST /api/accounts/reload` | Older account view and save |
+| `GET /api/accounts/{key}/telegram/webhook`, `GET /api/accounts/{key}/email/webhook` | Derived ingress secret and path of a bot or mailbox |
+| `GET /api/channels`, `/api/channel-events`, `/api/deliveries` | Runtime and channel state, and bounded history |
 | `GET /api/audit` | Administrator operational audit |
 | `GET /api/ready` | Authenticated readiness view |
 
 Source contracts: [MCP registration](../internal/hubmcp/server.go), [WhatsApp inputs](../internal/whatsapp/service.go), [Telegram messages](../internal/telegram/messages.go), [Telegram groups](../internal/telegram/groups.go), [route handlers](../cmd/relay-hub/main.go). Use the [support matrix](provider-support.md) to distinguish implemented paths from unimplemented provider features.
 
-## Account binding
-
-The MCP tool `account.get` takes an empty argument object and requires
-`account:read`. It returns `{account, site, enabled}` for the token's granted
-account. Disabled/missing accounts are rejected; no credential values are returned.
-Core uses this tool to verify connection settings before saving them.
+## Delivery scopes
 
 Telegram/email delivery reads require both `deliveries:read` and `messages:read`, since stored provider results can contain message text and replies. Cancellation additionally requires `deliveries:cancel`. Resolution requires `deliveries:read` and `deliveries:cancel`. Message-only tokens no longer authorize delivery administration. `channels.resolve` requires `provider_id` for accepted messages and `chat_id` for accepted Telegram messages. Rejections require neither provider field.
