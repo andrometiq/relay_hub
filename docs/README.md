@@ -14,7 +14,7 @@ Use the [quickstart](quickstart.md) for a new installation. The guides and refer
 
 - [Architecture](architecture.md): responsibilities, data flow and delivery guarantees.
 - [Configuration](configuration.md): `.env`, database modes, channel settings and webhooks.
-- [MCP and message API](api-reference.md): scopes, typed payloads, replies, reactions and sticker retrieval.
+- [MCP and message API](api-reference.md): tools, typed payloads, replies, reactions and sticker retrieval.
 - [Provider support](provider-support.md): implemented operations and explicit channel limits.
 - [Database model](database-authentication-model.md): tables, field types and persistence rules.
 - [UI components](ui-components.md) and [Frappe virtualization](frappe-virtualization.md): reusable controls and bounded rendering.

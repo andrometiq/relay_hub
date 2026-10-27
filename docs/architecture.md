@@ -23,7 +23,7 @@ flowchart LR
 
 A container groups provider apps and their channels: for example one Meta app with several WhatsApp numbers in several WABAs, and some Telegram bots and mailboxes. A site is one Core site. Each channel belongs to one site, or to no site. Many sites can share one container. See [configuration](configuration.md#containers-sites-and-channels).
 
-Provider credentials stay in the Hub. An API token belongs to one site and has explicit tool scopes. The token can use only the channels of its site. Core resolves Contacts, business records, teams, user permissions, conversation bindings and AI actions. A Hub scope does not replace a business-record check in Core.
+Provider credentials stay in the Hub. An API token belongs to one site and can call every tool for that site. The token can use only the channels of its site. Core resolves Contacts, business records, teams, user permissions, conversation bindings and AI actions. The Hub does not check business-record permissions; Core does, with Frappe DocType permissions.
 
 PostgreSQL stores sequential numeric identities for high-volume journals and queue rows. Provider message IDs, Telegram chat/topic IDs and caller request keys are separate fields. Group conversations remain separate from participant DMs; quoted replies retain the original provider message ID. See the [database model](database-authentication-model.md) and [API reference](api-reference.md).
 
