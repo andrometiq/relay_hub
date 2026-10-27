@@ -188,6 +188,8 @@ func (p PostgresEvents) List(ctx context.Context, account string, after int64) (
 // authenticates the request. Changes for a number of the container go to its
 // channel key with its current site; changes for an unknown number are stored
 // unrouted and still answered 200, so Meta does not retry or disable the webhook.
+// After the journal, Forward queues a copy of the signed request for the
+// container's forward targets, also when the number is unknown.
 func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("container")
 	if id == "" {
@@ -255,6 +257,15 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		if e = s.saveRouted(r.Context(), Route{Container: authenticated[0].ContainerID}, unrouted, raw); e != nil {
 			http.Error(w, "event persistence failed", 503)
 			return
+		}
+	}
+	if s.Forward != nil {
+		forwarded := map[string]bool{}
+		for _, a := range authenticated {
+			if !forwarded[a.ContainerID] {
+				forwarded[a.ContainerID] = true
+				s.Forward(r.Context(), a.ContainerID, r.Header, raw)
+			}
 		}
 	}
 	for _, entry := range payload.Entry {

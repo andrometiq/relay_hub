@@ -56,11 +56,14 @@ type Service struct {
 	webhookSlots chan struct{}
 	callbackWake chan struct{}
 	Events       EventStore
-	Outbox       *Outbox
-	slots        chan struct{}
-	Accounts     []Account
-	client       *http.Client
-	base         string
+	// Forward queues a verified webhook for the container's forward targets.
+	// It must not wait for a target.
+	Forward  func(ctx context.Context, container string, header http.Header, body []byte)
+	Outbox   *Outbox
+	slots    chan struct{}
+	Accounts []Account
+	client   *http.Client
+	base     string
 }
 
 func (s *Service) AccountsSnapshot() []Account {
