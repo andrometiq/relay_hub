@@ -150,7 +150,7 @@ defineExpose({ refresh: async () => { await refresh(); await callbacks.value?.re
       </article>
     </div>
     <div class="entity-toolbar mt-6">
-      <AccountPicker v-model="account" :disabled="busy" />
+      <AccountPicker v-model="account" :channel="channel" :disabled="busy" />
       <FormControl v-if="CHANNELS.length > 1" v-model="channel" type="select" label="Channel" aria-label="Channel" :options="CHANNELS" :disabled="busy" />
     </div>
     <ErrorMessage :message="error" />

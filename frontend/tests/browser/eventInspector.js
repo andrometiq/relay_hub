@@ -4,7 +4,7 @@ async(page)=>{
  try{
  await p.route('**/api/**',async route=>{
   const path=route.request().url().split('/api/')[1];let result={};
-  if(path.startsWith('accounts'))result={accounts:[{id:'fixture',site:'https://fixture.invalid',channels:[]}],csrf:'fixture',total:1};
+  if(path.startsWith('sites'))result={sites:[{id:'fixture-site',name:'Fixture',origin:'https://fixture.invalid',enabled:true,configured_secrets:[],channels:[{channel:'WhatsApp',key:'fixture',label:'Fixture line',enabled:true,config:{}}]}],next:'',csrf:'fixture'};
   if(path.startsWith('event-inspector?')){
    if(path.includes('id=51'))result={raw:JSON.stringify({text:'<script>window.injected=true</script>',message_id:123}),truncated:false};
    else if(path.includes('channel=WhatsApp'))result={items:[],more:false};

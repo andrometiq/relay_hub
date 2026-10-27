@@ -3,16 +3,16 @@ import { hubApi } from "../services/hubApi";
 export function useHubData() {
   const updated = ref("");
   const revision = ref(0);
-  const accounts = ref([]),
+  const sites = ref([]),
     runtime = ref({}),
     deliveries = ref({});
   const status = ref("Checking"),
     busy = ref(false),
     error = ref("");
-  const accountPage = reactive({ total: 0 });
-  function applyAccounts(data) {
-    accounts.value = data.accounts || [];
-    accountPage.total = data.total ?? accounts.value.length;
+  const sitePage = reactive({ more: false });
+  function applySites(data) {
+    sites.value = data.sites || [];
+    sitePage.more = !!data.next;
   }
   let refreshPending = false;
   async function refresh() {
@@ -23,13 +23,13 @@ export function useHubData() {
     const results = await Promise.allSettled(
       [
         "ready",
-        "accounts",
+        "sites",
         "channels",
         "deliveries",
       ].map((path) => hubApi(path)),
     );
     status.value = results[0].status === "fulfilled" ? "Ready" : "Unavailable";
-    if (results[1].status === "fulfilled") applyAccounts(results[1].value);
+    if (results[1].status === "fulfilled") applySites(results[1].value);
     if (results[2].status === "fulfilled") runtime.value = results[2].value;
     if (results[3].status === "fulfilled")
       deliveries.value = results[3].value.counts || {};
@@ -43,13 +43,13 @@ export function useHubData() {
   }
   return {
     updated, revision,
-    accounts,
+    sites,
     runtime,
     deliveries,
     status,
     busy,
     error,
     refresh,
-    accountPage,
+    sitePage,
   };
 }

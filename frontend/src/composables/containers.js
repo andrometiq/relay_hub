@@ -95,6 +95,12 @@ export function siteReady(site) {
   return SITE_SECRETS.every((name) => (site.configured_secrets || []).includes(name));
 }
 
+// Pickers on the Deliveries and Events pages choose one channel of one site.
+export function siteChannelOptions(sites = [], channel = "WhatsApp") {
+  return sites.flatMap((site) => (site.channels || []).filter((row) => row.channel === channel)
+    .map((row) => ({ key: row.key, site: site.id, label: `${site.name || siteHost(site.origin) || site.id} · ${row.label || row.key}` })));
+}
+
 export function siteStatus(site) {
   if (!site.enabled) return { label: "Disabled", theme: "gray" };
   return siteReady(site) ? { label: "Enabled", theme: "green" } : { label: "Setup needed", theme: "orange" };

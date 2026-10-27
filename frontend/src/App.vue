@@ -22,12 +22,12 @@ watch(detail, () => { detailTitle.value = ""; });
 async function refreshView() { await refresh(); await content.value?.refresh?.(); }
 const {
   runtime, deliveries, updated, revision,
-  accounts,
+  sites,
   status,
   busy,
   error,
   refresh,
-  accountPage,
+  sitePage,
 } = useHubData();
 function navigate(name, id = "") {
   view.value = name;
@@ -73,7 +73,7 @@ onUnmounted(() => unsubscribe?.());
       </header>
       <div class="hub-page">
         <ErrorMessage :message="error" />
-        <OverviewView :key="revision" v-if="view === 'Overview'" :accounts="accounts" :total="accountPage.total" :status="status" :runtime="runtime" :deliveries="deliveries" @navigate="navigate" />
+        <OverviewView :key="revision" v-if="view === 'Overview'" :sites="sites" :more="sitePage.more" :status="status" :runtime="runtime" :deliveries="deliveries" @navigate="navigate" />
         <ChannelsView v-else-if="view === 'Connections'" ref="content" @navigate="navigate" />
         <DeliveryView v-else-if="view === 'Deliveries'" ref="content" @changed="refresh" />
         <EventsView v-else-if="view === 'Events'" ref="content" />
