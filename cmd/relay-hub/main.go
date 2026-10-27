@@ -427,10 +427,13 @@ func run() error {
 		directory := directoryAdmin{store: accountStore, session: browserAuth.Session, origin: os.Getenv("RELAY_PUBLIC_ORIGIN"), verifyWhatsApp: wa.ValidateCredentials, whatsappAccount: wa.AccountByKey, reload: reloadRuntime}
 		directory.register(mux, browserAuth.Protect)
 		unassignedEvents{db: authPool, replay: func(ctx context.Context, channel string, id int64) error {
-			if channel != "WhatsApp" {
-				return errors.New("unsupported channel")
+			switch channel {
+			case "WhatsApp":
+				return wa.ReplayUnassigned(ctx, authPool, id)
+			case "Telegram", "Email":
+				return channelEvents.ReplayUnassigned(ctx, id)
 			}
-			return wa.ReplayUnassigned(ctx, authPool, id)
+			return errors.New("unsupported channel")
 		}}.register(mux, browserAuth.Protect, directory.admin)
 		mux.Handle("GET /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("POST /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))

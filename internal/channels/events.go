@@ -70,3 +70,22 @@ func acknowledgeChannelEvents(ctx context.Context, c *pgx.Conn, account, channel
  AND d.event_id=ANY($3) AND NOT d.acknowledged`, account, channel, ids)
 	return err
 }
+
+// ErrNotAssigned means the bot or mailbox of a stored event has no site yet.
+var ErrNotAssigned = errors.New("the channel is unknown or not assigned to a site; assign it first")
+
+// ReplayUnassigned gives a Telegram or Email event kept while its channel had
+// no site to the site that uses the channel now.
+func (s Store) ReplayUnassigned(ctx context.Context, id int64) error {
+	tag, err := s.DB.Exec(ctx, `UPDATE relay_channel_events e SET site_id=c.site_id,replayed_at=now()
+ FROM relay_channel_credentials c WHERE e.id=$1 AND e.site_id IS NULL AND e.replayed_at IS NULL
+ AND c.channel=e.channel AND c.channel_key=e.account AND c.site_id IS NOT NULL`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrNotAssigned
+	}
+	WakeCallbacks(s.Wake)
+	return nil
+}
