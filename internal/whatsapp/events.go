@@ -257,6 +257,11 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for _, entry := range payload.Entry {
+		if templateChange(entry) {
+			_ = s.Metadata.MarkTemplatesStale(r.Context(), entry.ID)
+		}
+	}
 	w.WriteHeader(200)
 }
 
@@ -274,6 +279,16 @@ func webhookAccounts(accounts []Account, path string) []Account {
 		}
 	}
 	return result
+}
+
+// templateChange reports a template status, quality or category webhook.
+func templateChange(entry webhookEntry) bool {
+	for _, change := range entry.Changes {
+		if strings.Contains(change.Field, "template") {
+			return true
+		}
+	}
+	return false
 }
 
 func containerAccounts(accounts []Account, container string) []Account {

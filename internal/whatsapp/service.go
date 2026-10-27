@@ -305,7 +305,14 @@ func (s *Service) Authenticate(token string) (Account, bool) {
 	return Account{}, false
 }
 func (s *Service) Execute(ctx context.Context, a Account, in Input) (map[string]any, error) {
-	return s.execute(ctx, a, in, false)
+	result, err := s.execute(ctx, a, in, false)
+	switch in.Operation {
+	case "templates.create", "templates.update", "templates.delete":
+		if err == nil {
+			_ = s.Metadata.MarkTemplatesStale(ctx, a.WABAID)
+		}
+	}
+	return result, err
 }
 func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly bool) (result map[string]any, err error) {
 	submitted := false
