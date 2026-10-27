@@ -54,7 +54,7 @@ func TestAccountBindingIsScopedAndContainsNoCredentials(t *testing.T) {
 			if response.Result.IsError != tc.denied {
 				t.Fatal("unexpected authorization outcome", w.Body.String())
 			}
-			if !tc.denied && (len(response.Result.Data) != 3 || response.Result.Data["account"] != tc.account || response.Result.Data["site"] != "https://"+tc.account+".test") {
+			if !tc.denied && (len(response.Result.Data) != 4 || response.Result.Data["account"] != tc.account || response.Result.Data["site"] != "https://"+tc.account+".test") {
 				t.Fatal("binding leaked or invalid", response.Result.Data)
 			}
 		})
