@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Badge, Button, ErrorMessage, FeatherIcon } from "@relay/ui";
 import ChannelDialog from "./ChannelDialog.vue";
 import ContainerDialog from "./ContainerDialog.vue";
+import ForwardTargets from "./ForwardTargets.vue";
 import { PROVIDERS, adminApi, channelAddress, channelStatus, containerReady, countByProvider, hubURL, plural, provider, siteLabel } from "../../composables/containers";
 
 const props = defineProps({ id: String });
@@ -96,6 +97,7 @@ defineExpose({ refresh });
         <div v-if="container.old_address" class="webhook-address"><div><span>Old address</span><code>{{ hubURL("/webhooks/whatsapp/" + container.id) }}</code></div><Button label="Turn off old address" @click="turnOffOldAddress()" /></div>
         <p v-if="copyNotice" role="status" class="admin-hint">{{ copyNotice }}</p>
       </div>
+      <div v-if="tab === 'WhatsApp'" class="admin-card"><ForwardTargets provider="WhatsApp" :scope-key="container.id" /></div>
       <div v-else-if="tab === 'Telegram'" class="admin-card">
         <div class="admin-card-head"><div><h3>Telegram webhooks</h3><p>The Hub registers each bot's webhook with Telegram when you save the bot. Nothing to paste.</p></div></div>
         <p class="admin-hint">Each bot has its own random webhook address, shown in its row.</p>

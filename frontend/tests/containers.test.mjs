@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adminApi, assignedRefs, connectionRows, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
+import { adminApi, assignedRefs, connectionRows, channelKey, channelStatus, forwardState, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
 import { channelForm, channelPayload, validateChannelForm } from '../src/composables/channelForm.js';
 import { parseRoute, routePath } from '../src/useViewRoute.js';
 
@@ -167,4 +167,27 @@ test('connections list one row per channel with its container and site', () => {
   ]);
   assert.deepEqual(connectionRows(containers, sites, 'a.example').map(row => row.key), ['sales']);
   assert.deepEqual(connectionRows(containers, sites, 'essdee_bot').map(row => row.key), ['bot-b']);
+});
+
+test('forward targets use one admin path per provider and key', async t => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push([options.method, url, options.body || '']);
+    return new Response(null, { status: 204 });
+  });
+  await adminApi.forwards('WhatsApp', 'ct 1', '42');
+  await adminApi.addForward('Telegram', 'bot', 'https://old.example.invalid/hook');
+  await adminApi.removeForward('Email', 'box', 7);
+  assert.deepEqual(requests, [
+    ['GET', './api/forwards/whatsapp/ct%201?before=42', ''],
+    ['POST', './api/forwards/telegram/bot', '{"url":"https://old.example.invalid/hook"}'],
+    ['DELETE', './api/forwards/email/box/7', '{}'],
+  ]);
+});
+
+test('forward results show delivered, retrying and failed', () => {
+  assert.equal(forwardState({ state: 'delivered', attempts: 1 }).label, 'Delivered');
+  assert.equal(forwardState({ state: 'pending', attempts: 0 }).label, 'Waiting');
+  assert.equal(forwardState({ state: 'pending', attempts: 1 }).label, 'Retrying');
+  assert.equal(forwardState({ state: 'failed', attempts: 3 }).theme, 'red');
 });

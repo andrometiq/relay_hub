@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { Button, Dialog, ErrorMessage, FeatherIcon, FormControl } from "@relay/ui";
 import { adminApi, hubURL, moveChannel, siteHost } from "../../composables/containers";
+import ForwardTargets from "./ForwardTargets.vue";
 import { channelForm, channelPayload, validateChannelForm } from "../../composables/channelForm";
 
 const props = defineProps({ modelValue: Boolean, container: Object, channelName: String, channel: Object, sites: { type: Array, default: () => [] } });
@@ -139,6 +140,7 @@ async function save() {
         <div v-if="stored?.old_address" class="webhook-address admin-full"><div><span>Old address</span><code>{{ hubURL(`/webhooks/${form.channel.toLowerCase()}/${stored.key}`) }}</code></div><Button label="Turn off old address" @click="turnOffOldAddress" /></div>
         <FormControl v-if="stored" v-model="form.enabled" type="checkbox" label="Account enabled" class="admin-full" />
       </form>
+      <div v-if="stored && form.channel !== 'WhatsApp'" class="mt-4"><ForwardTargets :provider="form.channel" :scope-key="stored.key" /></div>
       <p v-if="notice" role="status" class="feedback-panel mt-4">{{ notice }}</p>
       <ErrorMessage :message="error" />
     </template>

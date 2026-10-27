@@ -157,7 +157,21 @@ export const adminApi = {
   createSite: (site) => hubApi("sites", site),
   updateSite: (id, changes) => hubApi(item("sites", id), changes, "PUT"),
   assignChannels: (site, channels) => hubApi(item("sites", site) + "/channels", { channels }, "PUT"),
+  forwards: (provider, key, before = "") => hubApi(forwardPath(provider, key) + (before ? "?before=" + encodeURIComponent(before) : "")),
+  addForward: (provider, key, url) => hubApi(forwardPath(provider, key), { url }),
+  removeForward: (provider, key, id) => hubApi(`${forwardPath(provider, key)}/${encodeURIComponent(id)}`, {}, "DELETE"),
 };
+
+function forwardPath(provider, key) {
+  return `forwards/${provider.toLowerCase()}/${encodeURIComponent(key)}`;
+}
+
+// forwardState labels one forward result for the results table.
+export function forwardState(record) {
+  if (record.state === "delivered") return { label: "Delivered", theme: "green" };
+  if (record.state === "failed") return { label: "Failed", theme: "red" };
+  return { label: record.attempts ? "Retrying" : "Waiting", theme: "orange" };
+}
 
 // Moves one channel between sites. It leaves the old site first, so the Hub never sees two owners.
 export async function moveChannel(ref, from, to) {
