@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,7 +27,10 @@ type accountConnections interface {
 
 // Only persisted, active account credentials are tested. Callers cannot supply
 // arbitrary provider targets, tokens or callback URLs to this endpoint.
-func accountConnection(registry accountConnections, session func(*http.Request) (auth.User, error), origin, publicURL, telegramMaster string) http.Handler {
+// connectionStatus stores the result of a check on the channel, so pages show it later.
+type connectionStatus func(ctx context.Context, channel, key string, values map[string]any) error
+
+func accountConnection(registry accountConnections, session func(*http.Request) (auth.User, error), origin, publicURL, telegramMaster string, record connectionStatus) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, err := session(r)
 		if err != nil {
@@ -73,9 +77,15 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 				http.Error(w, "Configure the Hub public HTTPS URL before checking its webhook", 503)
 				return
 			}
-			result, err = registry.TelegramConnection(ctx, account, address, telegramMaster, repair)
+			var health telegram.WebhookHealth
+			health, err = registry.TelegramConnection(ctx, account, address, telegramMaster, repair)
+			result = health
+			recordStatus(ctx, record, "Telegram", account, "webhook_status", telegramStatus(health, err))
 		} else {
-			result, err = registry.TestEmailConnection(ctx, account)
+			var mail channels.EmailConnection
+			mail, err = registry.TestEmailConnection(ctx, account)
+			result = mail
+			recordStatus(ctx, record, "Email", account, "connection_status", emailStatus(mail, err))
 		}
 		if err != nil {
 			http.Error(w, "Connection check failed. Check saved settings and runtime activation, then retry.", 502)
@@ -85,4 +95,32 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(result)
 	})
+}
+
+func telegramStatus(health telegram.WebhookHealth, err error) string {
+	switch {
+	case err != nil:
+		return "failed"
+	case health.Registered && health.Matches:
+		return "registered"
+	default:
+		return "not_registered"
+	}
+}
+
+func emailStatus(mail channels.EmailConnection, err error) string {
+	if err != nil || mail.SMTP != "connected" || mail.IMAP == "failed" {
+		return "failed"
+	}
+	return "connected"
+}
+
+// recordStatus keeps a check result; a failed write only loses the display value.
+func recordStatus(ctx context.Context, record connectionStatus, channel, key, field, value string) {
+	if record == nil {
+		return
+	}
+	if err := record(ctx, channel, key, map[string]any{field: value, "checked_at": time.Now().UTC().Format(time.RFC3339)}); err != nil {
+		log.Printf("connection status of %s %s was not stored: %v", channel, key, err)
+	}
 }

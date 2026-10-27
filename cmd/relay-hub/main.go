@@ -397,7 +397,9 @@ func run() error {
 			json.NewEncoder(w).Encode(map[string]any{"accounts": rows, "next": next, "previous": previous, "total": total, "enabled_channels": enabled, "csrf": auth.CSRF(cookie.Value)})
 		})))
 		mux.Handle("GET /api/accounts/health", browserAuth.Protect(accountHealth(authPool, browserAuth.Session)))
-		connections := accountConnection(channelRegistry, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), os.Getenv("RELAY_PUBLIC_ORIGIN")+os.Getenv("RELAY_PUBLIC_PREFIX"), os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"))
+		connections := accountConnection(channelRegistry, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), os.Getenv("RELAY_PUBLIC_ORIGIN")+os.Getenv("RELAY_PUBLIC_PREFIX"), os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"), func(ctx context.Context, channel, key string, values map[string]any) error {
+			return accountStore.SetStatus(ctx, accountstore.ChannelRef{Channel: channel, Key: key}, values)
+		})
 		directory := directoryAdmin{store: accountStore, session: browserAuth.Session, origin: os.Getenv("RELAY_PUBLIC_ORIGIN"), verifyWhatsApp: wa.ValidateCredentials, whatsappAccount: wa.AccountByKey, reload: reloadRuntime}
 		directory.register(mux, browserAuth.Protect)
 		unassignedEvents{db: authPool, replay: func(ctx context.Context, channel string, id int64) error {

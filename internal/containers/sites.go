@@ -4,17 +4,24 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // Site is one Frappe site: its origin, Core callback credentials and assigned channels.
+// CoreAPIKey is shown so the admin can copy it; the API secret and callback
+// secret stay write-only.
 type Site struct {
-	ID                string    `json:"id"`
-	Origin            string    `json:"origin"`
-	Enabled           bool      `json:"enabled"`
-	ConfiguredSecrets []string  `json:"configured_secrets"`
-	Channels          []Channel `json:"channels"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Origin            string     `json:"origin"`
+	Enabled           bool       `json:"enabled"`
+	ConfiguredSecrets []string   `json:"configured_secrets"`
+	CoreAPIKey        string     `json:"core_api_key,omitempty"`
+	LastCallbackAt    *time.Time `json:"last_callback_at"`
+	ActiveTokens      int        `json:"active_tokens"`
+	Channels          []Channel  `json:"channels"`
 }
 
 // CoreCredentials authorize and sign Hub callbacks to one site.
@@ -31,7 +38,7 @@ func (s *Store) ListSites(ctx context.Context, query, after string, limit int) (
 		return nil, "", errors.New("invalid site page")
 	}
 	rows, err := s.DB.Query(ctx, `SELECT site_id FROM relay_sites
- WHERE ($1='' OR site_id ILIKE $2 OR origin ILIKE $2) AND ($3='' OR site_id>$3)
+ WHERE ($1='' OR site_id ILIKE $2 OR origin ILIKE $2 OR name ILIKE $2) AND ($3='' OR site_id>$3)
  ORDER BY site_id LIMIT $4`, strings.TrimSpace(query), likePattern(query), after, limit+1)
 	if err != nil {
 		return nil, "", err
@@ -59,7 +66,9 @@ func (s *Store) ListSites(ctx context.Context, query, after string, limit int) (
 func (s *Store) GetSite(ctx context.Context, id string) (Site, error) {
 	site := Site{ID: id}
 	var cipher, nonce []byte
-	if err := s.DB.QueryRow(ctx, `SELECT origin,enabled,secret_ciphertext,secret_nonce FROM relay_sites WHERE site_id=$1`, id).Scan(&site.Origin, &site.Enabled, &cipher, &nonce); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT name,origin,enabled,secret_ciphertext,secret_nonce,last_callback_at,
+ (SELECT count(*) FROM relay_api_tokens t WHERE t.site_id=$1 AND t.revoked_at IS NULL AND t.expires_at>now())
+ FROM relay_sites WHERE site_id=$1`, id).Scan(&site.Name, &site.Origin, &site.Enabled, &cipher, &nonce, &site.LastCallbackAt, &site.ActiveTokens); err != nil {
 		return site, err
 	}
 	private, err := s.configSecrets(cipher, nonce)
@@ -67,6 +76,7 @@ func (s *Store) GetSite(ctx context.Context, id string) (Site, error) {
 		return site, err
 	}
 	site.ConfiguredSecrets = configured(private, siteSecretKeys)
+	site.CoreAPIKey = private["core_api_key"]
 	site.Channels, err = s.Channels(ctx, ChannelFilter{Site: id})
 	return site, err
 }
@@ -130,9 +140,12 @@ func (s *Store) saveSite(ctx context.Context, tx pgx.Tx, site Site, secrets map[
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO relay_sites(site_id,origin,enabled,secret_ciphertext,secret_nonce) VALUES($1,$2,$3,$4,$5)
- ON CONFLICT(site_id) DO UPDATE SET origin=excluded.origin,enabled=excluded.enabled,secret_ciphertext=excluded.secret_ciphertext,
- secret_nonce=excluded.secret_nonce,updated_at=now()`, site.ID, site.Origin, site.Enabled, cipher, nonce)
+	if len(site.Name) > 200 {
+		return errors.New("site name is too long")
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO relay_sites(site_id,name,origin,enabled,secret_ciphertext,secret_nonce) VALUES($1,$2,$3,$4,$5,$6)
+ ON CONFLICT(site_id) DO UPDATE SET name=excluded.name,origin=excluded.origin,enabled=excluded.enabled,secret_ciphertext=excluded.secret_ciphertext,
+ secret_nonce=excluded.secret_nonce,updated_at=now()`, site.ID, site.Name, site.Origin, site.Enabled, cipher, nonce)
 	return err
 }
 

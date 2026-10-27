@@ -21,6 +21,7 @@ type directoryClient struct {
 	role     string
 	reloads  int
 	verified []string
+	store    *containers.Store
 }
 
 func newDirectoryClient(t *testing.T) *directoryClient {
@@ -30,7 +31,7 @@ func newDirectoryClient(t *testing.T) *directoryClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &directoryClient{t: t, mux: http.NewServeMux(), role: "admin"}
+	client := &directoryClient{t: t, mux: http.NewServeMux(), role: "admin", store: store}
 	admin := directoryAdmin{store: store, origin: "https://hub.test",
 		session: func(*http.Request) (auth.User, error) { return auth.User{ID: 1, Role: client.role}, nil },
 		verifyWhatsApp: func(_ context.Context, a whatsapp.Account) error {
@@ -93,7 +94,7 @@ func TestDirectoryAdminBuildsTwoSitesFromOneContainer(t *testing.T) {
 	c.expect(404, "PUT", "/api/containers/essdee/channels/WhatsApp/nobody", map[string]any{"label": "x", "enabled": false})
 	core := map[string]any{"core_api_key": "key", "core_api_secret": "secret", "callback_secret": strings.Repeat("s", 32)}
 	for _, site := range []string{"site-a", "site-b"} {
-		c.expect(204, "POST", "/api/sites", map[string]any{"id": site, "origin": "https://" + site + ".invalid", "enabled": true, "secrets": core})
+		c.expect(204, "POST", "/api/sites", map[string]any{"id": site, "name": "Site " + site, "origin": "https://" + site + ".invalid", "enabled": true, "secrets": core})
 	}
 	c.expect(204, "PUT", "/api/sites/site-b", map[string]any{"origin": "https://site-b.invalid", "enabled": true, "secrets": map[string]any{"core_api_key": ""}})
 	c.expect(204, "PUT", "/api/sites/site-a/channels", map[string]any{"channels": []map[string]string{{"channel": "WhatsApp", "key": "sales"}, {"channel": "Telegram", "key": "bot-a"}, {"channel": "Email", "key": "mail-sales"}}})
@@ -101,9 +102,12 @@ func TestDirectoryAdminBuildsTwoSitesFromOneContainer(t *testing.T) {
 	c.expect(409, "PUT", "/api/sites/site-b/channels", map[string]any{"channels": []map[string]string{{"channel": "WhatsApp", "key": "sales"}}})
 	c.expect(404, "PUT", "/api/sites/missing/channels", map[string]any{"channels": []map[string]string{}})
 
-	var site containers.Site
+	var site struct {
+		containers.Site
+		CSRF string `json:"csrf"`
+	}
 	json.Unmarshal(c.expect(200, "GET", "/api/sites/site-a", nil).Body.Bytes(), &site)
-	if len(site.Channels) != 3 || len(site.ConfiguredSecrets) != 3 {
+	if len(site.Channels) != 3 || len(site.ConfiguredSecrets) != 3 || site.Name != "Site site-a" || site.CoreAPIKey != "key" || site.LastCallbackAt != nil || site.ActiveTokens != 0 || site.CSRF != auth.CSRF("session") {
 		t.Fatalf("site view: %#v", site)
 	}
 	body := c.expect(200, "GET", "/api/containers/essdee", nil).Body.String()
@@ -114,13 +118,16 @@ func TestDirectoryAdminBuildsTwoSitesFromOneContainer(t *testing.T) {
 	}
 	var container containers.Container
 	json.Unmarshal([]byte(body), &container)
+	if !strings.Contains(body, `"csrf":"`+auth.CSRF("session")+`"`) || container.WhatsApp.LastEventAt != nil {
+		t.Fatal("container view lacks csrf or shows a last event")
+	}
 	if len(container.Channels) != 6 || container.WhatsApp.Config["app_id"] != "77" || len(container.WhatsApp.ConfiguredSecrets) != 3 {
 		t.Fatalf("container view: %#v", container)
 	}
 	if !strings.Contains(c.expect(200, "GET", "/api/containers/essdee/whatsapp/webhook", nil).Body.String(), "verify-token") {
 		t.Fatal("verify token not shown to the admin")
 	}
-	if !strings.Contains(c.expect(200, "GET", "/api/sites", nil).Body.String(), "site-b") || !strings.Contains(c.expect(200, "GET", "/api/containers?query=ess", nil).Body.String(), "essdee") {
+	if !strings.Contains(c.expect(200, "GET", "/api/sites?query=Site", nil).Body.String(), "site-b") || !strings.Contains(c.expect(200, "GET", "/api/containers?query=ess", nil).Body.String(), "essdee") {
 		t.Fatal("list views")
 	}
 	if c.reloads != 14 {
@@ -146,5 +153,39 @@ func TestDirectoryAdminRejectsBadInput(t *testing.T) {
 	c.mux.ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatal("change without CSRF accepted")
+	}
+}
+
+func TestDirectoryAdminKeepsCheckStatusAndClearsNumberApp(t *testing.T) {
+	c := newDirectoryClient(t)
+	ctx := context.Background()
+	c.expect(204, "POST", "/api/containers", map[string]any{"id": "essdee", "enabled": true,
+		"whatsapp": map[string]any{"config": map[string]any{"app_id": "77", "graph_version": "v25.0", "app_secret": "app-secret", "verify_token": "verify-token"}, "access_token": "system-user-token"}})
+	c.expect(204, "POST", "/api/containers/essdee/channels", map[string]any{"secret": "500001:bot-one-secret-abcdefghijklmnopqrstu",
+		"key": "bot", "channel": "Telegram", "label": "Bot", "enabled": true, "config": map[string]any{"username": "bot"}})
+	if err := c.store.SetStatus(ctx, containers.ChannelRef{Channel: "Telegram", Key: "bot"}, map[string]any{"webhook_status": "registered"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.store.SetStatus(ctx, containers.ChannelRef{Channel: "Telegram", Key: "bot"}, map[string]any{"username": "x"}) == nil {
+		t.Fatal("status write changed a setting")
+	}
+	c.expect(204, "PUT", "/api/containers/essdee/channels/Telegram/bot", map[string]any{"label": "Bot", "enabled": true, "config": map[string]any{"username": "bot", "webhook_status": "forged"}})
+	bot, err := c.store.GetChannel(ctx, containers.ChannelRef{Channel: "Telegram", Key: "bot"})
+	if err != nil || bot.Config["webhook_status"] != "registered" {
+		t.Fatalf("check status lost on save: %v %v", bot.Config, err)
+	}
+
+	number := map[string]any{"key": "sales", "channel": "WhatsApp", "label": "Sales", "enabled": true,
+		"config": map[string]any{"phone_id": "101", "waba_id": "201", "app_secret": "own-secret", "verify_token": "own-verify"}}
+	c.expect(204, "POST", "/api/containers/essdee/channels", number)
+	sales, _ := c.store.GetChannel(ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "sales"})
+	if strings.Join(sales.ConfiguredSecrets, ",") != "app_secret,verify_token" {
+		t.Fatalf("number override: %v", sales.ConfiguredSecrets)
+	}
+	number["use_container_app"] = true
+	c.expect(204, "PUT", "/api/containers/essdee/channels/WhatsApp/sales", number)
+	sales, _ = c.store.GetChannel(ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "sales"})
+	if len(sales.ConfiguredSecrets) != 0 || sales.Config["connection_status"] != "connected" {
+		t.Fatalf("number still has its own app: %v %v", sales.ConfiguredSecrets, sales.Config)
 	}
 }

@@ -19,9 +19,13 @@ var siteSecretKeys = []string{"core_api_key", "core_api_secret", "callback_secre
 
 var channelPublicKeys = map[string]map[string]bool{
 	"WhatsApp": {"phone_id": true, "waba_id": true, "display_number": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true},
-	"Telegram": {"username": true},
-	"Email":    {"host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
+	"Telegram": {"username": true, "webhook_status": true, "checked_at": true},
+	"Email":    {"connection_status": true, "checked_at": true, "host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
 }
+
+// statusKeys are written by the Hub after a check. A save keeps the stored
+// value unless the caller sets the key itself.
+var statusKeys = []string{"connection_status", "verified_at", "webhook_status", "checked_at"}
 
 // A WhatsApp number may override the container's app_secret and verify_token.
 var channelPrivateKeys = map[string][]string{"WhatsApp": {"core_token", "app_secret", "verify_token"}, "Email": {"imap_password"}}

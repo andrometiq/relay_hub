@@ -57,12 +57,20 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := &connectionFixture{fail: tc.fail}
+			recorded := map[string]any{}
+			record := func(_ context.Context, channel, key string, values map[string]any) error {
+				recorded["target"] = channel + "/" + key
+				for field, value := range values {
+					recorded[field] = value
+				}
+				return nil
+			}
 			h := accountConnection(fixture, func(*http.Request) (auth.User, error) {
 				if tc.role == "" {
 					return auth.User{}, errors.New("no session")
 				}
 				return auth.User{Role: tc.role}, nil
-			}, "https://hub.invalid", "https://hub.invalid/hub", "master-secret")
+			}, "https://hub.invalid", "https://hub.invalid/hub", "master-secret", record)
 			r := httptest.NewRequest(tc.method, "/api/accounts/local/"+tc.channel+"/connection", strings.NewReader(tc.body))
 			r.SetPathValue("account", "local")
 			r.SetPathValue("channel", tc.channel)
@@ -87,9 +95,14 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 				if tc.channel == "telegram" && (result["matches"] != true || fixture.address != "https://hub.invalid/hub/webhooks/telegram/local" || fixture.repair != (tc.name == "repair")) {
 					t.Fatal("invalid webhook result")
 				}
-				if tc.channel == "email" && (result["smtp"] != "connected" || result["imap"] != "failed") {
-					t.Fatal("invalid email result")
+				if tc.channel == "email" && (result["smtp"] != "connected" || result["imap"] != "failed" || recorded["connection_status"] != "failed" || recorded["target"] != "Email/local") {
+					t.Fatalf("invalid email result: %v", recorded)
 				}
+				if tc.channel == "telegram" && (recorded["webhook_status"] != "registered" || recorded["checked_at"] == nil) {
+					t.Fatalf("telegram status not stored: %v", recorded)
+				}
+			} else if tc.status == 502 && recorded["webhook_status"] != "failed" {
+				t.Fatalf("failed check not stored: %v", recorded)
 			} else if tc.status != 502 && fixture.calls != 0 {
 				t.Fatal("denied request reached provider")
 			}
