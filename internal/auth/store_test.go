@@ -91,7 +91,7 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	if _, e = s.CreateUser(ctx, member, "escalation", pass, "admin"); e == nil {
 		t.Fatal("member created administrator")
 	}
-	if _, e = s.Issue(ctx, member, "unauthorized", "site-a", []string{"messages:send"}, 30); e == nil {
+	if _, e = s.Issue(ctx, member, "unauthorized", "site-a", 30); e == nil {
 		t.Fatal("ungranted token")
 	}
 	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('site-a','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
@@ -100,18 +100,18 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	if e = s.Grant(ctx, admin, id, "site-a", true); e != nil {
 		t.Fatal(e)
 	}
-	token, e := s.Issue(ctx, member, "core", "site-a", []string{"messages:send", "account:read"}, 30)
+	token, e := s.Issue(ctx, member, "core", "site-a", 30)
 	if e != nil {
 		t.Fatal(e)
 	}
 	p, e := s.Authenticate(ctx, token)
-	if e != nil || p.Site != "site-a" || !p.Allows("messages:send") || p.Allows("templates:write") {
-		t.Fatal("scope isolation", e)
+	if e != nil || p.Site != "site-a" {
+		t.Fatal("token not bound to its site", e)
 	}
 	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('site-b','https://b.invalid') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
-	if _, e = s.Issue(ctx, member, "foreign", "site-b", []string{"messages:send"}, 30); e == nil {
+	if _, e = s.Issue(ctx, member, "foreign", "site-b", 30); e == nil {
 		t.Fatal("token issued for a site the user was not granted")
 	}
 
@@ -145,7 +145,7 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	if _, e = s.Authenticate(ctx, token); e == nil {
 		t.Fatal("regrant revived token")
 	}
-	token, e = s.Issue(ctx, member, "core2", "site-a", []string{"messages:read"}, 1)
+	token, e = s.Issue(ctx, member, "core2", "site-a", 1)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -153,7 +153,7 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	if _, e = s.Authenticate(ctx, token); e == nil {
 		t.Fatal("expired token accepted")
 	}
-	token, _ = s.Issue(ctx, member, "core3", "site-a", []string{"messages:send"}, 30)
+	token, _ = s.Issue(ctx, member, "core3", "site-a", 30)
 	if e = s.ChangePassword(ctx, member, id, "wrong", pass+"new"); e == nil {
 		t.Fatal("password changed without old password")
 	}
@@ -174,7 +174,7 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 		t.Fatal(e)
 	}
 	member, _ = s.Session(ctx, mt)
-	token, _ = s.Issue(ctx, member, "core4", "site-a", []string{"messages:send"}, 30)
+	token, _ = s.Issue(ctx, member, "core4", "site-a", 30)
 	if e = s.SetEnabled(ctx, admin, id, false); e != nil {
 		t.Fatal(e)
 	}

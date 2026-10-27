@@ -20,17 +20,15 @@ func TestAccountBindingIsScopedAndContainsNoCredentials(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, account string
-		scopes        []string
 		denied        bool
 	}{
-		{"own", "one", []string{"account:read"}, false},
-		{"other", "two", []string{"account:read"}, false},
-		{"scope denied", "one", []string{"messages:send"}, true},
-		{"missing", "missing", []string{"account:read"}, true},
+		{"own", "one", false},
+		{"other", "two", false},
+		{"missing", "missing", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, err := NewAuthenticatedChannels(db.Ping, nil, func(context.Context, string) (auth.Principal, error) {
-				return auth.Principal{Site: tc.account, Scopes: tc.scopes}, nil
+				return auth.Principal{Site: tc.account}, nil
 			}, nil, channels.Store{DB: db})
 			if err != nil {
 				t.Fatal(err)

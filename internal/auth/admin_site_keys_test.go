@@ -34,23 +34,23 @@ func TestAdministratorsIssueKeysForAnySite(t *testing.T) {
 		t.Fatal(e)
 	}
 
-	key, e := s.Issue(ctx, admin, "core", "yrp", []string{"messages:send"}, 0)
+	key, e := s.Issue(ctx, admin, "core", "yrp", 0)
 	if e != nil {
 		t.Fatal("administrator could not issue a key for an ungranted site", e)
 	}
 	if p, e := s.Authenticate(ctx, key); e != nil || p.Site != "yrp" {
 		t.Fatal("administrator key for an ungranted site does not authenticate", e)
 	}
-	if _, e = s.Issue(ctx, admin, "core", "missing", []string{"messages:send"}, 0); !errors.Is(e, ErrDenied) {
+	if _, e = s.Issue(ctx, admin, "core", "missing", 0); !errors.Is(e, ErrDenied) {
 		t.Fatal("administrator issued a key for a missing site", e)
 	}
-	if _, e = s.Issue(ctx, member, "core", "yrp", []string{"messages:send"}, 0); !errors.Is(e, ErrDenied) {
+	if _, e = s.Issue(ctx, member, "core", "yrp", 0); !errors.Is(e, ErrDenied) {
 		t.Fatal("member issued a key for an ungranted site", e)
 	}
 	if e = s.Grant(ctx, admin, memberID, "yrp", true); e != nil {
 		t.Fatal(e)
 	}
-	memberKey, e := s.Issue(ctx, member, "core", "yrp", []string{"messages:send"}, 0)
+	memberKey, e := s.Issue(ctx, member, "core", "yrp", 0)
 	if e != nil {
 		t.Fatal("member could not issue a key for a granted site", e)
 	}
@@ -93,7 +93,7 @@ func TestAdministratorsIssueKeysForAnySite(t *testing.T) {
 	if labels["yrp"] != "YRP (yrp)" || labels["other"] != "other" {
 		t.Fatal("site options must show name and ID", labels)
 	}
-	form := url.Values{"name": {"core"}, "account": {"other"}, "days": {"0"}, "scopes": {"messages:send"}, "csrf": {CSRF(session)}}
+	form := url.Values{"name": {"core"}, "account": {"other"}, "days": {"0"}, "csrf": {CSRF(session)}}
 	code, body = request("POST", "/auth/tokens", form)
 	if token, _ := body["Token"].(string); code != 200 || !strings.HasPrefix(token, "relay_") {
 		t.Fatal("administrator key request failed", code, body["Error"])

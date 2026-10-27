@@ -49,7 +49,7 @@ func TestTelegramGroupMCPFailureMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 			h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, nil, func(context.Context, string) (auth.Principal, error) {
-				return auth.Principal{Site: "a", Scopes: []string{"groups:write"}}, nil
+				return auth.Principal{Site: "a"}, nil
 			}, &channels.Registry{Telegram: map[string]*telegram.Client{"a": client}})
 			if err != nil {
 				t.Fatal(err)
@@ -110,7 +110,7 @@ func TestTelegramCredentialReloadReachesExistingMCPHandler(t *testing.T) {
 	newToken := "123456:" + strings.Repeat("b", 24)
 	registry := &channels.Registry{Telegram: map[string]*telegram.Client{"a": newClient(oldToken)}}
 	h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, nil, func(context.Context, string) (auth.Principal, error) {
-		return auth.Principal{Site: "a", Scopes: []string{"messages:send"}}, nil
+		return auth.Principal{Site: "a"}, nil
 	}, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestTelegramGroupsAuthenticatedSimulation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue := func(account, label string, scopes ...string) string {
+	issue := func(account, label string) string {
 		if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES($1,'https://fixture.invalid') ON CONFLICT DO NOTHING`, account); err != nil {
 			t.Fatal(err)
 		}
@@ -173,17 +173,16 @@ func TestTelegramGroupsAuthenticatedSimulation(t *testing.T) {
 		if e := authStore.Grant(ctx, admin, admin.ID, account, true); e != nil {
 			t.Fatal(e)
 		}
-		token, e := authStore.Issue(ctx, admin, label, account, scopes, 1)
+		token, e := authStore.Issue(ctx, admin, label, account, 1)
 		if e != nil {
 			t.Fatal(e)
 		}
 		return token
 	}
-	writer := issue("group-a", "writer", "groups:write")
-	reader := issue("group-a", "reader", "groups:read")
-	sender := issue("group-a", "sender", "messages:send")
-	other := issue("group-b", "other", "groups:read", "groups:write", "messages:send")
-	unconfigured := issue("group-missing", "unconfigured", "groups:read")
+	key := issue("group-a", "key")
+	revocable := issue("group-a", "revocable")
+	other := issue("group-b", "other")
+	unconfigured := issue("group-missing", "unconfigured")
 	botTokens := map[string]string{"group-a": "123456:" + strings.Repeat("a", 24), "group-b": "654321:" + strings.Repeat("b", 24)}
 	type wireRequest struct {
 		Account, Method string
@@ -288,35 +287,31 @@ func TestTelegramGroupsAuthenticatedSimulation(t *testing.T) {
 	}
 	group := int64(-100123456789)
 	info := map[string]any{"operation": "info", "chat_id": group}
-	t.Run("read-and-write-scopes", func(t *testing.T) {
-		call(reader, "telegram.groups", info, false)
-		call(reader, "telegram.groups", map[string]any{"operation": "title", "chat_id": group, "title": "தமிழ்"}, true)
-		call(writer, "telegram.groups", info, true)
-		call(writer, "telegram.groups", map[string]any{"operation": "title", "chat_id": group, "title": "தமிழ்"}, false)
-		call(sender, "telegram.groups", info, true)
+	t.Run("site-key-reads-and-writes", func(t *testing.T) {
+		call(key, "telegram.groups", info, false)
+		call(key, "telegram.groups", map[string]any{"operation": "title", "chat_id": group, "title": "தமிழ்"}, false)
 		call(unconfigured, "telegram.groups", info, true)
 	})
 	t.Run("same-group-different-bot-account", func(t *testing.T) { call(other, "telegram.groups", info, false) })
 	t.Run("topic-reply-keeps-destination", func(t *testing.T) {
 		args := map[string]any{"chat_id": group, "text": "குழு பதில்", "reply_to": 55, "message_thread_id": 77}
-		call(reader, "telegram.send", args, true)
-		call(sender, "telegram.send", args, false)
+		call(key, "telegram.send", args, false)
 		call(other, "telegram.send", args, false)
 	})
 	t.Run("caller-cannot-select-account-or-provider", func(t *testing.T) {
-		call(reader, "telegram.groups", map[string]any{"operation": "info", "chat_id": group, "account": "group-b"}, true)
-		call(writer, "telegram.groups", map[string]any{"operation": "create", "chat_id": group}, true)
-		call(writer, "telegram.groups", map[string]any{"operation": "getUpdates", "chat_id": group}, true)
+		call(key, "telegram.groups", map[string]any{"operation": "info", "chat_id": group, "account": "group-b"}, true)
+		call(key, "telegram.groups", map[string]any{"operation": "create", "chat_id": group}, true)
+		call(key, "telegram.groups", map[string]any{"operation": "getUpdates", "chat_id": group}, true)
 	})
 	t.Run("revoked-token-stops-calls", func(t *testing.T) {
 		var tokenID int64
-		if e := db.QueryRow(ctx, "SELECT id FROM relay_api_tokens WHERE token_hash=$1", auth.Hash(writer)).Scan(&tokenID); e != nil {
+		if e := db.QueryRow(ctx, "SELECT id FROM relay_api_tokens WHERE token_hash=$1", auth.Hash(revocable)).Scan(&tokenID); e != nil {
 			t.Fatal(e)
 		}
 		if e := authStore.Revoke(ctx, admin, tokenID); e != nil {
 			t.Fatal(e)
 		}
-		call(writer, "telegram.groups", map[string]any{"operation": "title", "chat_id": group, "title": "Revoked"}, true)
+		call(revocable, "telegram.groups", map[string]any{"operation": "title", "chat_id": group, "title": "Revoked"}, true)
 	})
 	mu.Lock()
 	want := []wireRequest{

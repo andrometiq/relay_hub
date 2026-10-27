@@ -177,11 +177,10 @@ func TestWhatsAppBulkCampaignSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.Grant(ctx, admin, admin.ID, "bulk", true)
-	token, err := store.Issue(ctx, admin, "core", "bulk", []string{"messages:send", "deliveries:read"}, 1)
+	token, err := store.Issue(ctx, admin, "core", "bulk", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	readOnly, _ := store.Issue(ctx, admin, "reader", "bulk", []string{"messages:read"}, 1)
 
 	core := &bulkCore{t: t, secret: strings.Repeat("bulk-secret-", 4), latest: map[string]whatsapp.BulkUpdate{}, replies: map[string]time.Time{}}
 	meta := &bulkMeta{ids: map[string]string{}}
@@ -251,9 +250,6 @@ func TestWhatsAppBulkCampaignSimulation(t *testing.T) {
 		}}
 	}
 
-	if code, result := call(readOnly, []map[string]any{recipient(1)}); code != 200 || result != nil {
-		t.Fatal("read-only token queued a bulk send", code)
-	}
 	inline := map[string]any{"operation": "messages.media", "to": "919800000001", "media_type": "document", "mime_type": "application/pdf", "content_base64": "JVBERi0xLjQK"}
 	if code, result := call(token, []map[string]any{{"key": "inline-row", "message": inline}}); code != 200 || !strings.Contains(result["deliveries"].([]any)[0].(map[string]any)["error"].(string), "media_id or media_url") {
 		t.Fatal("bulk accepted inline media bytes", result)

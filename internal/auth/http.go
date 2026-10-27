@@ -143,7 +143,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.searchOptions(w, r, u)
 		return
 	}
-	data := map[string]any{"JSON": strings.Contains(r.Header.Get("Accept"), "application/json"), "User": u, "Prefix": h.Prefix, "CSRF": CSRF(c.Value), "Scopes": Scopes, "Accounts": []string{}}
+	data := map[string]any{"JSON": strings.Contains(r.Header.Get("Accept"), "application/json"), "User": u, "Prefix": h.Prefix, "CSRF": CSRF(c.Value), "Accounts": []string{}}
 	if r.Method == "POST" {
 		if !hmac.Equal([]byte(r.Form.Get("csrf")), []byte(CSRF(c.Value))) {
 			http.Error(w, "Invalid CSRF token", 403)
@@ -236,7 +236,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 				var token string
-				token, e = h.Store.Issue(ctx, u, r.Form.Get("name"), r.Form.Get("account"), r.Form["scopes"], days)
+				token, e = h.Store.Issue(ctx, u, r.Form.Get("name"), r.Form.Get("account"), days)
 				if e == nil {
 					data["Token"] = token
 				}
@@ -325,23 +325,23 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.render(w, usersPage, data)
 	case "/auth/tokens":
 		type token struct {
-			ID                             int64
-			Name, Account, Scopes, Expires string
-			Revoked                        bool
+			ID                     int64
+			Name, Account, Expires string
+			Revoked                bool
 		}
 		list := []token{}
 		comparison, order := ">", "ASC"
 		if before {
 			comparison, order = "<", "DESC"
 		}
-		rows, e := h.Store.DB.Query(ctx, "SELECT id,name,site_id,array_to_string(scopes,', '),CASE WHEN expires_at='infinity'::timestamptz THEN 'Never' ELSE expires_at::text END,revoked_at IS NOT NULL FROM relay_api_tokens WHERE user_id=$1 AND ($2::bigint=0 OR id "+comparison+" $2) AND (name || ' ' || site_id) ILIKE $3 ORDER BY id "+order+" LIMIT 51", u.ID, cursor, pattern)
+		rows, e := h.Store.DB.Query(ctx, "SELECT id,name,site_id,CASE WHEN expires_at='infinity'::timestamptz THEN 'Never' ELSE expires_at::text END,revoked_at IS NOT NULL FROM relay_api_tokens WHERE user_id=$1 AND ($2::bigint=0 OR id "+comparison+" $2) AND (name || ' ' || site_id) ILIKE $3 ORDER BY id "+order+" LIMIT 51", u.ID, cursor, pattern)
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return
 		}
 		for rows.Next() {
 			var v token
-			if rows.Scan(&v.ID, &v.Name, &v.Account, &v.Scopes, &v.Expires, &v.Revoked) != nil {
+			if rows.Scan(&v.ID, &v.Name, &v.Account, &v.Expires, &v.Revoked) != nil {
 				rows.Close()
 				http.Error(w, "Unavailable", 503)
 				return
@@ -460,6 +460,6 @@ func (h *HTTP) render(w http.ResponseWriter, body string, data any) {
 const shell = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Relay Hub</title><style>body{margin:0;background:#f7f8fa;color:#20242b;font:14px system-ui}main{max-width:900px;margin:4vh auto;padding:20px}article,form.card{background:white;border:1px solid #e3e6eb;border-radius:10px;padding:20px;margin:16px 0}h1{font-size:25px}a{color:#2563eb}label{display:block;margin:14px 0}input,select{box-sizing:border-box;max-width:100%;padding:10px;border:1px solid #cdd3dc;border-radius:6px;margin:6px}input:not([type=checkbox]):not([type=hidden]){display:block;width:100%;margin:6px 0}button{background:#2563eb;color:white;padding:10px 14px;border:0;border-radius:6px;cursor:pointer;margin:4px}nav{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.error{color:#b91c1c}.notice{color:#15803d}p,small{color:#596475;line-height:1.5}.wrap{overflow-wrap:anywhere}code{display:block;background:#eff6ff;padding:16px;overflow-wrap:anywhere}fieldset{border:1px solid #e3e6eb}fieldset label{display:inline-block;margin:6px}form.inline{display:inline}hr{border:0;border-top:1px solid #e3e6eb}</style></head><body><main>{{if .User}}<nav><a href="{{.Prefix}}/">Relay Hub</a>{{if eq .User.Role "admin"}}<a href="{{.Prefix}}/auth/users">Users</a>{{end}}<a href="{{.Prefix}}/auth/tokens">API tokens</a><a href="{{.Prefix}}/auth/sessions">Sessions</a><a href="{{.Prefix}}/auth/password">Password</a><form method="post" action="{{.Prefix}}/auth/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button>Sign out</button></form></nav>{{end}}{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}{{if .Notice}}<p class="notice" role="status">{{.Notice}}</p>{{end}}`
 const loginPage = `<h1>Sign in to Relay Hub</h1><form class="card" method="post"><input type="hidden" name="csrf" value="{{.CSRF}}"><label>Username<input name="username" autocomplete="username" required maxlength="100"></label><label>Password<input type="password" name="password" autocomplete="current-password" required maxlength="200"></label><button>Sign in</button></form>`
 const usersPage = `<h1>Users</h1><form class="card" method="post"><h2>New user</h2><input type="hidden" name="csrf" value="{{.CSRF}}"><input type="hidden" name="action" value="create"><label>Username<input name="username" required maxlength="100"></label><label>Initial password<input type="password" name="password" required minlength="14" maxlength="200" autocomplete="new-password"></label><label>Role<select name="role"><option value="member">Member</option><option value="admin">Administrator</option></select></label><button>Create user</button></form>{{range .Users}}<article><h2>{{.Username}}</h2><p>{{.Role}} · {{if .Enabled}}Active{{else}}Disabled{{end}}</p><form class="inline" method="post"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="action" value="enabled"><input type="hidden" name="enabled" value="{{if .Enabled}}false{{else}}true{{end}}"><button>{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form><form method="post"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><input type="hidden" name="action" value="grant"><label>Site<select name="account" required>{{range $.Accounts}}<option>{{.}}</option>{{end}}</select></label><button name="allow" value="true">Grant access</button><button name="allow" value="false">Remove access</button></form>{{if ne .ID $.User.ID}}<form method="post" action="{{$.Prefix}}/auth/password"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><label>New password<input type="password" name="password" minlength="14" maxlength="200" required autocomplete="new-password"></label><button>Reset password and revoke credentials</button></form>{{end}}</article>{{end}}`
-const tokensPage = `<h1>API tokens</h1>{{if .Token}}<p>Copy this token now. It will not be shown again.</p><code>{{.Token}}</code>{{end}}<form class="card" method="post"><input type="hidden" name="csrf" value="{{.CSRF}}"><label>Name<input name="name" required maxlength="100"></label><label>Site<input name="account" required maxlength="100" placeholder="Site ID"></label><label>Expires in days (0 means no expiry)<input type="number" name="days" min="0" max="90" value="0" required></label><fieldset><legend>Permissions</legend>{{range .Scopes}}<label><input type="checkbox" name="scopes" value="{{.}}">{{.}}</label>{{end}}</fieldset><button>Create token</button></form>{{range .Tokens}}<article><b>{{.Name}}</b><p>{{.Account}} · {{if .Revoked}}Revoked{{else}}Expires {{.Expires}}{{end}}</p><p>{{.Scopes}}</p>{{if not .Revoked}}<form method="post"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke token</button></form>{{end}}</article>{{end}}`
+const tokensPage = `<h1>API tokens</h1>{{if .Token}}<p>Copy this token now. It will not be shown again.</p><code>{{.Token}}</code>{{end}}<form class="card" method="post"><input type="hidden" name="csrf" value="{{.CSRF}}"><label>Name<input name="name" required maxlength="100"></label><label>Site<input name="account" required maxlength="100" placeholder="Site ID"></label><label>Expires in days (0 means no expiry)<input type="number" name="days" min="0" max="90" value="0" required></label><button>Create token</button></form>{{range .Tokens}}<article><b>{{.Name}}</b><p>{{.Account}} · {{if .Revoked}}Revoked{{else}}Expires {{.Expires}}{{end}}</p>{{if not .Revoked}}<form method="post"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke token</button></form>{{end}}</article>{{end}}`
 const passwordPage = `<h1>Change password</h1><p>Changing a password revokes all sessions and API tokens for that user.</p><form class="card" method="post"><input type="hidden" name="csrf" value="{{.CSRF}}"><label>Current password<input type="password" name="old_password" required maxlength="200" autocomplete="current-password"></label><label>New password<input type="password" name="password" required minlength="14" maxlength="200" autocomplete="new-password"></label><button>Change password</button></form>`
 const sessionsPage = `<h1>Sessions</h1><p>Sessions stay signed in until you sign out or revoke them · Five sessions per user</p><form method="post"><input type="hidden" name="csrf" value="{{.CSRF}}"><button name="action" value="others">Sign out other sessions</button></form>{{range .Sessions}}<article><b>{{if .Current}}This session{{else}}Other session{{end}}</b><p class="wrap">{{.Agent}}</p><p>Last active {{.Seen}}</p><form method="post"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="id" value="{{.ID}}"><button>Revoke session</button></form></article>{{end}}`

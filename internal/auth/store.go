@@ -19,7 +19,6 @@ import (
 
 var ErrDenied = errors.New("authentication or permission denied")
 var usernamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_.@-]{2,99}$`)
-var Scopes = []string{"messages:send", "messages:read", "deliveries:read", "deliveries:cancel", "templates:read", "templates:write", "groups:read", "groups:write", "calls:read", "calls:write", "account:read"}
 
 type Store struct{ DB *pgxpool.Pool }
 type User struct {
@@ -30,21 +29,12 @@ type User struct {
 	Version  int64  `json:"-"`
 }
 
-// Principal is an API token holder: the user, the site the token is bound to and its scopes.
+// Principal is an API token holder: the user and the one site the token may act on.
 type Principal struct {
 	UserID int64
 	Site   string
-	Scopes []string
 }
 
-func (p Principal) Allows(scope string) bool {
-	for _, s := range p.Scopes {
-		if s == scope {
-			return true
-		}
-	}
-	return false
-}
 func Secret() string {
 	b := make([]byte, 32)
 	if _, e := rand.Read(b); e != nil {
@@ -226,7 +216,7 @@ func (s *Store) Authenticate(ctx context.Context, token string) (Principal, erro
 	if !strings.HasPrefix(token, "relay_") || len(token) != 70 {
 		return p, ErrDenied
 	}
-	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.site_id,t.scopes FROM relay_api_tokens t JOIN relay_sites a ON a.site_id=t.site_id AND a.enabled JOIN relay_users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled AND (u.role='admin' OR EXISTS(SELECT 1 FROM relay_user_sites g WHERE g.user_id=u.id AND g.site_id=t.site_id))`, Hash(token)).Scan(&p.UserID, &p.Site, &p.Scopes)
+	e := s.DB.QueryRow(ctx, `SELECT t.user_id,t.site_id FROM relay_api_tokens t JOIN relay_sites a ON a.site_id=t.site_id AND a.enabled JOIN relay_users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.revoked_at IS NULL AND t.expires_at>now() AND u.enabled AND (u.role='admin' OR EXISTS(SELECT 1 FROM relay_user_sites g WHERE g.user_id=u.id AND g.site_id=t.site_id))`, Hash(token)).Scan(&p.UserID, &p.Site)
 	if e != nil {
 		return p, ErrDenied
 	}
@@ -349,22 +339,9 @@ func (s *Store) Grant(ctx context.Context, actor User, target int64, site string
 	}
 	return tx.Commit(ctx)
 }
-func (s *Store) Issue(ctx context.Context, u User, name, site string, scopes []string, days int) (string, error) {
-	if len(name) < 1 || len(name) > 100 || days < 0 || days > 90 || len(scopes) == 0 || len(scopes) > len(Scopes) {
-		return "", errors.New("token requires a name, scopes and expiry of 0 (no expiry) or 1–90 days")
-	}
-	seen := map[string]bool{}
-	for _, scope := range scopes {
-		ok := false
-		for _, known := range Scopes {
-			if scope == known {
-				ok = true
-			}
-		}
-		if !ok || seen[scope] {
-			return "", errors.New("invalid scopes")
-		}
-		seen[scope] = true
+func (s *Store) Issue(ctx context.Context, u User, name, site string, days int) (string, error) {
+	if len(name) < 1 || len(name) > 100 || days < 0 || days > 90 {
+		return "", errors.New("token requires a name and expiry of 0 (no expiry) or 1–90 days")
 	}
 	tx, e := s.DB.Begin(ctx)
 	if e != nil {
@@ -394,7 +371,7 @@ func (s *Store) Issue(ctx context.Context, u User, name, site string, scopes []s
 	if days == 0 {
 		expiry = pgtype.Timestamptz{InfinityModifier: pgtype.Infinity, Valid: true}
 	}
-	e = tx.QueryRow(ctx, "INSERT INTO relay_api_tokens(user_id,name,token_hash,site_id,scopes,expires_at) VALUES($1,$2,$3,$4,$5,$6) RETURNING id", u.ID, name, Hash(token), site, scopes, expiry).Scan(&id)
+	e = tx.QueryRow(ctx, "INSERT INTO relay_api_tokens(user_id,name,token_hash,site_id,expires_at) VALUES($1,$2,$3,$4,$5) RETURNING id", u.ID, name, Hash(token), site, expiry).Scan(&id)
 	if e != nil {
 		return "", e
 	}

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestTypingAccountAndScope(t *testing.T) {
+func TestTypingIsBoundToTheSite(t *testing.T) {
 	calls := 0
 	client, err := telegram.NewWithHTTPClient(telegram.Config{AccountID: "a", BotToken: "123456:" + strings.Repeat("a", 24), Enabled: true}, &http.Client{Transport: simulationTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -23,11 +23,11 @@ func TestTypingAccountAndScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		account, scope string
-		fail           bool
-	}{{"a", "messages:send", false}, {"a", "messages:read", true}, {"other", "messages:send", true}} {
+		account string
+		fail    bool
+	}{{"a", false}, {"other", true}} {
 		h, err := NewAuthenticatedChannels(func(context.Context) error { return nil }, nil, func(context.Context, string) (auth.Principal, error) {
-			return auth.Principal{Site: tc.account, Scopes: []string{tc.scope}}, nil
+			return auth.Principal{Site: tc.account}, nil
 		}, &channels.Registry{Telegram: map[string]*telegram.Client{"a": client}})
 		if err != nil {
 			t.Fatal(err)
@@ -45,7 +45,7 @@ func TestTypingAccountAndScope(t *testing.T) {
 			} `json:"result"`
 		}
 		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || response.Result.IsError != tc.fail {
-			t.Fatalf("wrong authorization result for %s/%s: %s", tc.account, tc.scope, w.Body.String())
+			t.Fatalf("wrong authorization result for %s: %s", tc.account, w.Body.String())
 		}
 	}
 	if calls != 1 {
