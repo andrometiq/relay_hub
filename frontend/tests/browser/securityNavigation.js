@@ -5,7 +5,7 @@ async(page)=>{
   await p.route('**/auth/**',async r=>{
    if(!r.request().headers().accept?.includes('application/json'))return r.continue();
    if(r.request().method()!=='GET')writes++;
-   await r.fulfill({json:{User:{role:'admin'},CSRF:'fixture',Scopes:[],Tokens:[],Sessions:[],Users:[],More:false}});
+   await r.fulfill({json:{User:{role:'admin'},CSRF:'fixture',Tokens:[],Sessions:[],Users:[],More:false}});
   });
   await p.goto('http://localhost:18081/auth/tokens');await p.getByRole('button',{name:'New token',exact:true}).waitFor();
   const nav=p.getByRole('complementary',{name:'Account navigation'});
