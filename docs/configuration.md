@@ -91,3 +91,18 @@ The Hub registers each bot's webhook with Telegram when you save or check the bo
 See the [provider matrix](provider-support.md) for ingress limits and [operations](operations.md) for troubleshooting.
 
 The Hub admin UI receives change notices over authenticated Socket.IO at `/socket.io/` (or `/hub/socket.io/` behind the prefix proxy), using WebSocket only. Proxies must forward WebSocket upgrades and keep Host and Origin. The Go listener uses PostgreSQL LISTEN/NOTIFY; the UI reads the endpoints again on a notice and on reconnect, without polling. Apply new numbered Hub migrations (`./relay migrate`) before you start a new build, then rebuild the frontend and restart the Hub.
+
+## Webhook forwarding
+
+The Hub can send a copy of each provider webhook to other URLs, for example an older system that must keep working while the Hub is the main receiver. Set the targets on the container page: the **Forward copies to** card on the WhatsApp tab serves the container's Meta webhook, and the dialog of a Telegram bot or mailbox serves that channel. A scope has at most 5 targets.
+
+| Rule | Behavior |
+| --- | --- |
+| What is forwarded | Only a POST that passed the signature or secret check and was stored in the event journal. WhatsApp changes of unknown numbers are forwarded too. GET verification and rejected requests are not forwarded. |
+| What is sent | A POST to the URL exactly as configured, with the same body bytes and only these headers: `Content-Type`, `User-Agent`, `X-Hub-Signature-256`, `X-Hub-Signature`, `X-Telegram-Bot-Api-Secret-Token`, `X-Relay-Email-Secret`. A target that knows the Meta app secret can check the signature. |
+| Timing | The Hub answers the provider first. A background worker sends the copy with a 10 second timeout. Each target gets its copies one at a time, in the order received. |
+| Retries | Up to 3 tries: at once, after 30 seconds and after 2 more minutes. A 2xx answer is delivered. Redirects are not followed and count as a failure. |
+| Results | Each copy records its result, HTTP status, time, tries and a short error. Records are deleted after 7 days. Removing a target deletes its records. |
+| URLs | `https` for any host. `http` only for `localhost`, loopback, private and Tailscale (`100.64.0.0/10`) IP addresses. No user name or password in the URL. |
+
+Without targets the Hub behaves as before. The stored copy holds the provider headers, including the Telegram and email secret tokens, until it is pruned; the API and logs never show bodies or header values.
