@@ -57,6 +57,7 @@ func (d *CallbackDispatcher) Run(ctx context.Context) {
 }
 
 func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string) error {
+	normalizeAccount(&a)
 	started := time.Now()
 	c, err := pgx.Connect(ctx, d.URL)
 	if err != nil {
@@ -79,11 +80,11 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	rows, err := c.Query(ctx, `WITH page AS (
  SELECT e.id,e.payload,d.status_offset FROM relay_whatsapp_callback_delivery d
  JOIN relay_whatsapp_events e ON e.id=d.event_id
- WHERE e.account=$1 AND d.lane=$2 AND NOT d.acknowledged AND NOT d.quarantined
+ WHERE e.account=$1 AND e.site_id=$4 AND d.lane=$2 AND NOT d.acknowledged AND NOT d.quarantined
  AND d.next_attempt<=now() ORDER BY e.id LIMIT $3
  ), sized AS (SELECT *,sum(octet_length(payload::text)) OVER(ORDER BY id) bytes,
  row_number() OVER(ORDER BY id) position FROM page)
- SELECT id,payload,status_offset FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id`, a.ID, lane, eventLimit)
+ SELECT id,payload,status_offset FROM sized WHERE bytes<=524288 OR position=1 ORDER BY id`, a.ID, lane, eventLimit, a.SiteID)
 	if err != nil {
 		return err
 	}

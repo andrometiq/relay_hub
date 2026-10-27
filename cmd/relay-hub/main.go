@@ -398,7 +398,14 @@ func run() error {
 		})))
 		mux.Handle("GET /api/accounts/health", browserAuth.Protect(accountHealth(authPool, browserAuth.Session)))
 		connections := accountConnection(channelRegistry, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), os.Getenv("RELAY_PUBLIC_ORIGIN")+os.Getenv("RELAY_PUBLIC_PREFIX"), os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"))
-		directoryAdmin{store: accountStore, session: browserAuth.Session, origin: os.Getenv("RELAY_PUBLIC_ORIGIN"), verifyWhatsApp: wa.ValidateCredentials, whatsappAccount: wa.AccountByKey, reload: reloadRuntime}.register(mux, browserAuth.Protect)
+		directory := directoryAdmin{store: accountStore, session: browserAuth.Session, origin: os.Getenv("RELAY_PUBLIC_ORIGIN"), verifyWhatsApp: wa.ValidateCredentials, whatsappAccount: wa.AccountByKey, reload: reloadRuntime}
+		directory.register(mux, browserAuth.Protect)
+		unassignedEvents{db: authPool, replay: func(ctx context.Context, channel string, id int64) error {
+			if channel != "WhatsApp" {
+				return errors.New("unsupported channel")
+			}
+			return wa.ReplayUnassigned(ctx, authPool, id)
+		}}.register(mux, browserAuth.Protect, directory.admin)
 		mux.Handle("GET /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("POST /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("GET /api/accounts/{account}/{channel}/connection", browserAuth.Protect(connections))
@@ -698,8 +705,8 @@ func run() error {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		})
-		mux.HandleFunc("GET /webhooks/whatsapp/{account}", wa.Webhook)
-		mux.HandleFunc("POST /webhooks/whatsapp/{account}", wa.Webhook)
+		mux.HandleFunc("GET /webhooks/whatsapp/{container}", wa.Webhook)
+		mux.HandleFunc("POST /webhooks/whatsapp/{container}", wa.Webhook)
 		mux.HandleFunc("GET /webhook/whatsapp", wa.Webhook)
 		mux.HandleFunc("POST /webhook/whatsapp", wa.Webhook)
 		mux.Handle("POST /mcp", handler)

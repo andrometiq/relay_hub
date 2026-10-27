@@ -421,7 +421,8 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	}
 	firstStatus := status(0, "read", accounts[0], first[0].ID)
 	webhook(accounts[0], firstStatus, "sha256=forged", 403)
-	webhook(accounts[1], firstStatus, "", 403)
+	// Another container's valid signature cannot reach this number: kept unrouted.
+	webhook(accounts[1], firstStatus, "", 200)
 	for i := 0; i < 52; i++ {
 		state := "delivered"
 		if i == 0 {
@@ -436,7 +437,7 @@ func TestWhatsAppAuthenticatedRoundTripSimulation(t *testing.T) {
 	webhook(accounts[0], incoming, "", 200)
 	webhook(accounts[0], incoming, "", 200)
 	var events, incomingCount int
-	if err = db.QueryRow(ctx, "SELECT count(*) FROM relay_whatsapp_events").Scan(&events); err != nil || events != 58 {
+	if err = db.QueryRow(ctx, "SELECT count(*) FROM relay_whatsapp_events WHERE account<>''").Scan(&events); err != nil || events != 58 {
 		t.Fatal("durable webhook dedupe failed", events, err)
 	}
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM relay_whatsapp_incoming").Scan(&incomingCount); err != nil || incomingCount != 1 {

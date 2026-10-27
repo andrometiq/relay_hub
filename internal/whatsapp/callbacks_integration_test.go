@@ -38,8 +38,8 @@ func TestCallbackBatchAcknowledgementAndIndependentLanes(t *testing.T) {
 	if _, err = c.Exec(ctx, "SET search_path TO "+schema); err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range []string{"0002_whatsapp_events.sql", "0004_delivery_status.sql", "0005_core_callbacks.sql", "0006_incoming_messages.sql", "0026_status_callback_offset.sql", "0028_whatsapp_callback_delivery.sql", "0003_outbox.sql", "0037_whatsapp_bulk.sql"} {
-		raw, err := os.ReadFile("../database/migrations/" + file)
+	for _, file := range []string{"0002_whatsapp_events.sql", "0004_delivery_status.sql", "0005_core_callbacks.sql", "0006_incoming_messages.sql", "0026_status_callback_offset.sql", "0028_whatsapp_callback_delivery.sql", "0003_outbox.sql", "0037_whatsapp_bulk.sql", siteColumnsFile} {
+		raw, err := migrationSQL(file)
 		if err != nil {
 			t.Fatal(err)
 		}

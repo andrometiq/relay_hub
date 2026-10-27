@@ -47,10 +47,25 @@ func (p PostgresEvents) connect(ctx context.Context) (*pgx.Conn, func(), error) 
 	return conn, func() { conn.Close(context.Background()) }, nil
 }
 
+// Route names where one envelope belongs: the channel key, its site (empty
+// while unassigned) and its container. An empty Account is an unknown number.
+type Route struct {
+	Account, Site, Container string
+}
+
 func (p PostgresEvents) Save(ctx context.Context, account string, body []byte) error {
 	return p.SaveEnvelope(ctx, account, body, body)
 }
+
+// SaveEnvelope journals an envelope for a single-number setup, where the
+// channel key, the site and the container share one id.
 func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, original []byte) error {
+	return p.SaveRouted(ctx, Route{Account: account, Site: account, Container: account}, body, original)
+}
+
+// SaveRouted journals one routed envelope. Statuses of earlier sends belong to
+// the site that queued them, so a status-only event takes that site.
+func (p PostgresEvents) SaveRouted(ctx context.Context, route Route, body, original []byte) error {
 	c, release, e := p.connect(ctx)
 	if e != nil {
 		return e
@@ -62,6 +77,14 @@ func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, 
 		return e
 	}
 	defer tx.Rollback(context.Background())
+	account := route.Account
+	if account == "" {
+		_, e = tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane,raw_payload,site_id,container_id) VALUES('',$1,$2,'realtime',$3,NULL,nullif($4,'')) ON CONFLICT(account,digest) DO NOTHING", hex.EncodeToString(digest[:]), string(body), string(original), route.Container)
+		if e != nil {
+			return e
+		}
+		return tx.Commit(ctx)
+	}
 	statuses := extractStatuses(body)
 	bulk, matched, e := bulkDeliveries(ctx, tx, account, statuses)
 	if e != nil {
@@ -71,7 +94,11 @@ func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, 
 	if lane == "status" && matched > 0 && matched == len(statuses) && matched == statusCount(body) {
 		lane = "bulk"
 	}
-	tag, e := tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane,raw_payload) VALUES($1,$2,$3,$4,$5) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), lane, string(original))
+	site, e := statusSite(ctx, tx, account, route.Site, lane, statuses)
+	if e != nil {
+		return e
+	}
+	tag, e := tx.Exec(ctx, "INSERT INTO relay_whatsapp_events(account,digest,payload,lane,raw_payload,site_id,container_id) VALUES($1,$2,$3,$4,$5,nullif($6,''),nullif($7,'')) ON CONFLICT(account,digest) DO NOTHING", account, hex.EncodeToString(digest[:]), string(body), lane, string(original), site, route.Container)
 	if e != nil {
 		return e
 	}
@@ -110,6 +137,27 @@ func (p PostgresEvents) SaveEnvelope(ctx context.Context, account string, body, 
 	}
 	return tx.Commit(ctx)
 }
+
+// statusSite returns the site of the sends a status-only envelope reports on,
+// when they share one site; otherwise the channel's current site.
+func statusSite(ctx context.Context, tx pgx.Tx, account, current, lane string, statuses []deliveryStatus) (string, error) {
+	if lane == "realtime" || len(statuses) == 0 {
+		return current, nil
+	}
+	tracking, providers := []int64{}, []string{}
+	for _, status := range statuses {
+		tracking = append(tracking, status.TrackingID)
+		providers = append(providers, status.ID)
+	}
+	var sites []string
+	err := tx.QueryRow(ctx, `SELECT coalesce(array_agg(DISTINCT site_id) FILTER (WHERE site_id IS NOT NULL),'{}') FROM relay_outbox
+ WHERE account=$1 AND (id=ANY($2) OR result->'messages'->0->>'id'=ANY($3))`, account, tracking, providers).Scan(&sites)
+	if err != nil || len(sites) != 1 {
+		return current, err
+	}
+	return sites[0], nil
+}
+
 func (p PostgresEvents) List(ctx context.Context, account string, after int64) ([]Event, error) {
 	c, release, e := p.connect(ctx)
 	if e != nil {
@@ -131,42 +179,27 @@ func (p PostgresEvents) List(ctx context.Context, account string, after int64) (
 	}
 	return events, rows.Err()
 }
+
+// Webhook receives Meta webhooks for one container (/webhooks/whatsapp/{container})
+// or, without an id, for any container. One signature check per app secret
+// authenticates the request. Changes for a number of the container go to its
+// channel key with its current site; changes for an unknown number are stored
+// unrouted and still answered 200, so Meta does not retry or disable the webhook.
 func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("account")
+	id := r.PathValue("container")
+	if id == "" {
+		id = r.PathValue("account")
+	}
 	accounts := s.AccountsSnapshot()
-	findByID := func() (Account, bool) {
-		for _, account := range accounts {
-			if account.ID == id {
-				return account, true
-			}
-		}
-		return Account{}, false
-	}
-	legacyAccount, legacyFound := findByID()
-	if id != "" && !legacyFound {
-		http.Error(w, "webhook unauthorized", http.StatusForbidden)
-		return
-	}
-	if r.Method == "GET" {
-		var a Account
-		found := false
-		if id != "" {
-			a, found = legacyAccount, legacyFound
-		} else {
-			token := r.URL.Query().Get("hub.verify_token")
-			for _, account := range accounts {
-				if account.VerifyToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(account.VerifyToken)) == 1 {
-					a, found = account, true
-					break
-				}
-			}
-		}
-		if !found || a.VerifyToken == "" || r.URL.Query().Get("hub.mode") != "subscribe" || subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("hub.verify_token")), []byte(a.VerifyToken)) != 1 {
-			http.Error(w, "invalid verification", 403)
+	if id != "" {
+		accounts = containerAccounts(accounts, id)
+		if len(accounts) == 0 {
+			http.Error(w, "webhook unauthorized", http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(r.URL.Query().Get("hub.challenge")))
+	}
+	if r.Method == "GET" {
+		s.verifyWebhook(w, r, accounts)
 		return
 	}
 	if r.Method != "POST" {
@@ -190,50 +223,102 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid event", 400)
 		return
 	}
-	if id != "" {
-		accounts = []Account{legacyAccount}
+	authenticated := signedBy(accounts, raw, r.Header.Get("X-Hub-Signature-256"))
+	if len(authenticated) == 0 {
+		http.Error(w, "invalid signature", 403)
+		return
 	}
-	// Authenticate each active destination against the original bytes.
-	authenticated := make([]Account, 0, len(accounts))
-	for _, a := range accounts {
-		mac := hmac.New(sha256.New, []byte(a.AppSecret))
-		mac.Write(raw)
-		expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
-		if a.AppSecret != "" && hmac.Equal([]byte(expected), []byte(r.Header.Get("X-Hub-Signature-256"))) {
-			authenticated = append(authenticated, a)
-		}
-	}
-	routed, err := routeEnvelope(payload, authenticated)
+	routed, unrouted, err := routeEnvelope(payload, authenticated)
 	if err != nil {
-		http.Error(w, "account mismatch or invalid signature", 403)
+		http.Error(w, "invalid event", 400)
 		return
 	}
 	if s.Events == nil {
 		http.Error(w, "event store unavailable", 503)
 		return
 	}
-	for account, envelope := range routed {
-		body, _ := json.Marshal(envelope)
-		if store, ok := s.Events.(interface {
-			SaveEnvelope(context.Context, string, []byte, []byte) error
-		}); ok {
-			e = store.SaveEnvelope(r.Context(), account, body, raw)
-		} else {
-			e = s.Events.Save(r.Context(), account, body)
-		}
-		if e != nil {
+	byKey := map[string]Account{}
+	for _, a := range authenticated {
+		byKey[a.ID] = a
+	}
+	for key, envelope := range routed {
+		a := byKey[key]
+		if e = s.saveRouted(r.Context(), Route{Account: key, Site: a.SiteID, Container: a.ContainerID}, envelope, raw); e != nil {
 			http.Error(w, "event persistence failed", 503)
 			return
 		}
-		if eventLane(body) == "realtime" {
-			select {
-			case s.callbackWake <- struct{}{}:
-			default:
-			}
+	}
+	if len(unrouted.Entry) > 0 {
+		if e = s.saveRouted(r.Context(), Route{Container: authenticated[0].ContainerID}, unrouted, raw); e != nil {
+			http.Error(w, "event persistence failed", 503)
+			return
 		}
 	}
 	w.WriteHeader(200)
 }
+
+func containerAccounts(accounts []Account, container string) []Account {
+	result := []Account{}
+	for _, a := range accounts {
+		if a.ContainerID == container {
+			result = append(result, a)
+		}
+	}
+	return result
+}
+
+// signedBy returns the numbers whose app secret signed the raw body.
+func signedBy(accounts []Account, raw []byte, signature string) []Account {
+	result := []Account{}
+	for _, a := range accounts {
+		if a.AppSecret == "" {
+			continue
+		}
+		mac := hmac.New(sha256.New, []byte(a.AppSecret))
+		mac.Write(raw)
+		if hmac.Equal([]byte("sha256="+hex.EncodeToString(mac.Sum(nil))), []byte(signature)) {
+			result = append(result, a)
+		}
+	}
+	return result
+}
+
+func (s *Service) verifyWebhook(w http.ResponseWriter, r *http.Request, accounts []Account) {
+	token := r.URL.Query().Get("hub.verify_token")
+	for _, a := range accounts {
+		if a.VerifyToken != "" && r.URL.Query().Get("hub.mode") == "subscribe" && subtle.ConstantTimeCompare([]byte(token), []byte(a.VerifyToken)) == 1 {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte(r.URL.Query().Get("hub.challenge")))
+			return
+		}
+	}
+	http.Error(w, "invalid verification", 403)
+}
+
+func (s *Service) saveRouted(ctx context.Context, route Route, envelope webhookEnvelope, raw []byte) error {
+	body, _ := json.Marshal(envelope)
+	var err error
+	switch store := s.Events.(type) {
+	case interface {
+		SaveRouted(context.Context, Route, []byte, []byte) error
+	}:
+		err = store.SaveRouted(ctx, route, body, raw)
+	case interface {
+		SaveEnvelope(context.Context, string, []byte, []byte) error
+	}:
+		err = store.SaveEnvelope(ctx, route.Account, body, raw)
+	default:
+		err = s.Events.Save(ctx, route.Account, body)
+	}
+	if err == nil && route.Site != "" && eventLane(body) == "realtime" {
+		select {
+		case s.callbackWake <- struct{}{}:
+		default:
+		}
+	}
+	return err
+}
+
 func (s *Service) events(ctx context.Context, a Account, after string) (map[string]any, error) {
 	cursor := int64(0)
 	var e error
@@ -413,42 +498,47 @@ type webhookChange struct {
 	Value map[string]json.RawMessage `json:"value"`
 }
 
-func routeEnvelope(envelope webhookEnvelope, accounts []Account) (map[string]webhookEnvelope, error) {
+// routeEnvelope splits an envelope by WABA (entry.id) and phone number id.
+// A change without phone metadata (template and account events) goes to every
+// number of that WABA. Changes that match no number are returned as unrouted.
+func routeEnvelope(envelope webhookEnvelope, accounts []Account) (map[string]webhookEnvelope, webhookEnvelope, error) {
 	routed := map[string]webhookEnvelope{}
+	unrouted := webhookEnvelope{Object: envelope.Object}
 	for _, entry := range envelope.Entry {
 		if len(entry.Changes) == 0 {
-			return nil, errors.New("empty changes")
+			return nil, unrouted, errors.New("empty changes")
 		}
 		for _, change := range entry.Changes {
 			var metadata struct {
 				PhoneID string `json:"phone_number_id"`
 			}
 			if raw := change.Value["metadata"]; len(raw) > 0 && json.Unmarshal(raw, &metadata) != nil {
-				return nil, errors.New("invalid metadata")
+				return nil, unrouted, errors.New("invalid metadata")
 			}
 			if metadata.PhoneID == "" {
 				for _, key := range []string{"messages", "statuses", "calls"} {
 					if _, ok := change.Value[key]; ok {
-						return nil, errors.New("phone metadata required")
+						return nil, unrouted, errors.New("phone metadata required")
 					}
 				}
 			}
-			// Disabled, unconfigured and unauthenticated destinations are omitted.
+			matched := false
 			for _, a := range accounts {
 				if a.WABAID != entry.ID || (metadata.PhoneID != "" && a.PhoneID != metadata.PhoneID) {
 					continue
 				}
+				matched = true
 				target := routed[a.ID]
 				target.Object = envelope.Object
 				target.Entry = append(target.Entry, webhookEntry{ID: entry.ID, Changes: []webhookChange{change}})
 				routed[a.ID] = target
 			}
+			if !matched {
+				unrouted.Entry = append(unrouted.Entry, webhookEntry{ID: entry.ID, Changes: []webhookChange{change}})
+			}
 		}
 	}
-	if len(routed) == 0 {
-		return nil, errors.New("no authenticated active webhook destination")
-	}
-	return routed, nil
+	return routed, unrouted, nil
 }
 
 func eventLane(body []byte) string {
