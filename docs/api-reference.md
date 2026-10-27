@@ -293,7 +293,6 @@ The administration routes are browser-session APIs, not a second public messagin
 | `GET`, `POST /api/containers`; `GET`, `PUT /api/containers/{container}` | List, create, read and edit containers and their WhatsApp app. Create takes only a name and returns `{id, webhook_path, csrf}` with status 201. |
 | `GET /api/containers/{container}/whatsapp/webhook` | Callback path and verify token to paste in Meta |
 | `POST /api/containers/{container}/channels`; `PUT /api/containers/{container}/channels/{channel}/{key}` | Add and edit a number, bot or mailbox |
-| `DELETE /api/containers/{container}/old-address`; `DELETE /api/containers/{container}/channels/{channel}/{key}/old-address` | Turn off the old readable webhook path; answers 204 |
 | `GET`, `POST /api/channels/{channel}/{key}/connection` | Read or run a connection check (`test`, or `repair` for a Telegram webhook) |
 | `GET`, `POST /api/sites`; `GET`, `PUT /api/sites/{site}` | List, create, read and edit sites and their Core credentials |
 | `PUT /api/sites/{site}/channels` | Set the full channel list of a site; 409 when a channel is on another site or has unfinished sends |

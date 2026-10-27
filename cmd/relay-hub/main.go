@@ -126,7 +126,7 @@ func whatsappAccount(row accountstore.RuntimeCredential) (whatsapp.Account, erro
 		return whatsapp.Account{}, err
 	}
 	account := whatsapp.Account{MessagesPerSecond: rate, ID: row.Key, ContainerID: row.Container, Label: row.Label,
-		WebhookID: row.WebhookID, LegacyWebhook: row.LegacyPath,
+		WebhookID:   row.WebhookID,
 		AccessToken: row.Secret, DisplayNumber: get("display_number"),
 		AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
 		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),

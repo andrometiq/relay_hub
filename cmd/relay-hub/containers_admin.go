@@ -31,21 +31,19 @@ type directoryAdmin struct {
 
 func (a directoryAdmin) register(mux *http.ServeMux, protect func(http.Handler) http.Handler) {
 	routes := map[string]http.HandlerFunc{
-		"GET /api/containers":                                                     a.listContainers,
-		"POST /api/containers":                                                    a.createContainer,
-		"GET /api/containers/{container}":                                         a.getContainer,
-		"PUT /api/containers/{container}":                                         a.updateContainer,
-		"GET /api/containers/{container}/whatsapp/webhook":                        a.containerWebhook,
-		"POST /api/containers/{container}/channels":                               a.createChannel,
-		"PUT /api/containers/{container}/channels/{channel}/{key}":                a.updateChannel,
-		"POST /api/channels/whatsapp/{key}/connection":                            a.whatsappConnection,
-		"DELETE /api/containers/{container}/old-address":                          a.turnOffOldAddress,
-		"DELETE /api/containers/{container}/channels/{channel}/{key}/old-address": a.turnOffOldAddress,
-		"GET /api/sites":                 a.listSites,
-		"POST /api/sites":                a.createSite,
-		"GET /api/sites/{site}":          a.getSite,
-		"PUT /api/sites/{site}":          a.updateSite,
-		"PUT /api/sites/{site}/channels": a.assignChannels,
+		"GET /api/containers":                                      a.listContainers,
+		"POST /api/containers":                                     a.createContainer,
+		"GET /api/containers/{container}":                          a.getContainer,
+		"PUT /api/containers/{container}":                          a.updateContainer,
+		"GET /api/containers/{container}/whatsapp/webhook":         a.containerWebhook,
+		"POST /api/containers/{container}/channels":                a.createChannel,
+		"PUT /api/containers/{container}/channels/{channel}/{key}": a.updateChannel,
+		"POST /api/channels/whatsapp/{key}/connection":             a.whatsappConnection,
+		"GET /api/sites":                                           a.listSites,
+		"POST /api/sites":                                          a.createSite,
+		"GET /api/sites/{site}":                                    a.getSite,
+		"PUT /api/sites/{site}":                                    a.updateSite,
+		"PUT /api/sites/{site}/channels":                           a.assignChannels,
 	}
 	for pattern, handler := range routes {
 		mux.Handle(pattern, protect(a.admin(handler)))
@@ -197,19 +195,6 @@ func (a directoryAdmin) saveContainer(w http.ResponseWriter, r *http.Request, in
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"id": saved.ID, "webhook_path": saved.WebhookPath, "csrf": csrf(r)})
-}
-
-// turnOffOldAddress makes a container, bot or mailbox answer only on its random path.
-func (a directoryAdmin) turnOffOldAddress(w http.ResponseWriter, r *http.Request) {
-	var channel *containers.ChannelRef
-	if r.PathValue("key") != "" {
-		channel = &containers.ChannelRef{Channel: r.PathValue("channel"), Key: r.PathValue("key")}
-	}
-	if err := a.store.TurnOffOldAddress(r.Context(), r.PathValue("container"), channel); err != nil {
-		storeFailure(w, err)
-		return
-	}
-	a.changed(w, r)
 }
 
 // containerWebhook gives the admin the callback path and verify token to paste in Meta.

@@ -84,7 +84,7 @@ Each public webhook address has a random path ID. The ID does not contain a name
 
 An unknown path gets 404. One WhatsApp address serves all numbers of a container, in all WABAs of its Meta app.
 
-Containers, bots and mailboxes that existed before random paths also answer on their old readable key path, so live provider settings keep working. After you change the provider to the new address, click **Turn off old address** on the container or channel, or call `DELETE /api/containers/{container}/old-address` or `DELETE /api/containers/{container}/channels/{channel}/{key}/old-address`. Then only the random path works. New containers and channels never get an old address.
+Each container, bot and mailbox has one webhook address: `https://<hub>/webhooks/<whatsapp|telegram|email>/<public_id>`. The Hub makes the `public_id` once, when it creates the record. Save, update and reload do not change it.
 
 The Hub registers each bot's webhook with Telegram when you save or check the bot. To do it by hand, get `{path, secret_token}` from `GET /api/accounts/{bot key}/telegram/webhook` and use [Telegram `setWebhook`](https://core.telegram.org/bots/api#setwebhook). Rotating `RELAY_TELEGRAM_WEBHOOK_SECRET` changes all derived tokens and requires new registration. The response is `no-store` and does not show the master or the bot token. The Hub stores and deduplicates each update before it answers success.
 

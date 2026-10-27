@@ -285,7 +285,7 @@ func webhookAccounts(accounts []Account, path string) []Account {
 		if id == "" {
 			id = a.ContainerID
 		}
-		if id == path || (a.LegacyWebhook && a.ContainerID == path) {
+		if id == path {
 			result = append(result, a)
 		}
 	}

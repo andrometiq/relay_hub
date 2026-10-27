@@ -26,9 +26,8 @@ type RuntimeCredential struct {
 	Secret      string
 	Core        CoreCredentials
 	// WebhookID is the random public path id: the container's for WhatsApp,
-	// the channel's own for Telegram and Email. LegacyPath also accepts the key.
-	WebhookID  string
-	LegacyPath bool
+	// the channel's own for Telegram and Email.
+	WebhookID string
 }
 
 const runtimeQuery = `SELECT c.channel_key,c.channel,c.container_id,coalesce(c.site_id,''),coalesce(s.origin,''),coalesce(s.enabled,false),
@@ -36,7 +35,7 @@ const runtimeQuery = `SELECT c.channel_key,c.channel,c.container_id,coalesce(c.s
  coalesce(p.config,'{}'::jsonb),coalesce(p.config_ciphertext,''::bytea),coalesce(p.config_nonce,''::bytea),
  coalesce(p.secret_ciphertext,''::bytea),coalesce(p.secret_nonce,''::bytea),
  coalesce(s.secret_ciphertext,''::bytea),coalesce(s.secret_nonce,''::bytea),
- CASE WHEN c.channel='WhatsApp' THEN k.public_id ELSE c.public_id END,CASE WHEN c.channel='WhatsApp' THEN k.legacy_path ELSE c.legacy_path END
+ CASE WHEN c.channel='WhatsApp' THEN k.public_id ELSE c.public_id END
  FROM relay_channel_credentials c JOIN relay_containers k ON k.container_id=c.container_id
  LEFT JOIN relay_container_providers p ON p.container_id=c.container_id AND p.provider=c.channel
  LEFT JOIN relay_sites s ON s.site_id=c.site_id`
@@ -70,7 +69,7 @@ func (s *Store) scanRuntime(row pgx.Row) (RuntimeCredential, error) {
 	var raw, secret, secretNonce, configCipher, configNonce []byte
 	var providerRaw, providerCipher, providerNonce, token, tokenNonce, siteCipher, siteNonce []byte
 	if err := row.Scan(&v.Key, &v.Channel, &v.Container, &v.Site, &v.Origin, &v.SiteEnabled, &v.Label, &v.Address, &v.Enabled,
-		&raw, &secret, &secretNonce, &configCipher, &configNonce, &providerRaw, &providerCipher, &providerNonce, &token, &tokenNonce, &siteCipher, &siteNonce, &v.WebhookID, &v.LegacyPath); err != nil {
+		&raw, &secret, &secretNonce, &configCipher, &configNonce, &providerRaw, &providerCipher, &providerNonce, &token, &tokenNonce, &siteCipher, &siteNonce, &v.WebhookID); err != nil {
 		return v, err
 	}
 	v.Config = map[string]any{}
