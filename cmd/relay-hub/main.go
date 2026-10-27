@@ -12,6 +12,7 @@ import (
 	accountstore "github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/database"
 	"github.com/andrometiq/relay_hub/internal/envconfig"
+	"github.com/andrometiq/relay_hub/internal/forward"
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/andrometiq/relay_hub/internal/live"
@@ -321,6 +322,11 @@ func run() error {
 		channelRegistry, err := channels.Load(runtimeRows)
 		if err != nil {
 			return errors.New("enabled channel configuration is invalid")
+		}
+		forwardWake := make(chan struct{}, 1)
+		forwards := forward.Store{DB: authPool, Wake: forwardWake}
+		wa.Forward = func(ctx context.Context, container string, header http.Header, body []byte) {
+			forwards.Queue(ctx, forward.Scope{Provider: "WhatsApp", Key: container}, header, body)
 		}
 		channelCallbacks := runtimeCallbacks(runtimeRows)
 		channelWake := make(chan struct{}, 1)
@@ -724,6 +730,7 @@ func run() error {
 				http.Error(w, "webhook rejected", 403)
 				return
 			}
+			forwards.Queue(r.Context(), forward.Scope{Provider: "Telegram", Key: account}, r.Header, raw)
 			w.WriteHeader(http.StatusNoContent)
 		})
 		mux.Handle("GET /api/accounts/{account}/email/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, channelRegistry, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
@@ -743,6 +750,7 @@ func run() error {
 				http.Error(w, "webhook rejected", 403)
 				return
 			}
+			forwards.Queue(r.Context(), forward.Scope{Provider: "Email", Key: account}, r.Header, raw)
 			w.WriteHeader(http.StatusNoContent)
 		})
 		mux.HandleFunc("GET /webhooks/whatsapp/{container}", wa.Webhook)
@@ -788,6 +796,9 @@ func run() error {
 		channels.Outbox{DB: authPool, Registry: channelRegistry}.Run(shutdown)
 		channels.MailboxPoller{DB: mailboxPool, Registry: channelRegistry, Wake: channelWake}.Run(shutdown)
 		callbacks.Run(shutdown)
+		lifecycle.Go(shutdown, func() {
+			forward.Worker{DB: authPool, Wake: forwardWake, Client: forward.NewClient()}.Run(shutdown)
+		})
 		channelCallbacksDispatcher.Run(shutdown, channelCallbacks)
 		serverDone := make(chan error, 1)
 		go func() {
