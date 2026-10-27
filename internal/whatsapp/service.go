@@ -19,7 +19,14 @@ import (
 	"unicode"
 )
 
+// Account is one WhatsApp number (channel). ID is its channel key, SiteID the
+// site it is assigned to (empty while unassigned), and ContainerID the Meta app
+// container whose app secret signs its webhooks.
 type Account struct {
+	SiteID            string `json:"site_id,omitempty"`
+	ContainerID       string `json:"container_id,omitempty"`
+	Label             string `json:"label,omitempty"`
+	DisplayNumber     string `json:"display_number,omitempty"`
 	AppID             string `json:"app_id,omitempty"`
 	SyncMetadata      bool   `json:"sync_metadata,omitempty"`
 	MessagesPerSecond int    `json:"messages_per_second,omitempty"`
@@ -57,6 +64,17 @@ func (s *Service) AccountsSnapshot() []Account {
 	defer s.accountsMu.RUnlock()
 	return append([]Account(nil), s.Accounts...)
 }
+
+// AccountByKey returns the active number with this channel key.
+func (s *Service) AccountByKey(key string) (Account, bool) {
+	for _, a := range s.AccountsSnapshot() {
+		if a.ID == key {
+			return a, true
+		}
+	}
+	return Account{}, false
+}
+
 func (s *Service) ReplaceAccounts(accounts []Account) error {
 	validated, err := New(accounts)
 	if err != nil {
@@ -185,12 +203,38 @@ var callIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.=:-]{1,512}$`)
 var templateName = regexp.MustCompile(`^[a-z0-9_]{1,512}$`)
 var language = regexp.MustCompile(`^[a-z]{2,3}(_[A-Z]{2})?$`)
 
+// normalizeAccount keeps single-number configurations working: a number
+// without a container uses its own key, and a number with a site origin but no
+// site id belongs to the site named by its key.
+func normalizeAccount(a *Account) {
+	if a.ContainerID == "" {
+		a.ContainerID = a.ID
+	}
+	if a.SiteID == "" && a.Site != "" {
+		a.SiteID = a.ID
+	}
+}
+
+// To is the business number shown to Core: the display number, else the phone number id.
+func (a Account) To() string {
+	if a.DisplayNumber != "" {
+		return a.DisplayNumber
+	}
+	return a.PhoneID
+}
+
 func New(accounts []Account) (*Service, error) {
 	seen := map[string]bool{}
 	tokens := map[string]bool{}
-	for _, a := range accounts {
+	accounts = append([]Account(nil), accounts...)
+	for i := range accounts {
+		normalizeAccount(&accounts[i])
+		a := accounts[i]
 		site, e := url.Parse(a.Site)
-		if a.MessagesPerSecond < 0 || a.MessagesPerSecond > 1000 || !identifier.MatchString(a.ID) || len(a.ID) > 100 || seen[a.ID] || (a.CoreToken != "" && (len(a.CoreToken) < 32 || strings.ContainsAny(a.CoreToken, "\r\n\x00") || tokens[a.CoreToken])) || a.AccessToken == "" || strings.ContainsAny(a.AccessToken, "\r\n") || !digits.MatchString(a.PhoneID) || !digits.MatchString(a.WABAID) || !regexp.MustCompile(`^v[0-9]+\.0$`).MatchString(a.Version) || e != nil || site.Host == "" || (site.Scheme != "http" && site.Scheme != "https") || site.User != nil || site.RawQuery != "" || site.Fragment != "" || (site.Path != "" && site.Path != "/") {
+		if a.SiteID == "" && a.Site == "" {
+			site, e = url.Parse("https://unassigned.invalid")
+		}
+		if (a.SiteID != "" && !identifier.MatchString(a.SiteID)) || !identifier.MatchString(a.ContainerID) || a.MessagesPerSecond < 0 || a.MessagesPerSecond > 1000 || !identifier.MatchString(a.ID) || len(a.ID) > 100 || seen[a.ID] || (a.CoreToken != "" && (len(a.CoreToken) < 32 || strings.ContainsAny(a.CoreToken, "\r\n\x00") || tokens[a.CoreToken])) || a.AccessToken == "" || strings.ContainsAny(a.AccessToken, "\r\n") || !digits.MatchString(a.PhoneID) || !digits.MatchString(a.WABAID) || !regexp.MustCompile(`^v[0-9]+\.0$`).MatchString(a.Version) || e != nil || site.Host == "" || (site.Scheme != "http" && site.Scheme != "https") || site.User != nil || site.RawQuery != "" || site.Fragment != "" || (site.Path != "" && site.Path != "/") {
 			return nil, errors.New("invalid or duplicate WhatsApp account configuration")
 		}
 		if a.CoreAPIKey != "" || a.CoreAPISecret != "" || a.CallbackSecret != "" {

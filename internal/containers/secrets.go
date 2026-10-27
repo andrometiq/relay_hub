@@ -1,4 +1,4 @@
-package accounts
+package containers
 
 import (
 	"context"
@@ -6,18 +6,30 @@ import (
 	"errors"
 )
 
-// These fields are write-only in account configuration. Blank edits preserve
-// stored values; the UI receives presence indicators, never decrypted values.
+// These fields are write-only. Blank edits keep stored values; responses
+// carry presence indicators, never decrypted values.
 var sensitiveKeys = []string{"app_secret", "verify_token", "core_token", "core_api_key", "core_api_secret", "callback_secret", "imap_password"}
 
-var publicConfigKeys = map[string]map[string]bool{
-	"WhatsApp": {"app_id": true, "phone_id": true, "waba_id": true, "graph_version": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true},
-	"Telegram": {},
+// Container provider settings are shared by every number of one Meta app.
+var providerPublicKeys = map[string]bool{"app_id": true, "graph_version": true}
+var providerPrivateKeys = []string{"app_secret", "verify_token"}
+
+// Site credentials sign and authorize every callback to one Frappe site.
+var siteSecretKeys = []string{"core_api_key", "core_api_secret", "callback_secret"}
+
+var channelPublicKeys = map[string]map[string]bool{
+	"WhatsApp": {"phone_id": true, "waba_id": true, "display_number": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true},
+	"Telegram": {"username": true},
 	"Email":    {"host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
 }
 
-func sensitive(key string) bool {
-	for _, candidate := range sensitiveKeys {
+// A WhatsApp number may override the container's app_secret and verify_token.
+var channelPrivateKeys = map[string][]string{"WhatsApp": {"core_token", "app_secret", "verify_token"}, "Email": {"imap_password"}}
+
+func sensitive(key string) bool { return contains(sensitiveKeys, key) }
+
+func contains(values []string, key string) bool {
+	for _, candidate := range values {
 		if key == candidate {
 			return true
 		}
@@ -35,6 +47,38 @@ func (s *Store) configSecrets(ciphertext, nonce []byte) (map[string]string, erro
 		return nil, errors.New("stored configuration cannot be decrypted")
 	}
 	return result, nil
+}
+
+// mergeSecrets keeps stored private values and applies non-empty edits for allowed keys.
+func mergeSecrets(stored map[string]string, edits map[string]any, allowed []string) (map[string]string, error) {
+	result := map[string]string{}
+	for _, key := range allowed {
+		if stored[key] != "" {
+			result[key] = stored[key]
+		}
+		value, exists := edits[key]
+		if !exists {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, errors.New("invalid secret field")
+		}
+		if text != "" {
+			result[key] = text
+		}
+	}
+	return result, nil
+}
+
+func configured(private map[string]string, keys []string) []string {
+	result := []string{}
+	for _, key := range keys {
+		if private[key] != "" {
+			result = append(result, key)
+		}
+	}
+	return result
 }
 
 // ProtectLegacyConfig upgrades all rows, including disabled channels, atomically.
@@ -96,11 +140,7 @@ func (s *Store) ProtectLegacyConfig(ctx context.Context) error {
 					delete(public, key)
 				}
 			}
-			raw, e := json.Marshal(private)
-			if e != nil {
-				return e
-			}
-			cipher, nonce, e := s.box(string(raw))
+			cipher, nonce, e := s.boxMap(private)
 			if e != nil {
 				return e
 			}

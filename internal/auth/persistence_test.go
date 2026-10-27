@@ -28,7 +28,7 @@ func TestPersistentSessionAndRevocableNoExpiryToken(t *testing.T) {
 	if _, err = s.Session(ctx, session); err != nil {
 		t.Fatal("idle session unexpectedly expired", err)
 	}
-	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES('test-account','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('test-account','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Grant(ctx, user, user.ID, "test-account", true); err != nil {

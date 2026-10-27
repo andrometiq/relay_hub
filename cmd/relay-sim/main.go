@@ -23,9 +23,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/andrometiq/relay_hub/internal/accounts"
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/database"
 	"github.com/andrometiq/relay_hub/internal/envconfig"
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
@@ -75,7 +75,7 @@ type simulation struct {
 }
 
 func (s *simulation) resume(ctx context.Context) error {
-	store, err := accounts.New(s.db, s.credentialKey)
+	store, err := containers.New(s.db, s.credentialKey)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (s *simulation) resume(ctx context.Context) error {
 		return errors.New("cannot load simulation account")
 	}
 	for _, row := range rows {
-		if row.AccountID != "sim-v1" || row.Channel != "WhatsApp" {
+		if row.Key != "sim-v1" || row.Channel != "WhatsApp" {
 			continue
 		}
 		var a whatsapp.Account
@@ -92,7 +92,8 @@ func (s *simulation) resume(ctx context.Context) error {
 		if err != nil || json.Unmarshal(raw, &a) != nil {
 			return errors.New("invalid simulation account configuration")
 		}
-		a.ID, a.Site, a.AccessToken = row.AccountID, row.Site, row.Secret
+		a.ID, a.SiteID, a.ContainerID, a.Site, a.AccessToken = row.Key, row.Site, row.Container, row.Origin, row.Secret
+		a.CoreAPIKey, a.CoreAPISecret, a.CallbackSecret = row.Core.APIKey, row.Core.APISecret, row.Core.CallbackSecret
 		if a.AccessToken != "sim-provider-token" || a.AppSecret != "sim-app-secret" || a.PhoneID != "110" || a.WABAID != "220" || a.Version != "v25.0" {
 			return errors.New("refusing non-simulation provider configuration")
 		}
@@ -178,12 +179,12 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		}
 		// The canonical site name is logical identity only; the transport dials core-origin.
 		a := whatsapp.Account{ID: "sim-v1", Site: in.Site, AccessToken: "sim-provider-token", PhoneID: "110", WABAID: "220", Version: "v25.0", Templates: true, AppSecret: "sim-app-secret", VerifyToken: "sim-verify-token", CoreAPIKey: in.APIKey, CoreAPISecret: in.APISecret, CallbackSecret: in.Secret}
-		store, err := accounts.New(s.db, s.credentialKey)
+		store, err := containers.New(s.db, s.credentialKey)
 		if err != nil {
 			http.Error(w, "account store unavailable", 503)
 			return
 		}
-		err = store.Save(r.Context(), accounts.Account{ID: a.ID, Site: a.Site, Enabled: true, Channels: simulationChannels(a)}, map[string]string{"WhatsApp": a.AccessToken, "Telegram": simulationBotToken, "Email": simulationMailPassword})
+		err = store.Save(r.Context(), containers.Account{ID: a.ID, Site: a.Site, Enabled: true, Channels: simulationChannels(a)}, map[string]string{"WhatsApp": a.AccessToken, "Telegram": simulationBotToken, "Email": simulationMailPassword})
 		if err != nil {
 			http.Error(w, "account provisioning failed", 503)
 			return
@@ -209,7 +210,7 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "grant failed", 503)
 			return
 		}
-		rows, err := s.db.Query(r.Context(), "SELECT id FROM relay_api_tokens WHERE user_id=$1 AND account_id=$2 AND name='simulation' AND revoked_at IS NULL", admin.ID, a.ID)
+		rows, err := s.db.Query(r.Context(), "SELECT id FROM relay_api_tokens WHERE user_id=$1 AND site_id=$2 AND name='simulation' AND revoked_at IS NULL", admin.ID, a.ID)
 		if err != nil {
 			http.Error(w, "token rotation unavailable", 503)
 			return

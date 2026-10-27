@@ -32,7 +32,7 @@ func TestRemoteOptionsBoundedAndScoped(t *testing.T) {
 	if os.Getenv("RELAY_TEST_OPTIONS_SCALE") == "2000000" {
 		count = 2000000
 	}
-	if _, err = s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) SELECT 'record-' || lpad(n::text,7,'0'),'https://fixture.invalid' FROM generate_series(1,$1) n`, count); err != nil {
+	if _, err = s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) SELECT 'record-' || lpad(n::text,7,'0'),'https://fixture.invalid' FROM generate_series(1,$1) n`, count); err != nil {
 		t.Fatal(err)
 	}
 	member := User{ID: memberID, Role: "member"}

@@ -173,7 +173,7 @@ func TestWhatsAppBulkCampaignSimulation(t *testing.T) {
 	}
 	session, _ := store.Login(ctx, "bulk-admin", "synthetic-bulk-password-42", "bulk")
 	admin, _ := store.Session(ctx, session)
-	if _, err := db.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES('bulk','https://fixture.invalid')`); err != nil {
+	if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('bulk','https://fixture.invalid')`); err != nil {
 		t.Fatal(err)
 	}
 	store.Grant(ctx, admin, admin.ID, "bulk", true)

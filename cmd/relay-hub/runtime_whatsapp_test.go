@@ -5,16 +5,16 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/andrometiq/relay_hub/internal/accounts"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 )
 
 type fixtureRuntime struct {
-	rows []accounts.RuntimeCredential
+	rows []containers.RuntimeCredential
 	err  error
 }
 
-func (s fixtureRuntime) Runtime(context.Context) ([]accounts.RuntimeCredential, error) {
+func (s fixtureRuntime) Runtime(context.Context) ([]containers.RuntimeCredential, error) {
 	return s.rows, s.err
 }
 func TestAuthoritativeEmptyWhatsAppConfiguration(t *testing.T) {
@@ -39,8 +39,8 @@ func TestAuthoritativeEmptyWhatsAppConfiguration(t *testing.T) {
 }
 
 func TestWhatsAppRuntimeDisablesStoredGroupAndCallCapabilities(t *testing.T) {
-	rows, err := runtimeWhatsApp(context.Background(), fixtureRuntime{rows: []accounts.RuntimeCredential{{
-		AccountID: "fixture", Channel: "WhatsApp", Site: "https://fixture.invalid", Secret: "fixture", Enabled: true,
+	rows, err := runtimeWhatsApp(context.Background(), fixtureRuntime{rows: []containers.RuntimeCredential{{
+		Key: "fixture", Channel: "WhatsApp", Site: "https://fixture.invalid", Secret: "fixture", Enabled: true,
 		Config: map[string]any{"phone_id": "111", "waba_id": "222", "graph_version": "v25.0", "templates": true, "groups": true, "calls": true},
 	}}})
 	if err != nil || len(rows) != 1 || rows[0].Groups || rows[0].Calls || !rows[0].Templates {

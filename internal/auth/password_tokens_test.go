@@ -25,7 +25,7 @@ func TestSelfPasswordRotationTokenChoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES('test-account','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('test-account','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Grant(ctx, user, user.ID, "test-account", true); err != nil {
@@ -96,7 +96,7 @@ func TestAdminPasswordResetCannotPreserveTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES('test-account','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('test-account','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.Grant(ctx, admin, id, "test-account", true); err != nil {

@@ -64,6 +64,7 @@ func metadataSource(a Account) string {
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 func (m *MetadataSync) Sync(ctx context.Context, a Account) error {
+	normalizeAccount(&a)
 	if !a.SyncMetadata || !m.current(a) {
 		return nil
 	}

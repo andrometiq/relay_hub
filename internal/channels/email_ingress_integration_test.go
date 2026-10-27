@@ -13,13 +13,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/andrometiq/relay_hub/internal/accounts"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 )
 
 func TestEmailDSNWebhookToStatusCallback(t *testing.T) {
 	pool, dsn := channelTestDB(t)
-	registry, err := Load([]accounts.RuntimeCredential{{AccountID: "alpha", Channel: "Email", Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "sender@example.invalid", "trusted_authserv_id": "mx.example.invalid", "trusted_dsn_domain": "provider.invalid"}}})
+	registry, err := Load([]containers.RuntimeCredential{{Key: "alpha", Channel: "Email", Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "sender@example.invalid", "trusted_authserv_id": "mx.example.invalid", "trusted_dsn_domain": "provider.invalid"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
