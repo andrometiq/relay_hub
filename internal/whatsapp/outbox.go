@@ -170,9 +170,23 @@ func queueable(in Input, bulk bool) error {
 	}
 	return errors.New("operation cannot be queued")
 }
+// outboxScope is the filter of a delivery read or change: one number, the
+// numbers of one site, or one number within one site. A site sees only the
+// sends it made, also after a number moves to another site.
+func outboxScope(a Account) (string, string, error) {
+	normalizeAccount(&a)
+	if a.ID == "" && a.SiteID == "" {
+		return "", "", errors.New("account or site required")
+	}
+	return a.ID, a.SiteID, nil
+}
+
 func (o *Outbox) List(ctx context.Context, a Account, after string) ([]Delivery, error) {
+	key, site, err := outboxScope(a)
+	if err != nil {
+		return nil, err
+	}
 	cursor := int64(0)
-	var err error
 	if after != "" {
 		cursor, err = strconv.ParseInt(after, 10, 64)
 		if err != nil || cursor < 0 {
@@ -184,7 +198,7 @@ func (o *Outbox) List(ctx context.Context, a Account, after string) ([]Delivery,
 		return nil, err
 	}
 	defer release()
-	rows, err := c.Query(ctx, `WITH page AS (SELECT * FROM relay_outbox WHERE account=$1 AND id>$2 ORDER BY id LIMIT 50), sized AS (SELECT *,sum(octet_length(coalesce(result::text,''))) OVER (ORDER BY id) bytes FROM page) SELECT o.id::text,o.request_key,o.state,o.result,o.error,coalesce(s.status,''),o.provider_error,o.attempts,o.next_attempt FROM sized o LEFT JOIN relay_whatsapp_status s ON s.account=o.account AND s.provider_id=o.result->'messages'->0->>'id' WHERE o.bytes<=524288 ORDER BY o.id`, a.ID, cursor)
+	rows, err := c.Query(ctx, `WITH page AS (SELECT * FROM relay_outbox WHERE ($1='' OR account=$1) AND ($3='' OR site_id=$3) AND id>$2 ORDER BY id LIMIT 50), sized AS (SELECT *,sum(octet_length(coalesce(result::text,''))) OVER (ORDER BY id) bytes FROM page) SELECT o.id::text,o.request_key,o.state,o.result,o.error,coalesce(s.status,''),o.provider_error,o.attempts,o.next_attempt FROM sized o LEFT JOIN relay_whatsapp_status s ON s.account=o.account AND s.provider_id=o.result->'messages'->0->>'id' WHERE o.bytes<=524288 ORDER BY o.id`, key, cursor, site)
 	if err != nil {
 		return nil, err
 	}
@@ -204,12 +218,16 @@ func (o *Outbox) Cancel(ctx context.Context, a Account, id string) error {
 	if err != nil || n < 1 {
 		return errors.New("invalid delivery ID")
 	}
+	key, site, err := outboxScope(a)
+	if err != nil {
+		return err
+	}
 	c, release, err := o.connect(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	tag, err := c.Exec(ctx, "UPDATE relay_outbox SET state='cancelled',updated_at=now() WHERE account=$1 AND id=$2 AND state='queued'", a.ID, n)
+	tag, err := c.Exec(ctx, "UPDATE relay_outbox SET state='cancelled',updated_at=now() WHERE ($1='' OR account=$1) AND ($3='' OR site_id=$3) AND id=$2 AND state='queued'", key, n, site)
 	if err == nil && tag.RowsAffected() != 1 {
 		return errors.New("delivery is not queued or does not belong to this account")
 	}
@@ -530,12 +548,16 @@ func (o *Outbox) Lookup(ctx context.Context, a Account, key string) (Delivery, e
 	if !identifier.MatchString(key) {
 		return d, errors.New("invalid request key")
 	}
+	number, site, err := outboxScope(a)
+	if err != nil {
+		return d, err
+	}
 	c, release, err := o.connect(ctx)
 	if err != nil {
 		return d, err
 	}
 	defer release()
-	err = c.QueryRow(ctx, "SELECT id::text,request_key,state,result,error,provider_error,attempts,next_attempt FROM relay_outbox WHERE account=$1 AND request_key=$2", a.ID, key).Scan(&d.ID, &d.Key, &d.State, &d.Result, &d.Error, &d.ProviderError, &d.Attempts, &d.NextAttempt)
+	err = c.QueryRow(ctx, "SELECT id::text,request_key,state,result,error,provider_error,attempts,next_attempt FROM relay_outbox WHERE ($1='' OR account=$1) AND ($3='' OR site_id=$3) AND request_key=$2 ORDER BY id DESC LIMIT 1", number, key, site).Scan(&d.ID, &d.Key, &d.State, &d.Result, &d.Error, &d.ProviderError, &d.Attempts, &d.NextAttempt)
 	return d, err
 }
 
@@ -582,6 +604,10 @@ func (o *Outbox) Resolve(ctx context.Context, a Account, id int64, outcome, note
 	if id < 1 || (outcome != "submitted" && outcome != "rejected") || len(note) < 10 || len(note) > 2000 || len(providerID) > 300 || strings.ContainsAny(providerID, "\r\n\t ") {
 		return errors.New("invalid verified outcome or evidence")
 	}
+	key, site, err := outboxScope(a)
+	if err != nil {
+		return err
+	}
 	c, release, err := o.connect(ctx)
 	if err != nil {
 		return err
@@ -592,7 +618,7 @@ func (o *Outbox) Resolve(ctx context.Context, a Account, id int64, outcome, note
 		result["messages"] = []map[string]string{{"id": providerID}}
 	}
 	raw, _ := json.Marshal(result)
-	tag, err := c.Exec(ctx, `UPDATE relay_outbox SET state=$3,resolution_note=$4,resolved_at=now(),updated_at=now(),error='',result=COALESCE(result,'{}'::jsonb)||$5::jsonb WHERE account=$1 AND id=$2 AND state='uncertain' AND ($3='rejected' OR $6<>'' OR payload->>'operation'='messages.react')`, a.ID, id, outcome, note, string(raw), providerID)
+	tag, err := c.Exec(ctx, `UPDATE relay_outbox SET state=$3,resolution_note=$4,resolved_at=now(),updated_at=now(),error='',result=COALESCE(result,'{}'::jsonb)||$5::jsonb WHERE ($1='' OR account=$1) AND ($7='' OR site_id=$7) AND id=$2 AND state='uncertain' AND ($3='rejected' OR $6<>'' OR payload->>'operation'='messages.react')`, key, id, outcome, note, string(raw), providerID, site)
 	if err != nil {
 		return err
 	}

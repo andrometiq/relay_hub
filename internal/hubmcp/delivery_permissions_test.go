@@ -71,7 +71,7 @@ func TestChannelDeliveryScopesAndResolutionEvidence(t *testing.T) {
 			provider = "<confirmed@example.invalid>"
 		}
 		var id int64
-		if err = db.QueryRow(t.Context(), `INSERT INTO relay_channel_outbox(account,request_key,operation,payload,payload_hash,state) VALUES('local',$1,$2,$3,'test','uncertain') RETURNING id`, strings.ReplaceAll(operation, ".", "-"), operation, []byte(payload)).Scan(&id); err != nil {
+		if err = db.QueryRow(t.Context(), `INSERT INTO relay_channel_outbox(account,request_key,operation,payload,payload_hash,state,site_id) VALUES('local',$1,$2,$3,'test','uncertain','local') RETURNING id`, strings.ReplaceAll(operation, ".", "-"), operation, []byte(payload)).Scan(&id); err != nil {
 			t.Fatal(err)
 		}
 		args := map[string]any{"id": id, "outcome": "submitted", "note": "Verified provider acceptance", "provider_id": provider}
@@ -90,7 +90,7 @@ func TestChannelDeliveryScopesAndResolutionEvidence(t *testing.T) {
 	}
 	// Rejections do not require provider evidence, but accepted messages do.
 	var rejectedID int64
-	if err = db.QueryRow(t.Context(), `INSERT INTO relay_channel_outbox(account,request_key,operation,payload,payload_hash,state) VALUES('local','reject','email.send','{}','test','uncertain') RETURNING id`).Scan(&rejectedID); err != nil {
+	if err = db.QueryRow(t.Context(), `INSERT INTO relay_channel_outbox(account,request_key,operation,payload,payload_hash,state,site_id) VALUES('local','reject','email.send','{}','test','uncertain','local') RETURNING id`).Scan(&rejectedID); err != nil {
 		t.Fatal(err)
 	}
 	call("channels.resolve", map[string]any{"id": rejectedID, "outcome": "submitted", "note": "Verified acceptance"}, "verified email Message-ID required")

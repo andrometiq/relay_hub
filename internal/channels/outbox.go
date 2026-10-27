@@ -28,6 +28,16 @@ type EmailInput = relayemail.Message
 type Outbox struct {
 	DB       *pgxpool.Pool
 	Registry *Registry
+	// Site limits reads and changes to the sends of one site. With Site set, an
+	// empty account means every bot and mailbox of that site.
+	Site string
+}
+
+func (o Outbox) scope(account string) error {
+	if account == "" && o.Site == "" {
+		return errors.New("account or site required")
+	}
+	return nil
 }
 type Delivery struct {
 	ID        int64          `json:"id"`
@@ -120,7 +130,15 @@ func (o Outbox) Submit(ctx context.Context, account, key, operation string, inpu
 		if pending >= 10000 {
 			return nil, errors.New("account queue is full")
 		}
-		err = tx.QueryRow(ctx, `INSERT INTO relay_channel_outbox(account,request_key,operation,payload,payload_hash,destinations) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, account, key, operation, payload, hash, sendDestinations(input)).Scan(&id)
+		provider := "Email"
+		if strings.HasPrefix(operation, "telegram.") {
+			provider = "Telegram"
+		}
+		site := ""
+		if o.Registry != nil {
+			site = o.Registry.Binding(provider, account).Site
+		}
+		err = tx.QueryRow(ctx, `INSERT INTO relay_channel_outbox(account,request_key,operation,payload,payload_hash,destinations,site_id) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')) RETURNING id`, account, key, operation, payload, hash, sendDestinations(input), site).Scan(&id)
 		if err != nil {
 			return nil, err
 		}
@@ -315,7 +333,10 @@ func (o Outbox) List(ctx context.Context, account string, after int64, channel .
 			return nil, errors.New("invalid channel")
 		}
 	}
-	rows, err := o.DB.Query(ctx, `SELECT id,operation,state,error,created_at,result,attempts FROM relay_channel_outbox WHERE account=$1 AND id>$2 AND ($3='' OR operation=$3) ORDER BY id LIMIT 51`, account, after, operation)
+	if err := o.scope(account); err != nil {
+		return nil, err
+	}
+	rows, err := o.DB.Query(ctx, `SELECT id,operation,state,error,created_at,result,attempts FROM relay_channel_outbox WHERE ($1='' OR account=$1) AND ($4='' OR site_id=$4) AND id>$2 AND ($3='' OR operation=$3) ORDER BY id LIMIT 51`, account, after, operation, o.Site)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +352,10 @@ func (o Outbox) List(ctx context.Context, account string, after int64, channel .
 	return items, rows.Err()
 }
 func (o Outbox) Cancel(ctx context.Context, account string, id int64) error {
-	tag, err := o.DB.Exec(ctx, `UPDATE relay_channel_outbox SET state='cancelled',updated_at=now() WHERE account=$1 AND id=$2 AND state='queued'`, account, id)
+	if err := o.scope(account); err != nil {
+		return err
+	}
+	tag, err := o.DB.Exec(ctx, `UPDATE relay_channel_outbox SET state='cancelled',updated_at=now() WHERE ($1='' OR account=$1) AND ($3='' OR site_id=$3) AND id=$2 AND state='queued'`, account, id, o.Site)
 	if err != nil {
 		return err
 	}
@@ -376,6 +400,9 @@ func (o Outbox) Resolve(ctx context.Context, account string, id int64, outcome, 
 	if len(note) < 10 || len(note) > 2000 {
 		return errors.New("describe the verified provider outcome in 10–2000 characters")
 	}
+	if err := o.scope(account); err != nil {
+		return err
+	}
 	tx, err := o.DB.Begin(ctx)
 	if err != nil {
 		return err
@@ -383,7 +410,7 @@ func (o Outbox) Resolve(ctx context.Context, account string, id int64, outcome, 
 	defer tx.Rollback(context.Background())
 	var operation string
 	var payload []byte
-	if err = tx.QueryRow(ctx, `SELECT operation,payload FROM relay_channel_outbox WHERE account=$1 AND id=$2 AND state='uncertain' FOR UPDATE`, account, id).Scan(&operation, &payload); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT operation,payload FROM relay_channel_outbox WHERE ($1='' OR account=$1) AND ($3='' OR site_id=$3) AND id=$2 AND state='uncertain' FOR UPDATE`, account, id, o.Site).Scan(&operation, &payload); err != nil {
 		return err
 	}
 	receipt := map[string]any{"manually_reconciled": true}
@@ -419,7 +446,7 @@ func (o Outbox) Resolve(ctx context.Context, account string, id int64, outcome, 
 	if err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE relay_channel_outbox SET state=$3,resolution_note=$4,resolved_at=now(),updated_at=now(),error='',result=COALESCE(NULLIF(result,'null'::jsonb),'{}'::jsonb)||$5::jsonb WHERE account=$1 AND id=$2 AND state='uncertain'`, account, id, outcome, note, raw)
+	tag, err := tx.Exec(ctx, `UPDATE relay_channel_outbox SET state=$3,resolution_note=$4,resolved_at=now(),updated_at=now(),error='',result=COALESCE(NULLIF(result,'null'::jsonb),'{}'::jsonb)||$5::jsonb WHERE ($1='' OR account=$1) AND ($6='' OR site_id=$6) AND id=$2 AND state='uncertain'`, account, id, outcome, note, raw, o.Site)
 	if err != nil {
 		return err
 	}
@@ -431,13 +458,13 @@ func (o Outbox) Resolve(ctx context.Context, account string, id int64, outcome, 
 
 // Lookup reads a single account-scoped receipt without dispatching the request.
 func (o Outbox) Lookup(ctx context.Context, account, key string) (map[string]any, error) {
-	if account == "" || !requestKeyRE.MatchString(key) {
+	if o.scope(account) != nil || !requestKeyRE.MatchString(key) {
 		return nil, errors.New("invalid delivery key")
 	}
 	var id int64
 	var operation, state string
 	var raw []byte
-	err := o.DB.QueryRow(ctx, `SELECT id,operation,state,result FROM relay_channel_outbox WHERE account=$1 AND request_key=$2`, account, key).Scan(&id, &operation, &state, &raw)
+	err := o.DB.QueryRow(ctx, `SELECT id,operation,state,result FROM relay_channel_outbox WHERE ($1='' OR account=$1) AND ($3='' OR site_id=$3) AND request_key=$2 ORDER BY id DESC LIMIT 1`, account, key, o.Site).Scan(&id, &operation, &state, &raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

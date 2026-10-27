@@ -143,17 +143,35 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "relay-hub", Version: "0.1.0"}, nil)
 	if verify != nil && len(mediaStores) > 0 && mediaStores[0].DB != nil {
-		mcp.AddTool(server, &mcp.Tool{Name: "account.get", Description: "Read this token's account and site binding; no credentials are returned."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]any, error) {
+		db := mediaStores[0].DB
+		siteTool := func(ctx context.Context, r *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]any, error) {
 			principal, ok := ctx.Value(principalKey{}).(auth.Principal)
 			if !ok || !allowed(ctx, "account:read") {
 				return nil, nil, errors.New("account:read required")
 			}
 			var site string
 			var enabled bool
-			if e := mediaStores[0].DB.QueryRow(ctx, `SELECT origin,enabled FROM relay_sites WHERE site_id=$1`, principal.Account).Scan(&site, &enabled); e != nil || !enabled {
+			if e := db.QueryRow(ctx, `SELECT origin,enabled FROM relay_sites WHERE site_id=$1`, principal.Account).Scan(&site, &enabled); e != nil || !enabled {
 				return nil, nil, errors.New("account unavailable")
 			}
-			return nil, map[string]any{"account": principal.Account, "site": site, "enabled": enabled}, nil
+			list, err := siteChannels(ctx, db, principal.Account)
+			if err != nil {
+				return nil, nil, errors.New("channels unavailable")
+			}
+			return nil, map[string]any{"account": principal.Account, "site": site, "enabled": enabled, "channels": list}, nil
+		}
+		mcp.AddTool(server, &mcp.Tool{Name: "site.get", Description: "Read this token's site and its channels; no credentials are returned."}, siteTool)
+		mcp.AddTool(server, &mcp.Tool{Name: "account.get", Description: "Alias of site.get for older clients."}, siteTool)
+		mcp.AddTool(server, &mcp.Tool{Name: "channels.list", Description: "List the WhatsApp numbers, Telegram bots and mailboxes this site uses. Pass a key as the channel argument of a send when the site has several channels of one type."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]any, error) {
+			principal, ok := ctx.Value(principalKey{}).(auth.Principal)
+			if !ok || !allowed(ctx, "account:read") {
+				return nil, nil, errors.New("account:read required")
+			}
+			list, err := siteChannels(ctx, db, principal.Account)
+			if err != nil {
+				return nil, nil, errors.New("channels unavailable")
+			}
+			return nil, map[string]any{"channels": list}, nil
 		})
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "health.get", Description: "Check Relay Hub database readiness"}, func(ctx context.Context, r *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, Health, error) {
@@ -167,9 +185,10 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 	if wa != nil {
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.attachment", Description: "Read a bounded attachment already received by this account. Provider credentials and download URLs remain in Hub."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			MediaID string `json:"media_id"`
+			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			account, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok {
+			account, err := whatsappNumber(ctx, wa, in.Channel)
+			if err != nil {
 				return mediaFailure(&whatsapp.MediaError{Check: "account"})
 			}
 			if !allowed(ctx, "messages:read") {
@@ -183,9 +202,10 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.media", Description: "Read a bounded sticker already received by this account. Provider credentials and download URLs stay in Hub."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			MediaID string `json:"media_id"`
+			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			account, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok {
+			account, err := whatsappNumber(ctx, wa, in.Channel)
+			if err != nil {
 				return mediaFailure(&whatsapp.MediaError{Check: "account"})
 			}
 			if !allowed(ctx, "messages:read") {
@@ -197,10 +217,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			}
 			return mediaResult(file.Data, file.MIME, file.Filename)
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.execute", Description: "Account-scoped WhatsApp messages and templates. Mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, input whatsapp.Input) (*mcp.CallToolResult, map[string]any, error) {
-			account, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok {
-				return nil, nil, errors.New("an account-scoped credential is required")
+		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.execute", Description: "Account-scoped WhatsApp messages and templates. Mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, routed whatsappInput) (*mcp.CallToolResult, map[string]any, error) {
+			input := routed.Input
+			account, err := whatsappNumber(ctx, wa, routed.Channel)
+			if err != nil {
+				return nil, nil, err
 			}
 			if strings.HasPrefix(input.Operation, "groups.") || strings.HasPrefix(input.Operation, "calls.") {
 				return nil, nil, errors.New("WhatsApp groups and calls are disabled in v1")
@@ -234,10 +255,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 	if wa != nil && wa.Outbox != nil {
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.send", Description: "Durably queue one message using a stable request key."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			Message whatsapp.Submission `json:"message"`
+			Channel string              `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok {
-				return nil, nil, errors.New("account credential required")
+			a, err := whatsappNumber(ctx, wa, in.Channel)
+			if err != nil {
+				return nil, nil, err
 			}
 			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("messages:send scope required")
@@ -254,10 +276,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 
 		mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.bulk", Description: "Durably queue 1-50 template, text or media sends with stable request keys. Bulk media uses media_id or media_url. Invalid recipients are rejected individually; queued reports the account queue depth for backpressure. Results arrive in coalesced bulk update callbacks."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			Messages []whatsapp.Submission `json:"messages"`
+			Channel  string                `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok {
-				return nil, nil, errors.New("account credential required")
+			a, err := whatsappNumber(ctx, wa, in.Channel)
+			if err != nil {
+				return nil, nil, err
 			}
 			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("messages:send scope required")
@@ -274,9 +297,10 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			Outcome    string `json:"outcome"`
 			Note       string `json:"note"`
 			ProviderID string `json:"provider_id,omitempty"`
+			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok || !allowed(ctx, "deliveries:read") || !allowed(ctx, "deliveries:cancel") {
+			a, err := whatsappScope(ctx, wa, in.Channel)
+			if err != nil || !allowed(ctx, "deliveries:read") || !allowed(ctx, "deliveries:cancel") {
 				return nil, nil, errors.New("delivery read and cancellation scopes required")
 			}
 			if err := wa.Outbox.Resolve(ctx, a, in.ID, in.Outcome, in.Note, in.ProviderID); err != nil {
@@ -288,10 +312,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			RequestKey string `json:"request_key,omitempty"`
 			After      string `json:"after,omitempty"`
 			CancelID   string `json:"cancel_id,omitempty"`
+			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			a, ok := ctx.Value(accountKey{}).(whatsapp.Account)
-			if !ok {
-				return nil, nil, errors.New("account credential required")
+			a, err := whatsappScope(ctx, wa, in.Channel)
+			if err != nil {
+				return nil, nil, err
 			}
 			if in.CancelID != "" {
 				if !allowed(ctx, "deliveries:cancel") {
@@ -321,30 +346,36 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		})
 	}
 	if registry != nil {
-		mcp.AddTool(server, &mcp.Tool{Name: "telegram.typing", Description: "Briefly indicate typing using the account bot. Ephemeral; never queued or replayed."}, func(ctx context.Context, r *mcp.CallToolRequest, in telegram.TypingInput) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "messages:send") {
+		mcp.AddTool(server, &mcp.Tool{Name: "telegram.typing", Description: "Briefly indicate typing using the account bot. Ephemeral; never queued or replayed."}, func(ctx context.Context, r *mcp.CallToolRequest, routed telegramTyping) (*mcp.CallToolResult, map[string]any, error) {
+			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("account credential with messages:send required")
 			}
-			result, err := registry.TelegramTyping(ctx, p.Account, in)
+			bot, err := channelKey(ctx, registry, "Telegram", routed.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			result, err := registry.TelegramTyping(ctx, bot, routed.TypingInput)
 			if err != nil {
 				return telegramFailure(err)
 			}
 			return nil, result, nil
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "telegram.message", Description: "Send text, sticker, reaction, location or contact using the account bot. Replies preserve their group and topic. Mutations are sent once."}, func(ctx context.Context, r *mcp.CallToolRequest, in telegram.MessageInput) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "messages:send") {
+		mcp.AddTool(server, &mcp.Tool{Name: "telegram.message", Description: "Send text, sticker, reaction, location or contact using the account bot. Replies preserve their group and topic. Mutations are sent once."}, func(ctx context.Context, r *mcp.CallToolRequest, routed telegramMessage) (*mcp.CallToolResult, map[string]any, error) {
+			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("account credential with messages:send required")
 			}
+			bot, err := channelKey(ctx, registry, "Telegram", routed.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			in := routed.MessageInput
 			var result map[string]any
-			var err error
 			if mediaStore.DB != nil {
 				key := in.RequestKey
 				in.RequestKey = ""
-				result, err = (channels.Outbox{DB: mediaStore.DB, Registry: registry}).Submit(ctx, p.Account, key, "telegram.message", in)
+				result, err = (channels.Outbox{DB: mediaStore.DB, Registry: registry}).Submit(ctx, bot, key, "telegram.message", in)
 			} else {
-				result, err = registry.TelegramMessage(ctx, p.Account, in)
+				result, err = registry.TelegramMessage(ctx, bot, in)
 			}
 			if err != nil {
 				return telegramFailure(err)
@@ -353,34 +384,42 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		})
 
 		mcp.AddTool(server, &mcp.Tool{Name: "telegram.attachment", Description: "Read an account-journaled Telegram attachment up to 4 MiB without exposing provider credentials."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
-			FileID string `json:"file_id"`
+			FileID  string `json:"file_id"`
+			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "messages:read") {
+			if !allowed(ctx, "messages:read") {
 				return nil, nil, errors.New("messages:read required")
 			}
-			known, err := mediaStore.TelegramMediaKnown(ctx, p.Account, in.FileID)
+			bot, err := channelKey(ctx, registry, "Telegram", in.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			known, err := mediaStore.TelegramMediaKnown(ctx, bot, in.FileID)
 			if err != nil || !known {
 				return nil, nil, errors.New("attachment is unavailable for this account")
 			}
-			file, err := registry.TelegramMedia(ctx, p.Account, in.FileID)
+			file, err := registry.TelegramMedia(ctx, bot, in.FileID)
 			if err != nil {
 				return nil, nil, errors.New("attachment is unavailable for this account")
 			}
 			return mediaResult(file.Data, file.ContentType, file.Filename, telegram.MaxMediaBytes)
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "telegram.media", Description: "Read a bounded sticker already received by this account. Provider credentials and download URLs stay in Hub."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
-			FileID string `json:"file_id"`
+			FileID  string `json:"file_id"`
+			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "messages:read") {
+			if !allowed(ctx, "messages:read") {
 				return nil, nil, errors.New("account credential with messages:read required")
 			}
-			known, err := mediaStore.TelegramStickerKnown(ctx, p.Account, in.FileID)
+			bot, err := channelKey(ctx, registry, "Telegram", in.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			known, err := mediaStore.TelegramStickerKnown(ctx, bot, in.FileID)
 			if err != nil || !known {
 				return nil, nil, errors.New("sticker is unavailable for this account")
 			}
-			file, err := registry.TelegramSticker(ctx, p.Account, in.FileID)
+			file, err := registry.TelegramSticker(ctx, bot, in.FileID)
 			if err != nil {
 				return nil, nil, errors.New("sticker is unavailable for this account")
 			}
@@ -392,32 +431,29 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			Text       string `json:"text"`
 			ReplyTo    int64  `json:"reply_to,omitempty"`
 			ThreadID   int64  `json:"message_thread_id,omitempty"`
+			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok {
-				return nil, nil, errors.New("account credential required")
-			}
 			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("messages:send scope required")
 			}
-			var err error
+			bot, err := channelKey(ctx, registry, "Telegram", in.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
 			var result map[string]any
 			message := telegram.MessageInput{Operation: "text", ChatID: in.ChatID, Text: in.Text, ReplyTo: in.ReplyTo, ThreadID: in.ThreadID}
 			if mediaStore.DB != nil {
-				result, err = (channels.Outbox{DB: mediaStore.DB, Registry: registry}).Submit(ctx, p.Account, in.RequestKey, "telegram.message", message)
+				result, err = (channels.Outbox{DB: mediaStore.DB, Registry: registry}).Submit(ctx, bot, in.RequestKey, "telegram.message", message)
 			} else {
-				result, err = registry.TelegramMessage(ctx, p.Account, message)
+				result, err = registry.TelegramMessage(ctx, bot, message)
 			}
 			if err != nil {
 				return telegramFailure(err)
 			}
 			return nil, result, nil
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "telegram.groups", Description: "Manage Telegram groups, members, invitations and forum topics through the account-scoped bot. Requires the corresponding Telegram administrator permissions; mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, in telegram.GroupInput) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok {
-				return nil, nil, errors.New("account credential required")
-			}
+		mcp.AddTool(server, &mcp.Tool{Name: "telegram.groups", Description: "Manage Telegram groups, members, invitations and forum topics through the account-scoped bot. Requires the corresponding Telegram administrator permissions; mutations are not automatically retried."}, func(ctx context.Context, r *mcp.CallToolRequest, routed telegramGroup) (*mcp.CallToolResult, map[string]any, error) {
+			in := routed.GroupInput
 			scope := "groups:write"
 			if telegram.GroupReadOperation(in.Operation) {
 				scope = "groups:read"
@@ -425,7 +461,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if !allowed(ctx, scope) {
 				return nil, nil, errors.New(scope + " scope required")
 			}
-			result, err := registry.TelegramGroup(ctx, p.Account, in)
+			bot, err := channelKey(ctx, registry, "Telegram", routed.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			result, err := registry.TelegramGroup(ctx, bot, in)
 			if err != nil {
 				return telegramFailure(err)
 			}
@@ -434,24 +474,33 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		mcp.AddTool(server, &mcp.Tool{Name: "email.attachment", Description: "Read an account-scoped mailbox attachment up to 4 MiB."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			ProviderID string `json:"provider_id"`
 			Index      int    `json:"index"`
+			Channel    string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "messages:read") || mediaStore.DB == nil || in.Index < 0 || in.Index > 7 || len(in.ProviderID) > 300 {
+			if !allowed(ctx, "messages:read") || mediaStore.DB == nil || in.Index < 0 || in.Index > 7 || len(in.ProviderID) > 300 {
 				return nil, nil, errors.New("attachment unavailable")
+			}
+			mailbox, err := channelKey(ctx, registry, "Email", in.Channel)
+			if err != nil {
+				return nil, nil, err
 			}
 			var data []byte
 			var mime, name string
-			if err := mediaStore.DB.QueryRow(ctx, `SELECT content,content_type,filename FROM relay_email_attachments WHERE account=$1 AND provider_id=$2 AND slot=$3`, p.Account, in.ProviderID, in.Index).Scan(&data, &mime, &name); err != nil {
+			if err := mediaStore.DB.QueryRow(ctx, `SELECT content,content_type,filename FROM relay_email_attachments WHERE account=$1 AND provider_id=$2 AND slot=$3`, mailbox, in.ProviderID, in.Index).Scan(&data, &mime, &name); err != nil {
 				return nil, nil, errors.New("attachment unavailable")
 			}
 			return mediaResult(data, mime, name, 4<<20)
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "email.mailbox", Description: "Read mailbox sync status and the twenty latest rejected messages for this account."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok || !allowed(ctx, "messages:read") || mediaStore.DB == nil {
+		mcp.AddTool(server, &mcp.Tool{Name: "email.mailbox", Description: "Read mailbox sync status and the twenty latest rejected messages for this account."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+			Channel string `json:"channel,omitempty"`
+		}) (*mcp.CallToolResult, map[string]any, error) {
+			if !allowed(ctx, "messages:read") || mediaStore.DB == nil {
 				return nil, nil, errors.New("messages:read required")
 			}
-			rows, err := mediaStore.DB.Query(ctx, `SELECT jsonb_build_object('mailbox',mailbox,'last_sync',last_sync,'error',last_error,'last_uid',last_uid) FROM relay_mailbox_cursor WHERE account=$1 ORDER BY last_sync DESC NULLS LAST LIMIT 10`, p.Account)
+			mailbox, err := channelKey(ctx, registry, "Email", in.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			rows, err := mediaStore.DB.Query(ctx, `SELECT jsonb_build_object('mailbox',mailbox,'last_sync',last_sync,'error',last_error,'last_uid',last_uid) FROM relay_mailbox_cursor WHERE account=$1 ORDER BY last_sync DESC NULLS LAST LIMIT 10`, mailbox)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -469,7 +518,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err != nil {
 				return nil, nil, err
 			}
-			rejected, err := mediaStore.DB.Query(ctx, `SELECT jsonb_build_object('uid',uid,'reason',reason,'created_at',created_at) FROM relay_mailbox_rejections WHERE account=$1 ORDER BY created_at DESC LIMIT 20`, p.Account)
+			rejected, err := mediaStore.DB.Query(ctx, `SELECT jsonb_build_object('uid',uid,'reason',reason,'created_at',created_at) FROM relay_mailbox_rejections WHERE account=$1 ORDER BY created_at DESC LIMIT 20`, mailbox)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -484,23 +533,23 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			}
 			return nil, map[string]any{"mailboxes": states, "rejections": issues}, rejected.Err()
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "email.send", Description: "Send an email through the account-scoped SMTP adapter."}, func(ctx context.Context, r *mcp.CallToolRequest, in channels.EmailInput) (*mcp.CallToolResult, map[string]any, error) {
-			p, ok := ctx.Value(principalKey{}).(auth.Principal)
-			if !ok {
-				return nil, nil, errors.New("account credential required")
-			}
+		mcp.AddTool(server, &mcp.Tool{Name: "email.send", Description: "Send an email through the account-scoped SMTP adapter."}, func(ctx context.Context, r *mcp.CallToolRequest, routed emailMessage) (*mcp.CallToolResult, map[string]any, error) {
 			if !allowed(ctx, "messages:send") {
 				return nil, nil, errors.New("messages:send scope required")
 			}
-			var err error
+			mailbox, err := channelKey(ctx, registry, "Email", routed.Channel)
+			if err != nil {
+				return nil, nil, err
+			}
+			in := routed.EmailInput
 			var result map[string]any
 
 			if mediaStore.DB != nil {
 				key := in.RequestKey
 				in.RequestKey = ""
-				result, err = (channels.Outbox{DB: mediaStore.DB, Registry: registry}).Submit(ctx, p.Account, key, "email.send", in)
+				result, err = (channels.Outbox{DB: mediaStore.DB, Registry: registry}).Submit(ctx, mailbox, key, "email.send", in)
 			} else {
-				result, err = registry.SendEmailMessage(ctx, p.Account, in)
+				result, err = registry.SendEmailMessage(ctx, mailbox, in)
 			}
 			if err != nil {
 				return emailFailure(err)
@@ -513,17 +562,21 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				RequestKey string `json:"request_key,omitempty"`
 				After      int64  `json:"after,omitempty"`
 				CancelID   int64  `json:"cancel_id,omitempty"`
+				Channel    string `json:"channel,omitempty"`
 			}) (*mcp.CallToolResult, map[string]any, error) {
-				p, ok := ctx.Value(principalKey{}).(auth.Principal)
-				if !ok || !allowed(ctx, "deliveries:read") || !allowed(ctx, "messages:read") {
+				if !allowed(ctx, "deliveries:read") || !allowed(ctx, "messages:read") {
 					return nil, nil, errors.New("deliveries:read and messages:read required")
 				}
-				queue := channels.Outbox{DB: mediaStore.DB, Registry: registry}
+				key, site, err := deliveryKey(ctx, registry, in.Channel)
+				if err != nil {
+					return nil, nil, err
+				}
+				queue := channels.Outbox{DB: mediaStore.DB, Registry: registry, Site: site}
 				if in.RequestKey != "" {
 					if in.After != 0 || in.CancelID != 0 {
 						return nil, nil, errors.New("delivery lookup cannot include pagination or cancellation")
 					}
-					row, err := queue.Lookup(ctx, p.Account, in.RequestKey)
+					row, err := queue.Lookup(ctx, key, in.RequestKey)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -537,11 +590,11 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 					if !allowed(ctx, "deliveries:cancel") {
 						return nil, nil, errors.New("deliveries:cancel required")
 					}
-					if err := queue.Cancel(ctx, p.Account, in.CancelID); err != nil {
+					if err := queue.Cancel(ctx, key, in.CancelID); err != nil {
 						return nil, nil, err
 					}
 				}
-				rows, err := queue.List(ctx, p.Account, in.After)
+				rows, err := queue.List(ctx, key, in.After)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -557,13 +610,17 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				Note       string `json:"note"`
 				ProviderID string `json:"provider_id,omitempty"`
 				ChatID     int64  `json:"chat_id,omitempty"`
+				Channel    string `json:"channel,omitempty"`
 			}) (*mcp.CallToolResult, map[string]any, error) {
-				p, ok := ctx.Value(principalKey{}).(auth.Principal)
-				if !ok || !allowed(ctx, "deliveries:cancel") || !allowed(ctx, "deliveries:read") {
+				if !allowed(ctx, "deliveries:cancel") || !allowed(ctx, "deliveries:read") {
 					return nil, nil, errors.New("deliveries:read and deliveries:cancel required")
 				}
-				queue := channels.Outbox{DB: mediaStore.DB, Registry: registry}
-				if err := queue.Resolve(ctx, p.Account, in.ID, in.Outcome, in.Note, channels.Resolution{ProviderID: in.ProviderID, ChatID: in.ChatID}); err != nil {
+				key, site, err := deliveryKey(ctx, registry, in.Channel)
+				if err != nil {
+					return nil, nil, err
+				}
+				queue := channels.Outbox{DB: mediaStore.DB, Registry: registry, Site: site}
+				if err := queue.Resolve(ctx, key, in.ID, in.Outcome, in.Note, channels.Resolution{ProviderID: in.ProviderID, ChatID: in.ChatID}); err != nil {
 					return nil, nil, err
 				}
 				return nil, map[string]any{"resolved": true}, nil
@@ -617,14 +674,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err == nil {
 				authorized = true
 				r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
-				if wa != nil {
-					for _, a := range wa.AccountsSnapshot() {
-						if a.ID == p.Account {
-							r = r.WithContext(context.WithValue(r.Context(), accountKey{}, a))
-							break
-						}
-					}
-				}
 			}
 		}
 		if !authorized {

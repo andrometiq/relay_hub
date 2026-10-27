@@ -14,6 +14,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"maps"
 	"net/mail"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,6 +77,32 @@ func (r *Registry) Binding(provider, key string) Binding {
 		return Binding{Site: key, To: key}
 	}
 	return s.bindings[provider+"/"+key]
+}
+
+// SiteKeys lists the active channel keys of one provider that a site uses, sorted.
+func (r *Registry) SiteKeys(provider, site string) []string {
+	s := r.snapshot()
+	active := func(key string) bool {
+		if provider == "Telegram" {
+			return s.telegram[key] != nil
+		}
+		return provider == "Email" && s.email[key] != nil
+	}
+	keys := []string{}
+	if s.bindings == nil {
+		if active(site) {
+			keys = append(keys, site)
+		}
+		return keys
+	}
+	for ref, binding := range s.bindings {
+		key, found := strings.CutPrefix(ref, provider+"/")
+		if found && binding.Site == site && active(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func Load(rows []containers.RuntimeCredential) (*Registry, error) {
