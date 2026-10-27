@@ -15,6 +15,20 @@ import (
 )
 
 const simulationBotToken = "123456:simulation_bot_token_local_only"
+const simulationBotToken2 = "123457:simulation_bot_two_token_local_only"
+
+// simulationBots maps each fake bot token to its username.
+var simulationBots = map[string]string{simulationBotToken: "relay_sim_bot", simulationBotToken2: "relay_sim_bot_2"}
+
+// botToken finds the fake bot token after prefix in path ("/bot" or "/file/bot").
+func botToken(path, prefix string) (string, bool) {
+	for token := range simulationBots {
+		if strings.HasPrefix(path, prefix+token+"/") {
+			return token, true
+		}
+	}
+	return "", false
+}
 
 type telegramFile struct {
 	Data []byte `json:"data"`
@@ -136,15 +150,16 @@ func telegramBody(w http.ResponseWriter, r *http.Request) (map[string]any, map[s
 }
 func (t *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	prefix := "/bot" + simulationBotToken + "/"
-	if strings.HasPrefix(r.URL.Path, "/file/bot"+simulationBotToken+"/") {
-		t.download(w, r)
+	if token, ok := botToken(r.URL.Path, "/file/bot"); ok {
+		t.download(w, r, token)
 		return
 	}
-	if !strings.HasPrefix(r.URL.Path, prefix) {
+	token, ok := botToken(r.URL.Path, "/bot")
+	if !ok {
 		http.Error(w, "invalid fake bot token", 401)
 		return
 	}
+	prefix := "/bot" + token + "/"
 	if r.Method != "POST" && r.Method != "GET" {
 		http.Error(w, "method not allowed", 405)
 		return
@@ -172,7 +187,8 @@ func (t *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		switch method {
 		case "getMe":
-			result = map[string]any{"id": 123456, "is_bot": true, "first_name": "Simulation", "username": "relay_sim_bot"}
+			id, _, _ := strings.Cut(token, ":")
+			result = map[string]any{"id": number(id), "is_bot": true, "first_name": "Simulation", "username": simulationBots[token]}
 		case "getUpdates":
 			offset := number(body["offset"])
 			pending := []json.RawMessage{}
@@ -227,7 +243,7 @@ func (t *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				result = receipt
 			}
-			s.Messages = append(s.Messages, map[string]any{"method": method, "request": body, "result": result})
+			s.Messages = append(s.Messages, map[string]any{"bot": simulationBots[token], "method": method, "request": body, "result": result})
 		default:
 			status = 404
 		}
@@ -283,8 +299,8 @@ func number(value any) int64 {
 	}
 	return 0
 }
-func (t *fakeTelegram) download(w http.ResponseWriter, r *http.Request) {
-	filePath := strings.TrimPrefix(r.URL.Path, "/file/bot"+simulationBotToken+"/")
+func (t *fakeTelegram) download(w http.ResponseWriter, r *http.Request, token string) {
+	filePath := strings.TrimPrefix(r.URL.Path, "/file/bot"+token+"/")
 	id, _, _ := strings.Cut(filePath, "/")
 	file, ok := t.state.snapshot().Files[id]
 	if r.Method != "GET" || !ok || filePath != file.providerPath(id) {

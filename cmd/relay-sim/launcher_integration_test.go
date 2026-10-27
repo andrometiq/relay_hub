@@ -12,12 +12,10 @@ import (
 	"fmt"
 	"github.com/jackc/pgx/v5"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -69,136 +67,10 @@ func TestLauncherPostgres(t *testing.T) {
 		writeJSON(w, map[string]any{"message": map[string]any{"accepted": len(body.Events) + len(body.Statuses)}})
 	}))
 	defer core.Close()
-	free := func() string {
-		l, e := net.Listen("tcp", "127.0.0.1:0")
-		if e != nil {
-			t.Fatal(e)
-		}
-		addr := l.Addr().String()
-		l.Close()
-		return addr
-	}
-	hubAddr, metaAddr := free(), free()
-	smtpAddr, imapAddr := free(), free()
-	stateDir := t.TempDir()
-	hubURL, metaURL := "http://"+hubAddr, "http://"+metaAddr
-	controlToken := strings.Repeat("test-control-", 4)
-	var command *exec.Cmd
-	var logs bytes.Buffer
-	stop := func() {
-		if command != nil {
-			command.Process.Signal(os.Interrupt)
-			command.Wait()
-			command = nil
-		}
-	}
-	defer func() {
-		stop()
-		if t.Failed() {
-			t.Log(logs.String())
-		}
-	}()
-	start := func(resume bool) {
-		binary, e := os.Executable()
-		if e != nil {
-			t.Fatal(e)
-		}
-		mode := "--migrate"
-		if resume {
-			mode = "--resume"
-		}
-		command = exec.CommandContext(ctx, binary, "-test.run=^TestLauncherProcess$", "--", "--addr", hubAddr, "--meta-addr", metaAddr, "--core-origin", core.URL, "--smtp-addr", smtpAddr, "--imap-addr", imapAddr, "--state-dir", stateDir, mode)
-		command.Env = append(os.Environ(), "RELAY_SIM_CHILD=1", "DATABASE_URL="+dsn, "RELAY_SIM_CONTROL_TOKEN="+controlToken, "RELAY_CREDENTIAL_KEY="+strings.Repeat("a", 64))
-		command.Stdout = &logs
-		command.Stderr = &logs
-		if e = command.Start(); e != nil {
-			t.Fatal(e)
-		}
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			res, e := http.Get(hubURL + "/readyz")
-			if e == nil {
-				res.Body.Close()
-				if res.StatusCode == 200 {
-					return
-				}
-			}
-			time.Sleep(25 * time.Millisecond)
-		}
-		t.Fatal("launcher did not become ready")
-	}
-	call := func(path string, body any) map[string]any {
-		t.Helper()
-		var reader io.Reader
-		method := "GET"
-		if body != nil {
-			raw, _ := json.Marshal(body)
-			reader = bytes.NewReader(raw)
-			method = "POST"
-		}
-		req, _ := http.NewRequestWithContext(ctx, method, metaURL+"/_sim/"+path, reader)
-		req.Header.Set("Authorization", "Bearer "+controlToken)
-		res, e := http.DefaultClient.Do(req)
-		if e != nil {
-			t.Fatal(e)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != 200 {
-			body, _ := io.ReadAll(res.Body)
-			t.Fatalf("control %s status %d: %s", path, res.StatusCode, body)
-		}
-		var result map[string]any
-		if e = json.NewDecoder(res.Body).Decode(&result); e != nil {
-			t.Fatal(e)
-		}
-		return result
-	}
-	configure := func() string {
-		return call("provision", map[string]any{"site": core.URL, "api_key": "fixture-key", "api_secret": "fixture-secret", "callback_secret": secret})["token"].(string)
-	}
-	wait := func(condition func(map[string]any) bool) map[string]any {
-		t.Helper()
-		deadline := time.Now().Add(35 * time.Second)
-		for time.Now().Before(deadline) {
-			s := call("state", nil)
-			if condition(s) {
-				return s
-			}
-			time.Sleep(40 * time.Millisecond)
-		}
-		t.Fatal("timed out waiting for durable launcher state")
-		return nil
-	}
+	l := newLauncher(t, ctx, dsn, core.URL)
+	call, wait, mcp, stop, start := l.call, l.wait, l.mcp, l.stop, l.start
 	start(false)
-	token := configure()
-	mcp := func(token, name string, args any, want int) map[string]any {
-		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
-		req, _ := http.NewRequestWithContext(ctx, "POST", hubURL+"/mcp", bytes.NewReader(raw))
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json, text/event-stream")
-		req.Header.Set("MCP-Protocol-Version", "2025-06-18")
-		res, e := http.DefaultClient.Do(req)
-		if e != nil {
-			t.Fatal(e)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != want {
-			t.Fatalf("MCP status %d want %d", res.StatusCode, want)
-		}
-		if want != 200 {
-			return nil
-		}
-		var result map[string]any
-		json.NewDecoder(res.Body).Decode(&result)
-		if result["error"] != nil {
-			t.Fatalf("MCP %s: %v", name, result["error"])
-		}
-		if v, ok := result["result"].(map[string]any); ok && v["isError"] == true {
-			t.Fatalf("MCP %s: %v", name, v)
-		}
-		return result
-	}
+	token := call("provision", map[string]any{"site": core.URL, "api_key": "fixture-key", "api_secret": "fixture-secret", "callback_secret": secret})["token"].(string)
 	mcp("invalid-token", "account.get", map[string]any{}, 401)
 	binding := mcp(token, "account.get", map[string]any{}, 200)
 	if binding["result"].(map[string]any)["structuredContent"].(map[string]any)["site"] != core.URL {

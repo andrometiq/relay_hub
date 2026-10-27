@@ -102,8 +102,18 @@ type simTransport struct {
 	base       *http.Transport
 	meta, core *url.URL
 	mu         sync.RWMutex
-	site       string
+	sites      map[string]bool
 	records    *recorder
+}
+
+// allowSites sets the site origins whose callbacks go to the Core origin.
+func (t *simTransport) allowSites(origins ...string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sites = map[string]bool{}
+	for _, origin := range origins {
+		t.sites[origin] = true
+	}
 }
 
 func newTransport(meta, core *url.URL, records *recorder) *simTransport {
@@ -126,15 +136,15 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	u := *r.URL
 	clone.URL = &u
 	t.mu.RLock()
-	site := t.site
-	t.mu.RUnlock()
 	origin := u.Scheme + "://" + u.Host
+	site := t.sites[origin]
+	t.mu.RUnlock()
 	graph := origin == "https://graph.facebook.com" || origin == "https://api.telegram.org"
 	if graph {
 		clone.URL.Scheme = t.meta.Scheme
 		clone.URL.Host = t.meta.Host
 		clone.Host = t.meta.Host
-	} else if origin == site || origin == t.core.String() {
+	} else if site || origin == t.core.String() {
 		clone.URL.Scheme = t.core.Scheme
 		clone.URL.Host = t.core.Host
 		clone.Host = r.URL.Host

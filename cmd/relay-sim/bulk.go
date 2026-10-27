@@ -36,6 +36,7 @@ type bulkReceipts struct {
 
 type bulkWebhook struct {
 	at     time.Time
+	phone  string
 	status map[string]any
 	reply  *bulkReply
 }
@@ -64,7 +65,8 @@ func newBulkReceipts() *bulkReceipts {
 }
 
 // accept schedules receipts for a send to a configured campaign number.
-func (b *bulkReceipts) accept(to, id, tracking string) bool {
+// accept schedules the receipts of one campaign send from phone (a fake number ID).
+func (b *bulkReceipts) accept(phone, to, id, tracking string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.numbers[to] {
@@ -86,17 +88,17 @@ func (b *bulkReceipts) accept(to, id, tracking string) bool {
 	if code := b.failures[to]; code != 0 {
 		failed := status("failed")
 		failed["errors"] = []any{map[string]any{"code": code, "title": bulkErrorTitles[code], "message": bulkErrorTitles[code], "error_data": map[string]any{"details": bulkErrorTitles[code]}}}
-		b.due = append(b.due, bulkWebhook{at: now.Add(bulkSentAfter), status: failed})
+		b.due = append(b.due, bulkWebhook{at: now.Add(bulkSentAfter), phone: phone, status: failed})
 		return true
 	}
-	b.due = append(b.due, bulkWebhook{at: now.Add(bulkSentAfter), status: status("sent")},
-		bulkWebhook{at: now.Add(bulkDeliveredAfter), status: status("delivered")},
-		bulkWebhook{at: now.Add(bulkReadAfter), status: status("read")})
+	b.due = append(b.due, bulkWebhook{at: now.Add(bulkSentAfter), phone: phone, status: status("sent")},
+		bulkWebhook{at: now.Add(bulkDeliveredAfter), phone: phone, status: status("delivered")},
+		bulkWebhook{at: now.Add(bulkReadAfter), phone: phone, status: status("read")})
 	if b.repliers[to] {
 		reply := &bulkReply{ID: providerID("wamid.sim.bulkreply"), To: to, Context: id}
 		reply.message = map[string]any{"id": reply.ID, "from": to, "timestamp": strconv.FormatInt(now.Unix(), 10), "type": "text",
-			"text": map[string]any{"body": "Yes, interested"}, "context": map[string]any{"from": "919999999999", "id": id}}
-		b.due = append(b.due, bulkWebhook{at: now.Add(bulkReplyAfter), reply: reply})
+			"text": map[string]any{"body": "Yes, interested"}, "context": map[string]any{"from": simulationNumbers[phone].Display, "id": id}}
+		b.due = append(b.due, bulkWebhook{at: now.Add(bulkReplyAfter), phone: phone, reply: reply})
 	}
 	return true
 }
@@ -134,20 +136,20 @@ func (b *bulkReceipts) run(ctx context.Context) {
 // webhook. Like Meta, a webhook that Hub does not accept is retried.
 func (b *bulkReceipts) flush(ctx context.Context, rows []bulkWebhook) {
 	retry := []bulkWebhook{}
-	batch := []bulkWebhook{}
+	batches := map[string][]bulkWebhook{}
 	for _, row := range rows {
 		if row.reply == nil {
-			batch = append(batch, row)
-			if len(batch) == bulkEnvelopeSize {
-				retry = append(retry, b.emitStatuses(ctx, batch)...)
-				batch = []bulkWebhook{}
+			batches[row.phone] = append(batches[row.phone], row)
+			if len(batches[row.phone]) == bulkEnvelopeSize {
+				retry = append(retry, b.emitStatuses(ctx, batches[row.phone])...)
+				delete(batches, row.phone)
 			}
 			continue
 		}
 		if row.reply.EmittedNS == 0 {
 			row.reply.EmittedNS = time.Now().UnixNano()
 		}
-		if !b.emit(ctx, map[string]any{"contacts": []any{map[string]any{"profile": map[string]any{"name": "Sim Bulk Reply"}, "wa_id": row.reply.To}}, "messages": []any{row.reply.message}}) {
+		if !b.emit(ctx, row.phone, map[string]any{"contacts": []any{map[string]any{"profile": map[string]any{"name": "Sim Bulk Reply"}, "wa_id": row.reply.To}}, "messages": []any{row.reply.message}}) {
 			retry = append(retry, row)
 			continue
 		}
@@ -155,7 +157,7 @@ func (b *bulkReceipts) flush(ctx context.Context, rows []bulkWebhook) {
 		b.stats.Replies = append(b.stats.Replies, row.reply)
 		b.mu.Unlock()
 	}
-	if len(batch) > 0 {
+	for _, batch := range batches {
 		retry = append(retry, b.emitStatuses(ctx, batch)...)
 	}
 	b.mu.Lock()
@@ -171,7 +173,7 @@ func (b *bulkReceipts) emitStatuses(ctx context.Context, rows []bulkWebhook) []b
 	for i, row := range rows {
 		statuses[i] = row.status
 	}
-	if !b.emit(ctx, map[string]any{"statuses": statuses}) {
+	if !b.emit(ctx, rows[0].phone, map[string]any{"statuses": statuses}) {
 		return rows
 	}
 	b.mu.Lock()
@@ -180,10 +182,11 @@ func (b *bulkReceipts) emitStatuses(ctx context.Context, rows []bulkWebhook) []b
 	return nil
 }
 
-func (b *bulkReceipts) emit(ctx context.Context, value map[string]any) bool {
+func (b *bulkReceipts) emit(ctx context.Context, phone string, value map[string]any) bool {
+	number := simulationNumbers[phone]
 	value["messaging_product"] = "whatsapp"
-	value["metadata"] = map[string]any{"display_phone_number": "919999999999", "phone_number_id": "110"}
-	payload, _ := json.Marshal(map[string]any{"object": "whatsapp_business_account", "entry": []any{map[string]any{"id": "220", "changes": []any{map[string]any{"field": "messages", "value": value}}}}})
+	value["metadata"] = map[string]any{"display_phone_number": number.Display, "phone_number_id": phone}
+	payload, _ := json.Marshal(map[string]any{"object": "whatsapp_business_account", "entry": []any{map[string]any{"id": number.WABA, "changes": []any{map[string]any{"field": "messages", "value": value}}}}})
 	status, err := b.post(ctx, payload)
 	b.mu.Lock()
 	defer b.mu.Unlock()

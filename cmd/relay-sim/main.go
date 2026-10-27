@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -72,6 +73,9 @@ type simulation struct {
 	channelWake   chan struct{}
 	telegram      *fakeTelegram
 	email         *fakeEmail
+	// webhookPath is the public WhatsApp path of the sites container; unset
+	// in the single-account mode, which uses sim-v1.
+	webhookPath atomic.Pointer[string]
 }
 
 func (s *simulation) resume(ctx context.Context) error {
@@ -98,7 +102,7 @@ func (s *simulation) resume(ctx context.Context) error {
 			return errors.New("refusing non-simulation provider configuration")
 		}
 		a.Groups, a.Calls, a.SyncMetadata = false, false, false
-		s.transport.site = a.Site
+		s.transport.allowSites(a.Site)
 		if err := s.activateChannels(a); err != nil {
 			return err
 		}
@@ -123,13 +127,13 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" && r.URL.Path == "/_sim/state" {
 		state := map[string]any{}
 		for key, query := range map[string]string{
-			"channel_callbacks":  "SELECT d.event_id,d.acknowledged,d.failures FROM relay_channel_callback_delivery d JOIN relay_channel_events e ON e.id=d.event_id WHERE e.account='sim-v1' ORDER BY d.event_id",
-			"channel_events":     "SELECT id,channel,provider_id,payload FROM relay_channel_events WHERE account='sim-v1' ORDER BY id",
-			"channel_deliveries": "SELECT id,request_key,state,result FROM relay_channel_outbox WHERE account='sim-v1' ORDER BY id",
-			"events":             "SELECT id,lane,payload FROM relay_whatsapp_events WHERE account='sim-v1' ORDER BY id",
-			"incoming":           "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE account='sim-v1' ORDER BY id",
-			"deliveries":         "SELECT id,request_key,state,result->'messages'->0->>'id' AS provider_message_id FROM relay_outbox WHERE account='sim-v1' ORDER BY id",
-			"callbacks":          "SELECT d.event_id,d.lane,d.acknowledged,d.status_offset,d.failures FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id WHERE e.account='sim-v1' ORDER BY d.event_id,d.lane",
+			"channel_callbacks":  "SELECT d.event_id,e.site_id,d.acknowledged,d.failures FROM relay_channel_callback_delivery d JOIN relay_channel_events e ON e.id=d.event_id WHERE e.account LIKE 'sim-%' ORDER BY d.event_id",
+			"channel_events":     "SELECT id,account,site_id,channel,provider_id,payload FROM relay_channel_events WHERE account LIKE 'sim-%' ORDER BY id",
+			"channel_deliveries": "SELECT id,account,site_id,request_key,state,result FROM relay_channel_outbox WHERE account LIKE 'sim-%' ORDER BY id",
+			"events":             "SELECT id,account,site_id,lane,payload FROM relay_whatsapp_events WHERE account LIKE 'sim-%' ORDER BY id",
+			"incoming":           "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE account LIKE 'sim-%' ORDER BY id",
+			"deliveries":         "SELECT id,account,site_id,request_key,state,result->'messages'->0->>'id' AS provider_message_id FROM relay_outbox WHERE account LIKE 'sim-%' ORDER BY id",
+			"callbacks":          "SELECT d.event_id,e.site_id,d.lane,d.acknowledged,d.status_offset,d.failures FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id WHERE e.account LIKE 'sim-%' ORDER BY d.event_id,d.lane",
 		} {
 			rows, err := s.db.Query(r.Context(), query)
 			if err != nil {
@@ -165,6 +169,7 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		Hold             bool            `json:"hold"`
 		ID               string          `json:"id"`
 		Status           string          `json:"status"`
+		Sites            []coreBinding   `json:"sites"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&in) != nil {
 		http.Error(w, "invalid request", 400)
@@ -172,8 +177,7 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/_sim/provision":
-		u, err := url.Parse(in.Site)
-		if err != nil || u.Scheme != "http" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" || len(in.Secret) < 32 || in.APIKey == "" || in.APISecret == "" {
+		if !(coreBinding{Site: in.Site, APIKey: in.APIKey, APISecret: in.APISecret, CallbackSecret: in.Secret}).valid() {
 			http.Error(w, "invalid Core binding", 400)
 			return
 		}
@@ -189,51 +193,12 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "account provisioning failed", 503)
 			return
 		}
-		authStore := &auth.Store{DB: s.db}
-		var count int
-		if err = s.db.QueryRow(r.Context(), "SELECT count(*) FROM relay_users").Scan(&count); err != nil {
-			http.Error(w, "auth unavailable", 503)
-			return
-		}
-		if count == 0 {
-			if err = authStore.Bootstrap(r.Context(), "sim-admin", auth.Secret()); err != nil {
-				http.Error(w, "bootstrap failed", 503)
-				return
-			}
-		}
-		var admin auth.User
-		if err = s.db.QueryRow(r.Context(), "SELECT id,username,role,auth_version FROM relay_users WHERE username='sim-admin' AND enabled").Scan(&admin.ID, &admin.Username, &admin.Role, &admin.Version); err != nil {
-			http.Error(w, "simulation admin unavailable", 503)
-			return
-		}
-		if err = authStore.Grant(r.Context(), admin, admin.ID, a.ID, true); err != nil {
-			http.Error(w, "grant failed", 503)
-			return
-		}
-		rows, err := s.db.Query(r.Context(), "SELECT id FROM relay_api_tokens WHERE user_id=$1 AND site_id=$2 AND name='simulation' AND revoked_at IS NULL", admin.ID, a.ID)
+		token, err := s.siteToken(r.Context(), a.ID)
 		if err != nil {
-			http.Error(w, "token rotation unavailable", 503)
+			http.Error(w, err.Error(), 503)
 			return
 		}
-		ids, err := pgx.CollectRows(rows, pgx.RowTo[int64])
-		if err != nil {
-			http.Error(w, "token rotation unavailable", 503)
-			return
-		}
-		for _, id := range ids {
-			if err = authStore.Revoke(r.Context(), admin, id); err != nil {
-				http.Error(w, "token rotation failed", 503)
-				return
-			}
-		}
-		token, err := authStore.Issue(r.Context(), admin, "simulation", a.ID, []string{"account:read", "messages:send", "messages:read", "deliveries:read", "deliveries:cancel", "templates:read", "templates:write"}, 1)
-		if err != nil {
-			http.Error(w, "token issue failed", 503)
-			return
-		}
-		s.transport.mu.Lock()
-		s.transport.site = a.Site
-		s.transport.mu.Unlock()
+		s.transport.allowSites(a.Site)
 		if err = s.wa.ReplaceAccounts([]whatsapp.Account{a}); err != nil {
 			http.Error(w, "activation failed", 503)
 			return
@@ -243,6 +208,17 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, map[string]any{"token": token, "account": a.ID})
+	case "/_sim/provision-sites":
+		if len(in.Sites) != len(simulationSites) || !in.Sites[0].valid() || !in.Sites[1].valid() {
+			http.Error(w, "two Core bindings required", 400)
+			return
+		}
+		tokens, err := s.provisionSites(r.Context(), in.Sites)
+		if err != nil {
+			http.Error(w, "site provisioning failed", 503)
+			return
+		}
+		writeJSON(w, map[string]any{"tokens": tokens})
 	case "/_sim/faults":
 		if in.Target != "status" && in.Target != "graph" {
 			http.Error(w, "invalid fault target", 400)
@@ -301,7 +277,7 @@ func (s *simulation) emit(w http.ResponseWriter, r *http.Request, payload []byte
 
 // webhook posts one Meta-signed payload to the Hub ingress.
 func (s *simulation) webhook(ctx context.Context, payload []byte, invalid bool) (*http.Request, *http.Response, []byte, error) {
-	req, _ := http.NewRequestWithContext(ctx, "POST", s.hub.String()+"/webhooks/whatsapp/sim-v1", bytes.NewReader(payload))
+	req, _ := http.NewRequestWithContext(ctx, "POST", s.hub.String()+"/webhooks/whatsapp/"+s.whatsappPath(), bytes.NewReader(payload))
 	mac := hmac.New(sha256.New, []byte("sim-app-secret"))
 	mac.Write(payload)
 	sig := hex.EncodeToString(mac.Sum(nil))
@@ -318,6 +294,12 @@ func (s *simulation) webhook(ctx context.Context, payload []byte, invalid bool) 
 	defer res.Body.Close()
 	reply, _ := io.ReadAll(io.LimitReader(res.Body, 65536))
 	return req, res, reply, nil
+}
+func (s *simulation) whatsappPath() string {
+	if path := s.webhookPath.Load(); path != nil {
+		return *path
+	}
+	return "sim-v1"
 }
 func denyRedirect(*http.Request, []*http.Request) error {
 	return errors.New("simulation refuses redirects")

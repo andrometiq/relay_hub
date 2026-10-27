@@ -16,7 +16,7 @@ import (
 type captureDuringStateRead struct{ records *recorder }
 
 func (c captureDuringStateRead) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "SELECT d.event_id,d.lane,d.acknowledged") {
+	if strings.Contains(data.SQL, "FROM relay_whatsapp_callback_delivery") {
 		// Reproduce a callback completing while the durable state is being read.
 		r := httptest.NewRequest("POST", "/api/method/relay_core.inbound.receive_statuses", nil)
 		c.records.record(r, "status", []byte(`{"statuses":[{}]}`), 200,

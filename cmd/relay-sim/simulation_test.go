@@ -118,7 +118,7 @@ func TestTransportRewritesAndRejectsRedirects(t *testing.T) {
 	cu, _ := url.Parse(core.URL)
 	tr := newTransport(mu, cu, records)
 	defer tr.base.CloseIdleConnections()
-	tr.site = "http://yrp.site:8001"
+	tr.allowSites("http://yrp.site:8001")
 	client := &http.Client{Transport: tr, CheckRedirect: denyRedirect}
 	for _, dest := range []string{"https://example.com/", "http://127.0.0.1:1/", "https://graph.facebook.com.evil/messages", "http://graph.facebook.com/messages", "http://yrp.site:8001/redirect"} {
 		if response, err := client.Get(dest); err == nil {
