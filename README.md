@@ -1,23 +1,32 @@
 # Relay Hub
 
-Go-based communication transport for WhatsApp, Telegram and email. One Hub serves multiple Relay Core sites; each channel account belongs to exactly one site.
+Relay Hub is the Go transport service for [Relay Core](https://github.com/andrometiq/frappe_relay_core), a Frappe app. One Hub serves multiple accounts; each account links one Core site to its WhatsApp, Telegram and email connections.
 
-## Status
+The Hub provides a Frappe-style administration UI, PostgreSQL-backed users and sessions, account-scoped MCP tools, provider adapters, event journals and Core callbacks. Core owns contacts, business permissions, conversations and AI automation.
 
-Repository foundation and proposed architecture. No provider adapters, live API, database schema or production service have been implemented yet.
+**Start with the [quickstart](docs/quickstart.md).** It covers PostgreSQL 18, private configuration, the first administrator, HTTPS browser access and a readiness check. Installation alone does not provision provider accounts or prove live delivery.
 
-## Responsibilities
+| Task | Documentation |
+| --- | --- |
+| Understand the system | [Architecture](docs/architecture.md) |
+| Install and configure | [Quickstart](docs/quickstart.md), [configuration](docs/configuration.md) |
+| Manage users and tokens | [Authentication](docs/authentication.md) |
+| Integrate an application | [MCP and message reference](docs/api-reference.md) |
+| Check channel support | [Provider support matrix](docs/provider-support.md) |
+| Build, restart or migrate | [Operations](docs/operations.md) |
+| Run local simulations | [Testing](docs/testing.md) |
+| Browse everything | [Documentation index](docs/README.md) |
 
-- Receive and deliver channel messages through account-scoped adapters.
-- Durably accept bulk submissions and dispatch through bounded workers.
-- Forward inbound replies and reactions promptly; batch delivery-status callbacks.
-- Synchronize WhatsApp templates and channel metadata.
-- Support calls and recordings where provider capabilities permit.
+After setup, the daily commands are:
 
-Relay Core is the separate Frappe application. It owns business records, user permissions, inbox UI, flows and AI services. Core-to-Hub commands will use MCP; provider webhooks and authenticated callbacks handle events.
+```sh
+./relay build-ui
+./relay migrate
+./relay restart
+```
 
-## Planned stack
+The connected release checkpoint passes 10/10 WhatsApp, 11/11 Telegram and 13/13 email cases. All three channels support durable sends and incoming callbacks. Telegram reports bot acceptance; email reports SMTP acceptance and trusted DSNs. Core updates use Socket.IO. See [provider support](docs/provider-support.md) for channel limits and [release evidence](docs/simulation-validation.md) for measurements and rerun commands.
 
-Go, PostgreSQL durable inbox/outbox, official MCP Go SDK, and private media storage. Dependencies will be selected and pinned as implementation starts.
+The drivers use local fake providers with real Hub/Core services. They do not test browser rendering, live provider eligibility or production capacity. Bulk campaigns are outside this release evidence.
 
-See [architecture](docs/architecture.md) for service boundaries, delivery semantics and milestones.
+These documents describe the current local working tree, including changes that may not yet be pushed to GitHub. Development takes place on `develop`. The repository owner merges production changes into `main`. Follow [AGENTS.md](AGENTS.md) and keep credentials, local databases and generated reports out of Git.

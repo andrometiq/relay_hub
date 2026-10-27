@@ -1,0 +1,11 @@
+# Relay component UI
+
+Hub security pages now use the same Vue and Relay component styling as the Hub application. GET navigation serves the compiled UI; authenticated requests with `Accept: application/json` use the existing security handlers. Login, user, grant, password, token and session operations retain server-side authorization, CSRF checks and secure cookies.
+
+`Root.vue` lazy-loads either the main application or SecurityApp. SecurityApp retains its shell while navigating between separately loaded Login, Users, Tokens, Sessions and Password views. Hub and Core build configuration now permits actual dynamic chunks. Core's WhatsApp and general workspace views also load on demand. Both applications use PrimeVue unstyled primitives through Relay-owned wrappers.
+
+`RelayForm` handles submission and field validation through `DocumentForm`. Separate TextField (text/password/number/textarea), SelectField, CheckField, LinkField and MultiSelectField components render fields. Hub and Core have compatible component interfaces in their own independent repositories. Existing custom views outside these shared forms are not all rewritten in this change.
+
+Users and tokens use `InfiniteList`: 50 records per backend request, maximum 200 buffered rows and 22 mounted rows, forward scrolling and a Load earlier control. A 250ms search debounce and response generations prevent stale results replacing a newer query. Server search uses ordered-character matching (for example skthi matches sakthi), not arbitrary typo correction. SQL queries retain account/user visibility restrictions and keyset pagination; broad fuzzy searches still need database workload measurement before making large-scale performance claims.
+
+Validation: PostgreSQL test fixtures cover bounded pages, forward/reverse cursors and fuzzy search. A browser fixture of 1,000 rows exercised page loading and verified the 22-row rendered bound and earlier-page control. Live public pages passed login, search, shell-preserving navigation and overflow checks at 375/768/1440px. Both app builds and existing frontend tests pass. No real users or tokens were created for list tests; synthetic browser responses were removed afterward. No changes were pushed.

@@ -1,0 +1,303 @@
+"""Local-only fixtures for connected AI and business-event acceptance.
+
+GL rows are identifiable read-contract fixtures, not posted accounting vouchers.
+The actual worker reads them through permission-checked GL Entry get_list/get_doc.
+Sales Orders use the normal insert/submit lifecycle.
+"""
+import json
+import time
+from simulation_fixtures import fixture_endpoint
+
+
+def fixture_origin(value):
+    from simulate_whatsapp_e2e import loopback_origin
+    return loopback_origin(value)
+
+
+def provider_identity(message):
+    context = json.loads(message.get('provider_context') or '{}')
+    return context.get('message_id') if context.get('provider') == 'Email' else message.get('provider_id')
+
+
+def configure_ai_channel(frappe, name, owner):
+    channel = frappe.get_doc('Relay Channel', name)
+    filters = {'is_group': 0, 'account_type': 'Payable', 'disabled': 0}
+    if channel.company:
+        filters['company'] = channel.company
+    accounts = frappe.get_all('Account', filters=filters, fields=['name', 'company'],
+        order_by='company asc, name asc', limit_page_length=1)
+    assert accounts, 'The simulation channel requires a company with a payable account'
+    account = accounts[0]
+    channel.company = account.company
+    channel.triage_owner = owner
+    channel.save(ignore_permissions=True)
+    return account.company, account.name
+
+
+class Acceptance:
+    def __init__(self, frappe, fixture, insert):
+        self.f, self.fixture, self.insert = frappe, fixture, insert
+        self.ai = {}
+        self.event = {}
+
+    def preflight(self):
+        assert self.f.conf.get('relay_automation_enabled'), (
+            'Step 13 requires relay_automation_enabled=1 on yrp.site; '
+            'site configuration activation needs separate approval. '
+            'See docs/simulation-validation.md.')
+
+    def seed_ai(self, run, origin, medium="WhatsApp"):
+        self.preflight()
+        f, fixture = self.f, self.fixture
+        origin = fixture_origin(origin)
+        assert f.conf.developer_mode and f.local.site == 'yrp.site'
+        assert f.db.has_column('Relay AI Skill', 'sample_key'), 'Reload Relay AI Skill before the connected run'
+        from relay_core.ai.samples import install_samples, LEDGER_TOOL, TARGET
+        install_samples()
+        sample = f.get_doc('Relay AI Skill', {'sample_key': 'supplier_ledger'})
+        assert json.loads(sample.allowed_tools) == [LEDGER_TOOL], 'Sample read tools were customized; review before simulation'
+        # Channel-specific fixture copies preserve the installed sample's scope.
+        skill = f.copy_doc(sample)
+        skill.sample_key = None
+        skill.title = f'Sim {medium} Supplier Ledger {run}'
+        skill.channel = fixture['channel']
+        skill.enabled = 0
+        skill.insert(ignore_permissions=True)
+        assert not skill.channel or skill.channel == fixture['channel'], 'Sample belongs to another channel'
+        assert not f.get_all('Relay AI Skill', filters={'channel': fixture['channel'], 'business_doctype': 'Supplier',
+            'enabled': 1, 'name': ['!=', skill.name]}, limit_page_length=1), 'Another supplier skill owns this channel'
+        group = f.db.get_value('Supplier Group', {'is_group': 0}, 'name')
+        assert group, 'Supplier Group fixture is required'
+        suppliers = [self.insert('Supplier', supplier_name=f'Sim {label} {run}',
+            supplier_type='Company', supplier_group=group) for label in ('Ledger Supplier', 'Excluded Supplier')]
+        endpoint = fixture_endpoint(medium, run, 'supplier')
+        # Supplier.mobile_no/email_id are Read Only fields on this site. Use its
+        # existing alias Data field as the declared identity for each local fixture.
+        identity_field = 'alias'
+        suppliers[0].db_set(identity_field, endpoint)
+        assert not f.db.exists('Relay Contact Endpoint', {'channel': fixture['channel'], 'endpoint': endpoint}), 'Fixture endpoint collision'
+        kind = f.db.get_value('Relay Contact Type', {'business_doctype': 'Supplier'}, 'name')
+        if not kind:
+            self.insert('Relay Contact Type', business_doctype='Supplier', enabled=1, label='Local simulation suppliers')
+        else:
+            assert f.db.get_value('Relay Contact Type', kind, 'enabled'), 'Supplier contact type is disabled'
+        person = self.insert('Contact', first_name=f'Sim Ledger Supplier {run}',
+            phone_nos=[dict(phone=endpoint, is_primary_mobile_no=1)] if medium == 'WhatsApp' else [],
+            links=[dict(link_doctype='Supplier', link_name=suppliers[0].name)])
+        contact = self.insert('Relay Contact', contact=person.name, display_name=f'Sim Ledger Supplier {run}', automation_paused=0)
+        self.insert('Relay Contact Endpoint', channel=fixture['channel'], endpoint=endpoint, relay_contact=contact.name, verified=1)
+        company, account = configure_ai_channel(f, fixture['channel'], fixture['operator']['name'])
+        entries = []
+        for index, (party, debit, credit, date, marker, cancelled) in enumerate([
+            (suppliers[0].name, 1250, 0, '2026-10-02', 'SIM-CANCELLED', 1),
+            (suppliers[0].name, 100.10, 0, '2026-10-03', 'SIM-OWN-DEBIT', 0),
+            (suppliers[0].name, 0, 40.05, '2026-10-04', 'SIM-OWN-CREDIT', 0),
+            (suppliers[1].name, 88000, 0, '2026-10-03', 'SIM-OTHER-SUPPLIER-SECRET', 0),
+            (suppliers[0].name, 77000, 0, '2026-09-03', 'SIM-OUTSIDE-RANGE', 0)]):
+            doc = f.get_doc(dict(doctype='GL Entry', name=f'RELAY-SIM-GL-{run}-{index}',
+                company=company, account=account, posting_date=date, party_type='Supplier', party=party,
+                voucher_type='Journal Entry', voucher_no=f'RELAY-SIM-VOUCHER-{run}-{index}',
+                debit=debit, credit=credit, remarks=marker, docstatus=1, is_cancelled=cancelled))
+            doc.db_insert()
+            entries.append(doc.name)
+        provider = self.insert('AI Provider Account', account_name=f'Sim AI Provider {run}',
+            provider='OpenRouter', auth_type='API Key', enabled=1, api_key='relay-sim-ai-only', base_url=origin + '/ai')
+        model = self.insert('AI Model', model_label=f'Sim Ledger Model {run}', enabled=1,
+            account=provider.name, model_id='relay-sim-ledger', temperature=0, max_tokens=1200)
+        skill.update(dict(enabled=1, mode='Automatic', channel=fixture['channel'], ai_model=model.name,
+            run_as_user=fixture['operator']['name'], handoff_owner=fixture['operator']['name'],
+            execution_policy='Execute', allowed_actions='[{"action":"reply"}]', search_confirmation='Always',
+            target=TARGET, allowed_tools=json.dumps([{**LEDGER_TOOL, 'identity_anchor': 'Supplier',
+                'identity_fields': {medium: identity_field}, 'company_field': 'company'}])))
+        skill.save(ignore_permissions=True)
+        f.db.commit()
+        self.ai = dict(supplier=suppliers[0].name, excluded_supplier=suppliers[1].name, contact=contact.name,
+            endpoint=endpoint, skill=skill.name, handoff_owner=skill.handoff_owner, entries=entries,
+            identity_field=identity_field, unmatched_endpoint=fixture_endpoint(medium, run, 'shared'))
+        return self.ai
+
+    def set_ai_identity(self, matched):
+        assert type(matched) is bool
+        endpoint = self.ai['endpoint' if matched else 'unmatched_endpoint']
+        self.f.db.set_value('Supplier', self.ai['supplier'], self.ai['identity_field'], endpoint)
+        self.f.db.commit()
+        return {'matched': matched}
+
+    def check_identity(self, message):
+        # Preview cannot authorize any read. Reuse the completed search while it
+        # is still the latest active turn, with its real declaration and receipt.
+        from relay_core.ai.service import authorize_search, decide
+        from relay_core.ai.tools import as_user, contracts
+        f = self.f
+        run = f.get_doc('Relay Automation Run', {'message': message, 'skill': self.ai['skill']})
+        assert run.status == 'Completed' and run.stage == 'Event'
+        source = f.get_doc('Relay Message', message)
+        assert source.relay_contact == self.ai['contact']
+        skill = f.get_doc('Relay AI Skill', run.skill)
+        plan = json.loads(run.search_plan)['plan']
+        with as_user(run.execution_user):
+            # Prove the declaration gate still allows this exact read. A preview
+            # or stale run denial would not exercise supplier identity checks.
+            contract = next(row for row in contracts(skill) if row['name'] == plan['reference'])
+            authorize_search(run.name, skill, contract, plan['arguments'])
+            try:
+                return decide(skill, source, run.name)
+            except ValueError:
+                return dict(handoff=True, reply='', reads=[])
+
+    def ai_state(self, provider):
+        f = self.f
+        f.db.rollback()
+        incoming = f.get_all('Relay Message', filters={'relay_contact': self.ai['contact'], 'provider_id': provider},
+            fields=['name', 'business_doctype', 'business_name', 'ticket'])
+        runs = f.get_all('Relay Automation Run', filters={'message': ['in', [row.name for row in incoming]]},
+            fields=['name', 'status', 'stage', 'decision', 'ticket', 'match_result', 'search_plan', 'reason']) if incoming else []
+        flow_actions = f.get_all('Relay Flow Action', filters={'automation_run': ['in', [row.name for row in runs]]},
+            fields=['name', 'automation_run', 'action', 'step', 'status', 'result'], order_by='step asc') if runs else []
+        actions = f.get_all('Relay Message Action', filters={'source_message': ['in', [row.name for row in incoming]]},
+            fields=['name', 'status', 'request_key', 'outbound_message']) if incoming else []
+        outgoing = [f.get_doc('Relay Message', row.outbound_message).as_dict() for row in actions if row.outbound_message]
+        tickets = f.get_all('Relay Ticket', filters={'business_doctype': 'Supplier', 'business_name': self.ai['supplier']},
+            fields=['name', 'assigned_to', 'business_doctype', 'business_name', 'source_run', 'ai_disabled', 'active_scope_key'])
+        return dict(incoming=incoming, runs=runs, actions=actions, outgoing=outgoing, tickets=tickets, flow_actions=flow_actions,
+            paused=f.db.get_value('Relay Contact', self.ai['contact'], 'automation_paused'))
+
+    def wait_ai(self, provider, status, receipt=None):
+        deadline = time.monotonic() + 35
+        while time.monotonic() < deadline:
+            state = self.ai_state(provider)
+            if len(state['runs']) == 1 and state['runs'][0]['status'] == status:
+                if status == 'Handoff' or (len(state['outgoing']) == 1 and provider_identity(state['outgoing'][0])
+                        and (not receipt or state['outgoing'][0]['status'] == receipt)):
+                    return state
+            time.sleep(.05)
+        details = [{key: row[key] for key in ('status', 'stage', 'reason')} for row in state['runs']]
+        raise AssertionError(f'AI worker did not reach expected run/history state: {details}')
+
+    def wait_paused(self, provider):
+        deadline = time.monotonic() + 35
+        while time.monotonic() < deadline:
+            state = self.ai_state(provider)
+            if state['incoming']:
+                assert len(state['incoming']) == 1, 'Duplicate paused message'
+                if not self.automation_checked(state['incoming'][0]['name']):
+                    time.sleep(.05)
+                    continue
+                state = self.ai_state(provider)
+                assert len(state['tickets']) == 1, 'Expected one held episode'
+                ticket = state['tickets'][0]
+                assert ticket['ai_disabled'] and ticket['active_scope_key'], 'Conversation episode is no longer held'
+                assert state['incoming'][0]['ticket'] == ticket['name'], 'Message escaped the held episode'
+                assert len(state['runs']) == 1 and state['runs'][0]['status'] == 'Cancelled', (
+                    'Paused message created an automation run that was not cancelled')
+                assert state['runs'][0]['reason'] == 'Conversation is owned by staff'
+                assert not state['actions'] and not state['outgoing'] and not state['flow_actions'], 'Paused message created an action'
+                # The durable completion marker proves this committed message
+                # was checked for automation, independently of RQ retention.
+                return state
+            time.sleep(.05)
+        raise AssertionError('Paused message was not projected')
+
+    def automation_checked(self, message):
+        return self.f.db.get_value('Relay Message', message, 'automation_status') == 'Complete'
+
+    def seed_event(self, run, template_id=None, medium="WhatsApp"):
+        f, fixture = self.f, self.fixture
+        assert f.conf.developer_mode and f.local.site == 'yrp.site'
+        template = None
+        if medium == 'WhatsApp':
+            template = f.db.get_value('Relay WhatsApp Template', {'account': 'sim-v1', 'template_id': template_id, 'status': 'APPROVED'}, 'name')
+            assert template, 'Step 12 approved template is required'
+        assert not f.get_all('Relay Business Event Rule', filters={'source_doctype': 'Sales Order', 'enabled': 1}, limit_page_length=1), 'Disable other Sales Order rules before simulation'
+        item_group = f.db.get_value('Item Group', {'is_group': 0}, 'name')
+        uom = f.db.get_value('UOM', {'enabled': 1}, 'name')
+        company = f.db.get_single_value('Global Defaults', 'default_company')
+        assert item_group and uom and company, 'Company, Item Group and UOM fixtures are required'
+        currency = f.db.get_value('Company', company, 'default_currency')
+        # India Compliance validates SAC even though the Custom Field is not reqd.
+        tax_fields = {}
+        if f.get_meta('Item').has_field('gst_hsn_code'):
+            assert f.db.exists('GST HSN Code', '998313'), 'IT consulting SAC 998313 is required'
+            tax_fields['gst_hsn_code'] = '998313'
+        item = self.insert('Item', item_code=f'Sim Service {run}', item_name=f'Sim IT Consulting {run}',
+            item_group=item_group, stock_uom=uom, is_stock_item=0, is_sales_item=1, **tax_fields)
+        price_list = self.insert('Price List', price_list_name=f'Sim Price List {run}',
+            enabled=1, selling=1, buying=0, currency=currency)
+        if medium != 'WhatsApp':
+            binding = f.db.get_value('Relay Contact Endpoint', {'channel': fixture['channel'],
+                'relay_contact': fixture['contact'], 'endpoint': fixture['endpoint']}, 'name')
+            assert binding, 'Customer fixture endpoint is required'
+            self.insert('Relay Channel Preference', contact=fixture['person'],
+                business_doctype='Customer', business_name=fixture['customer'],
+                endpoint=binding, consent='Granted', priority=1)
+        rule = self.insert('Relay Business Event Rule', title=f'Sim Order Notice {run}', enabled=1,
+            source_doctype='Sales Order', event='on_submit', recipient_field='customer', business_doctype='Customer', contact=fixture['person'],
+            channel=fixture['channel'], run_as_user=fixture['operator']['name'], template=template,
+            parameter_mapping=json.dumps(['name']),
+            telegram_body='Local simulation order {name}',
+            email_subject='Local simulation order {name}', email_body='Local simulation order {name}')
+        self.event = dict(rule=rule.name, item=item.name, company=company, uom=uom,
+            currency=currency, price_list=price_list.name)
+        f.db.commit()
+        return self.event
+
+    def submit_event(self):
+        f, fixture = self.f, self.fixture
+        doc = f.get_doc(dict(doctype='Sales Order', customer=fixture['customer'], company=self.event['company'],
+            currency=self.event['currency'], conversion_rate=1, selling_price_list=self.event['price_list'],
+            price_list_currency=self.event['currency'], plc_conversion_rate=1,
+            transaction_date=f.utils.today(), delivery_date=f.utils.add_days(f.utils.today(), 7),
+            items=[dict(item_code=self.event['item'], qty=2, rate=125, uom=self.event['uom'])]))
+        doc.insert(ignore_permissions=True)
+        doc.submit()
+        # Replay the lifecycle observer to prove its durable identity is idempotent.
+        from relay_core.business_events import on_event
+        on_event(doc, 'on_submit')
+        f.db.commit()
+        assert f.db.get_value('Sales Order', doc.name, 'docstatus') == 1
+        return dict(source=doc.name, docstatus=1, total_qty=doc.total_qty)
+
+    def event_state(self, source):
+        f = self.f
+        f.db.rollback()
+        rows = f.get_all('Relay Business Event Delivery', filters={'source_doctype': 'Sales Order',
+            'source_name': source, 'rule': self.event['rule']}, fields=['name', 'status', 'action', 'business_name', 'payload'])
+        assert len(rows) <= 1, 'Duplicate business event delivery'
+        actions = [f.get_doc('Relay Message Action', row.action).as_dict() for row in rows if row.action]
+        messages = [f.get_doc('Relay Message', row['outbound_message']).as_dict() for row in actions if row['outbound_message']]
+        return dict(deliveries=rows, actions=actions, messages=messages, docstatus=f.db.get_value('Sales Order', source, 'docstatus'))
+
+    def wait_event(self, source):
+        deadline = time.monotonic() + 35
+        while time.monotonic() < deadline:
+            state = self.event_state(source)
+            if len(state['messages']) == 1 and provider_identity(state['messages'][0]):
+                return state
+            time.sleep(.05)
+        raise AssertionError('Business event worker did not create outgoing history')
+
+    def diagnostics(self):
+        f = self.f
+        f.db.rollback()
+        from frappe.utils.background_jobs import get_job, get_queue
+        from relay_core.automation.queue import _signal_key
+        signal = f.cache.get(_signal_key())
+        signal = signal.decode() if isinstance(signal, bytes) else signal
+        job = get_job('relay-message-automation-drain:' + str(signal)) if signal else None
+        messages = f.get_all('Relay Message', filters={'relay_contact': self.ai['contact']},
+            fields=['name', 'direction', 'provider_id', 'provider_context', 'automation_status'],
+            limit_page_length=100) if self.ai else []
+        return dict(messages=messages, pending_hooks=f.db.count('Relay Message', {'automation_status': 'Pending'}),
+            default_queue=get_queue('default').count, wake_exists=bool(signal),
+            wake_ttl=f.cache.ttl(_signal_key()), wake_job_exists=bool(job),
+            wake_job_status=str(job.get_status()) if job else None)
+
+    def disable(self):
+        # Retain every fixture for inspection; stop leftover simulation automation.
+        for dt, name in [('Relay AI Skill', self.ai.get('skill')), ('Relay Business Event Rule', self.event.get('rule'))]:
+            if name:
+                doc = self.f.get_doc(dt, name)
+                doc.enabled = 0
+                doc.save(ignore_permissions=True)
+        self.f.db.commit()
+        return {'disabled': True}
