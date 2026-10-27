@@ -19,7 +19,7 @@ watch(() => props.modelValue, (open) => {
 
 function validate() {
   const value = form.value, result = {};
-  if (props.mode === "create" && !/^[A-Za-z0-9_-]{1,100}$/.test(value.id)) result.id = "Use letters, numbers, hyphens or underscores.";
+  if (props.mode === "create" && !value.name.trim()) result.name = "Enter a name.";
   if (props.mode === "app") {
     if (value.app_id && !/^\d{1,30}$/.test(value.app_id)) result.app_id = "Enter the numeric Meta app ID.";
     if (!/^v\d+\.0$/.test(value.graph_version)) result.graph_version = "Use a Graph API version such as v23.0.";
@@ -41,8 +41,8 @@ async function save() {
   saving.value = true; error.value = "";
   try {
     if (props.mode === "create") {
-      await adminApi.createContainer({ id: value.id, name: value.name.trim(), enabled: true });
-      emit("saved", value.id);
+      const created = await adminApi.createContainer({ name: value.name.trim(), enabled: true });
+      emit("saved", created.id);
     } else {
       const changes = { name: value.name.trim(), enabled: value.enabled };
       if (props.mode === "app") changes.whatsapp = { config: { app_id: value.app_id, graph_version: value.graph_version, app_secret: value.app_secret, verify_token: value.verify_token }, access_token: value.access_token };
@@ -63,9 +63,8 @@ async function save() {
     <template #body-content>
       <form id="relay-container-form" class="admin-form" novalidate @submit.prevent="save">
         <template v-if="mode === 'create'">
-          <div><FormControl v-model="form.id" label="Container ID" required placeholder="essdee-main" autocomplete="off" /><ErrorMessage :message="errors.id" /></div>
-          <FormControl v-model="form.name" label="Name" placeholder="Essdee Main" autocomplete="off" />
-          <p class="admin-hint admin-full">The ID is part of the WhatsApp callback URL and cannot change later.</p>
+          <div class="admin-full"><FormControl v-model="form.name" label="Name" required placeholder="Essdee Main" autocomplete="off" /><ErrorMessage :message="errors.name" /></div>
+          <p class="admin-hint admin-full">The Hub makes a random callback URL for this container. The name is never part of a public URL.</p>
         </template>
         <template v-else-if="mode === 'rename'">
           <FormControl v-model="form.name" label="Name" class="admin-full" autocomplete="off" />

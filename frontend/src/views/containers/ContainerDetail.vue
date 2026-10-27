@@ -17,7 +17,7 @@ const current = computed(() => provider(tab.value));
 const unlinked = computed(() => channels.value.filter((row) => !row.site).length);
 const app = computed(() => container.value?.whatsapp || { config: {}, configured_secrets: [] });
 const appSecrets = computed(() => app.value.configured_secrets || []);
-const callbackURL = computed(() => hubURL("/webhooks/whatsapp/" + encodeURIComponent(props.id)));
+const callbackURL = computed(() => (container.value?.webhook_path ? hubURL(container.value.webhook_path) : ""));
 
 async function refresh() {
   const currentTicket = ++ticket;
@@ -87,11 +87,11 @@ defineExpose({ refresh });
       </div>
       <div v-else-if="tab === 'Telegram'" class="admin-card">
         <div class="admin-card-head"><div><h3>Telegram webhooks</h3><p>The Hub registers each bot's webhook with Telegram when you save the bot. Nothing to paste.</p></div></div>
-        <div class="webhook-address"><div><span>Webhook URL pattern</span><code>{{ hubURL("/webhooks/telegram/{bot key}") }}</code></div></div>
+        <p class="admin-hint">Each bot has its own random webhook address, shown in its row.</p>
       </div>
       <div v-else class="admin-card">
         <div class="admin-card-head"><div><h3>Inbound mail</h3><p>The Hub reads each mailbox by IMAP. If your mail provider can forward by webhook, use the mailbox URL below instead.</p></div></div>
-        <div class="webhook-address"><div><span>Inbound webhook URL pattern</span><code>{{ hubURL("/webhooks/email/{mailbox key}") }}</code></div></div>
+        <p class="admin-hint">Each mailbox has its own random webhook address. Open a mailbox to copy it.</p>
       </div>
 
       <div class="admin-section">
@@ -115,7 +115,7 @@ defineExpose({ refresh });
           </template>
           <template v-else-if="tab === 'Telegram'">
             <span>{{ row.config.username ? "@" + row.config.username : "Username not read yet" }}<small v-if="row.address">Bot ID {{ row.address }}</small></span>
-            <span class="hide-m admin-mono">/webhooks/telegram/{{ row.key }}</span>
+            <span class="hide-m admin-mono">{{ row.webhook_path }}</span>
           </template>
           <template v-else>
             <span class="hide-m">{{ row.config.host }}:{{ row.config.port }}<small>{{ row.config.username || "No login" }}</small></span>

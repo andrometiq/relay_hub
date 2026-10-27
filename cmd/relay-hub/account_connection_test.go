@@ -32,6 +32,8 @@ func (f *connectionFixture) TelegramConnection(_ context.Context, account, addre
 	}
 	return telegram.WebhookHealth{Registered: true, Matches: true, Pending: 4}, nil
 }
+func (f *connectionFixture) WebhookPath(_, key string) string { return "0f3a9c" + key }
+
 func (f *connectionFixture) TestEmailConnection(context.Context, string) (channels.EmailConnection, error) {
 	f.calls++
 	return channels.EmailConnection{SMTP: "connected", IMAP: "failed"}, nil
@@ -92,7 +94,7 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 				if json.Unmarshal(w.Body.Bytes(), &result) != nil || w.Header().Get("Cache-Control") != "no-store" {
 					t.Fatal("invalid response")
 				}
-				if tc.channel == "telegram" && (result["matches"] != true || fixture.address != "https://hub.invalid/hub/webhooks/telegram/local" || fixture.repair != (tc.name == "repair")) {
+				if tc.channel == "telegram" && (result["matches"] != true || fixture.address != "https://hub.invalid/hub/webhooks/telegram/0f3a9clocal" || fixture.repair != (tc.name == "repair")) {
 					t.Fatal("invalid webhook result")
 				}
 				if tc.channel == "email" && (result["smtp"] != "connected" || result["imap"] != "failed" || recorded["connection_status"] != "failed" || recorded["target"] != "Email/local") {

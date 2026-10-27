@@ -96,7 +96,7 @@ func TestStatusWebhookDoesNotWakeRealtime(t *testing.T) {
 	}
 }
 
-func TestWebhookUnknownAccountIsForbidden(t *testing.T) {
+func TestWebhookUnknownPathIsNotFound(t *testing.T) {
 	s, err := New(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +106,8 @@ func TestWebhookUnknownAccountIsForbidden(t *testing.T) {
 		r.SetPathValue("account", "missing")
 		w := httptest.NewRecorder()
 		s.Webhook(w, r)
-		if w.Code != 403 {
-			t.Fatalf("%s status %d want 403", method, w.Code)
+		if w.Code != 404 {
+			t.Fatalf("%s status %d want 404", method, w.Code)
 		}
 	}
 }

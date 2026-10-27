@@ -2,6 +2,8 @@ package containers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -12,11 +14,13 @@ import (
 
 // Container groups provider apps and their channels. It is not tied to a site.
 type Container struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Enabled  bool      `json:"enabled"`
-	WhatsApp Provider  `json:"whatsapp"`
-	Channels []Channel `json:"channels"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+	// WebhookPath is the random public WhatsApp callback path of the container.
+	WebhookPath string    `json:"webhook_path"`
+	WhatsApp    Provider  `json:"whatsapp"`
+	Channels    []Channel `json:"channels"`
 }
 
 // Provider is the shared WhatsApp app of a container: app_id, graph_version,
@@ -65,9 +69,11 @@ func (s *Store) ListContainers(ctx context.Context, query, after string, limit i
 
 func (s *Store) GetContainer(ctx context.Context, id string) (Container, error) {
 	c := Container{ID: id, WhatsApp: Provider{Config: map[string]any{}, ConfiguredSecrets: []string{}}}
-	if err := s.DB.QueryRow(ctx, `SELECT name,enabled FROM relay_containers WHERE container_id=$1`, id).Scan(&c.Name, &c.Enabled); err != nil {
+	var public string
+	if err := s.DB.QueryRow(ctx, `SELECT name,enabled,public_id FROM relay_containers WHERE container_id=$1`, id).Scan(&c.Name, &c.Enabled, &public); err != nil {
 		return c, err
 	}
+	c.WebhookPath = "/webhooks/whatsapp/" + public
 	var raw, cipher, nonce, token []byte
 	err := s.DB.QueryRow(ctx, `SELECT config,config_ciphertext,config_nonce,secret_ciphertext FROM relay_container_providers WHERE container_id=$1 AND provider='WhatsApp'`, id).Scan(&raw, &cipher, &nonce, &token)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -95,6 +101,9 @@ func (s *Store) GetContainer(ctx context.Context, id string) (Container, error) 
 
 // SaveContainer creates or updates a container and, when given, its WhatsApp app.
 func (s *Store) SaveContainer(ctx context.Context, c Container, whatsapp *ProviderInput, create bool) error {
+	if create && c.ID == "" {
+		c.ID = NewContainerID()
+	}
 	if !validID(c.ID) || len(c.Name) > 200 {
 		return errors.New("invalid container")
 	}
@@ -211,4 +220,13 @@ func (s *Store) ProviderCredential(ctx context.Context, container string) (map[s
 		}
 	}
 	return config, secret, nil
+}
+
+// NewContainerID returns a random internal container key, for a container created by name only.
+func NewContainerID() string {
+	raw := make([]byte, 8)
+	if _, err := rand.Read(raw); err != nil {
+		panic(err)
+	}
+	return "ct_" + hex.EncodeToString(raw)
 }

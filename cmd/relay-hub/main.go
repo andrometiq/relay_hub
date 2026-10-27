@@ -34,10 +34,12 @@ import (
 // Registration metadata is available only to the Hub administrator; browser
 // session validation is supplied by the same auth service as other admin APIs.
 func telegramWebhookSettings(registry *channels.Registry, master string, session func(*http.Request) (auth.User, error)) http.Handler {
-	return channelWebhookSettings("telegram", registry.TelegramWebhookSecret, master, session)
+	return channelWebhookSettings("telegram", registry.TelegramWebhookSecret, registry, master, session)
 }
 
-func channelWebhookSettings(channel string, credential func(string, string) (string, error), master string, session func(*http.Request) (auth.User, error)) http.Handler {
+// channelWebhookSettings gives the admin a channel's random public webhook path and secret.
+func channelWebhookSettings(channel string, credential func(string, string) (string, error), registry *channels.Registry, master string, session func(*http.Request) (auth.User, error)) http.Handler {
+	provider := map[string]string{"telegram": "Telegram", "email": "Email"}[channel]
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, err := session(r)
 		if err != nil {
@@ -56,7 +58,7 @@ func channelWebhookSettings(channel string, credential func(string, string) (str
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"path": "/webhooks/" + channel + "/" + account, "secret_token": secret})
+		json.NewEncoder(w).Encode(map[string]any{"path": "/webhooks/" + channel + "/" + registry.WebhookPath(provider, account), "secret_token": secret})
 	})
 }
 
@@ -123,6 +125,7 @@ func whatsappAccount(row accountstore.RuntimeCredential) (whatsapp.Account, erro
 		return whatsapp.Account{}, err
 	}
 	account := whatsapp.Account{MessagesPerSecond: rate, ID: row.Key, ContainerID: row.Container, Label: row.Label,
+		WebhookID: row.WebhookID, LegacyWebhook: row.LegacyPath,
 		AccessToken: row.Secret, DisplayNumber: get("display_number"),
 		AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
 		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
@@ -707,7 +710,11 @@ func run() error {
 		mux.Handle("GET /api/accounts/{account}/telegram/webhook", browserAuth.Protect(telegramWebhookSettings(channelRegistry, os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"), browserAuth.Session)))
 		mux.Handle("GET /api/channels/telegram/{account}/webhook", browserAuth.Protect(telegramWebhookSettings(channelRegistry, os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"), browserAuth.Session)))
 		mux.HandleFunc("POST /webhooks/telegram/{account}", func(w http.ResponseWriter, r *http.Request) {
-			account := r.PathValue("account")
+			account, known := channelRegistry.WebhookKey("Telegram", r.PathValue("account"))
+			if !known {
+				http.NotFound(w, r)
+				return
+			}
 			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 			if readErr != nil {
 				http.Error(w, "invalid body", 413)
@@ -719,10 +726,14 @@ func run() error {
 			}
 			w.WriteHeader(http.StatusNoContent)
 		})
-		mux.Handle("GET /api/accounts/{account}/email/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
-		mux.Handle("GET /api/channels/email/{account}/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
+		mux.Handle("GET /api/accounts/{account}/email/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, channelRegistry, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
+		mux.Handle("GET /api/channels/email/{account}/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, channelRegistry, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
 		mux.HandleFunc("POST /webhooks/email/{account}", func(w http.ResponseWriter, r *http.Request) {
-			account := r.PathValue("account")
+			account, known := channelRegistry.WebhookKey("Email", r.PathValue("account"))
+			if !known {
+				http.NotFound(w, r)
+				return
+			}
 			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 12<<20))
 			if readErr != nil {
 				http.Error(w, "invalid body", 413)

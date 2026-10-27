@@ -7,10 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/andrometiq/relay_hub/internal/auth"
+	"github.com/andrometiq/relay_hub/internal/channels"
 	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 )
@@ -70,7 +72,7 @@ func (c *directoryClient) expect(status int, method, path string, body any) *htt
 
 func TestDirectoryAdminBuildsTwoSitesFromOneContainer(t *testing.T) {
 	c := newDirectoryClient(t)
-	c.expect(204, "POST", "/api/containers", map[string]any{"id": "essdee", "name": "Essdee", "enabled": true})
+	c.expect(201, "POST", "/api/containers", map[string]any{"id": "essdee", "name": "Essdee", "enabled": true})
 	c.expect(204, "PUT", "/api/containers/essdee", map[string]any{"name": "Essdee", "enabled": true,
 		"whatsapp": map[string]any{"config": map[string]any{"app_id": "77", "graph_version": "v25.0", "app_secret": "app-secret", "verify_token": "verify-token"}, "access_token": "system-user-token"}})
 	for i, number := range []string{"101", "102"} {
@@ -137,7 +139,7 @@ func TestDirectoryAdminBuildsTwoSitesFromOneContainer(t *testing.T) {
 
 func TestDirectoryAdminRejectsBadInput(t *testing.T) {
 	c := newDirectoryClient(t)
-	c.expect(204, "POST", "/api/containers", map[string]any{"id": "bare", "enabled": true})
+	c.expect(201, "POST", "/api/containers", map[string]any{"id": "bare", "enabled": true})
 	c.expect(400, "POST", "/api/containers/bare/channels", map[string]any{"key": "n1", "channel": "WhatsApp", "enabled": true, "config": map[string]any{"phone_id": "1", "waba_id": "2"}})
 	c.expect(400, "POST", "/api/containers/bare/channels", map[string]any{"key": "n1", "channel": "WhatsApp", "enabled": false, "config": map[string]any{"graph_version": "v25.0"}})
 	c.expect(404, "POST", "/api/containers/missing/channels", map[string]any{"key": "x", "channel": "Telegram"})
@@ -159,7 +161,7 @@ func TestDirectoryAdminRejectsBadInput(t *testing.T) {
 func TestDirectoryAdminKeepsCheckStatusAndClearsNumberApp(t *testing.T) {
 	c := newDirectoryClient(t)
 	ctx := context.Background()
-	c.expect(204, "POST", "/api/containers", map[string]any{"id": "essdee", "enabled": true,
+	c.expect(201, "POST", "/api/containers", map[string]any{"id": "essdee", "enabled": true,
 		"whatsapp": map[string]any{"config": map[string]any{"app_id": "77", "graph_version": "v25.0", "app_secret": "app-secret", "verify_token": "verify-token"}, "access_token": "system-user-token"}})
 	c.expect(204, "POST", "/api/containers/essdee/channels", map[string]any{"secret": "500001:bot-one-secret-abcdefghijklmnopqrstu",
 		"key": "bot", "channel": "Telegram", "label": "Bot", "enabled": true, "config": map[string]any{"username": "bot"}})
@@ -187,5 +189,42 @@ func TestDirectoryAdminKeepsCheckStatusAndClearsNumberApp(t *testing.T) {
 	sales, _ = c.store.GetChannel(ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "sales"})
 	if len(sales.ConfiguredSecrets) != 0 || sales.Config["connection_status"] != "connected" {
 		t.Fatalf("number still has its own app: %v %v", sales.ConfiguredSecrets, sales.Config)
+	}
+}
+
+func TestNewContainersGetRandomPublicWebhookPaths(t *testing.T) {
+	c := newDirectoryClient(t)
+	var created struct{ ID, WebhookPath string }
+	var body map[string]string
+	json.Unmarshal(c.expect(201, "POST", "/api/containers", map[string]any{"name": "Essdee Retail", "enabled": true}).Body.Bytes(), &body)
+	created.ID, created.WebhookPath = body["id"], body["webhook_path"]
+	path := strings.TrimPrefix(created.WebhookPath, "/webhooks/whatsapp/")
+	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(path) || strings.Contains(strings.ToLower(created.WebhookPath), "essdee") || strings.Contains(created.WebhookPath, created.ID) {
+		t.Fatalf("public path is not random: %v", body)
+	}
+	c.expect(201, "POST", "/api/containers", map[string]any{"name": "Essdee Retail", "enabled": true})
+	webhook := c.expect(200, "GET", "/api/containers/"+created.ID+"/whatsapp/webhook", nil).Body.String()
+	if !strings.Contains(webhook, created.WebhookPath) {
+		t.Fatalf("webhook view: %s", webhook)
+	}
+	c.expect(204, "POST", "/api/containers/"+created.ID+"/channels", map[string]any{"secret": "500001:bot-one-secret-abcdefghijklmnopqrstu",
+		"key": "retail-bot", "channel": "Telegram", "label": "Retail bot", "enabled": true, "config": map[string]any{"username": "retail_bot"}})
+	bot, err := c.store.GetChannel(context.Background(), containers.ChannelRef{Channel: "Telegram", Key: "retail-bot"})
+	if err != nil || !regexp.MustCompile(`^/webhooks/telegram/[a-f0-9]{64}$`).MatchString(bot.WebhookPath) || strings.Contains(bot.WebhookPath, "retail") {
+		t.Fatalf("bot path: %q %v", bot.WebhookPath, err)
+	}
+	rows, err := c.store.Runtime(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := channels.Load(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, ok := registry.WebhookKey("Telegram", strings.TrimPrefix(bot.WebhookPath, "/webhooks/telegram/")); !ok || key != "retail-bot" {
+		t.Fatal("public path does not reach the bot")
+	}
+	if _, ok := registry.WebhookKey("Telegram", "retail-bot"); ok {
+		t.Fatal("a new bot answered on its readable key")
 	}
 }

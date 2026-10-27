@@ -49,7 +49,7 @@ func TestContainerWebhookRoutesEachNumberToItsSite(t *testing.T) {
 	if code := postWebhook(d.Service, "meta", "wrong-secret", body); code != 403 {
 		t.Fatalf("bad signature: %d", code)
 	}
-	if code := postWebhook(d.Service, "other", "app-secret", body); code != 403 {
+	if code := postWebhook(d.Service, "other", "app-secret", body); code != 404 {
 		t.Fatalf("unknown container: %d", code)
 	}
 	if code := postWebhook(d.Service, "meta", "app-secret", body); code != 200 {
@@ -160,5 +160,28 @@ func TestReassignedNumberKeepsOldEventsAndReplaysUnknown(t *testing.T) {
 	}
 	if len(record.events) != 2 || !strings.Contains(joined, "wamid.while-unassigned") || !strings.Contains(joined, "wamid.new-number") || strings.Contains(joined, "wamid.before") {
 		t.Fatalf("replay delivered %d events: %s", len(record.events), joined)
+	}
+}
+
+func TestContainerKeyIsNotAPublicPath(t *testing.T) {
+	a := testAccount()
+	a.ContainerID, a.WebhookID = "essdee-main", strings.Repeat("ab", 32)
+	if len(webhookAccounts([]Account{a}, "essdee-main")) != 0 || len(webhookAccounts([]Account{a}, a.WebhookID)) != 1 {
+		t.Fatal("new container answered on its key")
+	}
+	a.LegacyWebhook = true
+	if len(webhookAccounts([]Account{a}, "essdee-main")) != 1 {
+		t.Fatal("an existing container lost its old path")
+	}
+	s, err := New([]Account{a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "/webhooks/whatsapp/unknown", strings.NewReader(`{}`))
+	r.SetPathValue("container", "unknown")
+	w := httptest.NewRecorder()
+	s.Webhook(w, r)
+	if w.Code != 404 {
+		t.Fatalf("unknown path: %d", w.Code)
 	}
 }
