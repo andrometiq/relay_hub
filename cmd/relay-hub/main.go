@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	accountstore "github.com/andrometiq/relay_hub/internal/accounts"
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
+	accountstore "github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/database"
 	"github.com/andrometiq/relay_hub/internal/envconfig"
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
@@ -105,25 +105,36 @@ func runtimeWhatsApp(ctx context.Context, store runtimeAccountSource) ([]whatsap
 		if row.Channel != "WhatsApp" {
 			continue
 		}
-		get := func(key string) string {
-			if value, ok := row.Config[key].(string); ok {
-				return value
-			}
-			return ""
-		}
-		rate, err := whatsappRate(row.Config["messages_per_second"])
+		account, err := whatsappAccount(row)
 		if err != nil {
 			return nil, err
 		}
-		accounts = append(accounts, whatsapp.Account{MessagesPerSecond: rate,
-			ID: row.AccountID, Site: row.Site, AccessToken: row.Secret,
-			AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
-			AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
-			CoreAPIKey: get("core_api_key"), CoreAPISecret: get("core_api_secret"), CallbackSecret: get("callback_secret"),
-			SyncMetadata: boolValue(row.Config["sync_metadata"]), Templates: boolValue(row.Config["templates"]),
-		})
+		accounts = append(accounts, account)
 	}
 	return accounts, nil
+}
+
+// whatsappAccount joins one number with its container app and its site.
+// A number of a disabled site is kept so its webhooks are still journaled.
+func whatsappAccount(row accountstore.RuntimeCredential) (whatsapp.Account, error) {
+	get := func(key string) string { value, _ := row.Config[key].(string); return value }
+	rate, err := whatsappRate(row.Config["messages_per_second"])
+	if err != nil {
+		return whatsapp.Account{}, err
+	}
+	account := whatsapp.Account{MessagesPerSecond: rate, ID: row.Key, ContainerID: row.Container, Label: row.Label,
+		AccessToken: row.Secret, DisplayNumber: get("display_number"),
+		AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
+		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
+		SyncMetadata: boolValue(row.Config["sync_metadata"]), Templates: boolValue(row.Config["templates"]),
+	}
+	if row.Site != "" {
+		account.SiteID, account.Site = row.Site, row.Origin
+		if row.SiteEnabled {
+			account.CoreAPIKey, account.CoreAPISecret, account.CallbackSecret = row.Core.APIKey, row.Core.APISecret, row.Core.CallbackSecret
+		}
+	}
+	return account, nil
 }
 
 func boolValue(value any) bool {
@@ -131,17 +142,18 @@ func boolValue(value any) bool {
 	return ok && v
 }
 
-func whatsappCandidate(account accountstore.Account, channel accountstore.Channel, secret string, stored accountstore.RuntimeCredential) whatsapp.Account {
+// whatsappCandidate is the number an account save would create, for a Meta check
+// before it is stored. Blank secrets fall back to the stored values.
+func whatsappCandidate(account accountstore.Account, channel accountstore.AccountChannel, secret string, stored accountstore.RuntimeCredential) whatsapp.Account {
 	config := map[string]any{}
 	for key, value := range channel.Config {
 		config[key] = value
 	}
-	for _, key := range []string{"app_secret", "verify_token", "core_token", "core_api_key", "core_api_secret", "callback_secret"} {
+	for _, key := range []string{"app_secret", "verify_token", "core_token"} {
 		if config[key] == nil || config[key] == "" {
 			config[key] = stored.Config[key]
 		}
 	}
-	get := func(key string) string { value, _ := config[key].(string); return value }
 	if secret == "" {
 		secret = stored.Secret
 	}
@@ -149,27 +161,19 @@ func whatsappCandidate(account accountstore.Account, channel accountstore.Channe
 	if err != nil {
 		rate = -1
 	}
-	return whatsapp.Account{MessagesPerSecond: rate, ID: account.ID, Site: account.Site, AccessToken: secret,
-		AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
-		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
-		CoreAPIKey: get("core_api_key"), CoreAPISecret: get("core_api_secret"), CallbackSecret: get("callback_secret"),
-		SyncMetadata: boolValue(config["sync_metadata"]), Templates: boolValue(config["templates"]), Groups: false, Calls: false}
+	candidate, _ := whatsappAccount(accountstore.RuntimeCredential{Key: account.ID, Channel: "WhatsApp", Container: account.ID, Config: config, Secret: secret})
+	candidate.MessagesPerSecond, candidate.SiteID, candidate.Site = rate, account.ID, account.Site
+	return candidate
 }
+
+// runtimeCallbacks lists the Telegram and email channels whose site can receive callbacks.
 func runtimeCallbacks(rows []accountstore.RuntimeCredential) []channels.RuntimeCallback {
 	result := []channels.RuntimeCallback{}
 	for _, row := range rows {
-		if row.Channel != "Telegram" && row.Channel != "Email" {
+		if (row.Channel != "Telegram" && row.Channel != "Email") || row.Site == "" || !row.SiteEnabled || !row.Core.Complete() {
 			continue
 		}
-		get := func(key string) string {
-			if v, ok := row.Config[key].(string); ok {
-				return v
-			}
-			return ""
-		}
-		if get("core_api_key") != "" && get("core_api_secret") != "" && get("callback_secret") != "" {
-			result = append(result, channels.RuntimeCallback{Account: row.AccountID, Site: row.Site, APIKey: get("core_api_key"), APISecret: get("core_api_secret"), CallbackSecret: get("callback_secret")})
-		}
+		result = append(result, channels.RuntimeCallback{Account: row.Key, Site: row.Origin, APIKey: row.Core.APIKey, APISecret: row.Core.APISecret, CallbackSecret: row.Core.CallbackSecret})
 	}
 	return result
 }
@@ -286,6 +290,9 @@ func run() error {
 		if err = accountStore.ProtectLegacyConfig(context.Background()); err != nil {
 			return errors.New("cannot protect stored channel configuration; existing data preserved")
 		}
+		if err = accountStore.UpgradeContainers(context.Background()); err != nil {
+			return fmt.Errorf("cannot move channel settings to containers and sites; existing data preserved: %w", err)
+		}
 		if err = activateWhatsApp(context.Background(), wa, accountStore); err != nil {
 			return errors.New("cannot activate database WhatsApp configuration")
 		}
@@ -298,21 +305,7 @@ func run() error {
 		if err != nil {
 			return errors.New("enabled channel configuration is invalid")
 		}
-		channelCallbacks := []channels.RuntimeCallback{}
-		for _, row := range runtimeRows {
-			if row.Channel != "Telegram" && row.Channel != "Email" {
-				continue
-			}
-			get := func(key string) string {
-				if v, ok := row.Config[key].(string); ok {
-					return v
-				}
-				return ""
-			}
-			if get("core_api_key") != "" && get("core_api_secret") != "" && get("callback_secret") != "" {
-				channelCallbacks = append(channelCallbacks, channels.RuntimeCallback{Account: row.AccountID, Site: row.Site, APIKey: get("core_api_key"), APISecret: get("core_api_secret"), CallbackSecret: get("callback_secret")})
-			}
-		}
+		channelCallbacks := runtimeCallbacks(runtimeRows)
 		channelWake := make(chan struct{}, 1)
 		channelEvents := channels.Store{DB: authPool, Wake: channelWake}
 		channelCallbacksDispatcher := &channels.CallbackDispatcher{URL: os.Getenv("DATABASE_URL"), Wake: channelWake}
@@ -337,6 +330,31 @@ func run() error {
 		handler, err := hubmcp.NewAuthenticatedChannels(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents)
 		if err != nil {
 			return err
+		}
+		// reloadRuntime publishes validated credentials atomically. MCP, webhook
+		// and admin handlers share the stable registry object, so a reload or a
+		// revocation also reaches handlers built before it.
+		reloadRuntime := func(ctx context.Context) error {
+			configured, e := runtimeWhatsApp(ctx, accountStore)
+			var nextChannels *channels.Registry
+			var channelRows []accountstore.RuntimeCredential
+			if e == nil {
+				channelRows, e = accountStore.Runtime(ctx)
+			}
+			if e == nil {
+				nextChannels, e = channels.Load(channelRows)
+			}
+			if e == nil {
+				e = wa.ReplaceAccounts(configured)
+			}
+			if e == nil {
+				e = channelRegistry.Replace(nextChannels)
+			}
+			if e != nil {
+				return e
+			}
+			channelCallbacksDispatcher.Update(runtimeCallbacks(channelRows))
+			return nil
 		}
 		mux := http.NewServeMux()
 		mux.Handle("GET /auth/", browserAuth.UI(ui))
@@ -380,6 +398,9 @@ func run() error {
 		})))
 		mux.Handle("GET /api/accounts/health", browserAuth.Protect(accountHealth(authPool, browserAuth.Session)))
 		connections := accountConnection(channelRegistry, browserAuth.Session, os.Getenv("RELAY_PUBLIC_ORIGIN"), os.Getenv("RELAY_PUBLIC_ORIGIN")+os.Getenv("RELAY_PUBLIC_PREFIX"), os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"))
+		directoryAdmin{store: accountStore, session: browserAuth.Session, origin: os.Getenv("RELAY_PUBLIC_ORIGIN"), verifyWhatsApp: wa.ValidateCredentials, whatsappAccount: wa.AccountByKey, reload: reloadRuntime}.register(mux, browserAuth.Protect)
+		mux.Handle("GET /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
+		mux.Handle("POST /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("GET /api/accounts/{account}/{channel}/connection", browserAuth.Protect(connections))
 		mux.Handle("POST /api/accounts/{account}/{channel}/connection", browserAuth.Protect(connections))
 		mux.Handle("GET /api/accounts/metadata", browserAuth.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -457,7 +478,7 @@ func run() error {
 					continue
 				}
 				stored := accountstore.RuntimeCredential{Config: map[string]any{}}
-				if current, credentialErr := accountStore.Credential(r.Context(), in.Account.ID, "WhatsApp"); credentialErr == nil {
+				if current, credentialErr := accountStore.Credential(r.Context(), "WhatsApp", in.Account.ID); credentialErr == nil {
 					stored = current
 				} else if !errors.Is(credentialErr, pgx.ErrNoRows) {
 					http.Error(w, "account validation unavailable", http.StatusServiceUnavailable)
@@ -500,30 +521,10 @@ func run() error {
 				http.Error(w, "invalid request", http.StatusForbidden)
 				return
 			}
-			configured, e := runtimeWhatsApp(r.Context(), accountStore)
-			var nextChannels *channels.Registry
-			var channelRows []accountstore.RuntimeCredential
-			if e == nil {
-				channelRows, e = accountStore.Runtime(r.Context())
-			}
-			if e == nil {
-				nextChannels, e = channels.Load(channelRows)
-			}
-			if e == nil {
-				e = wa.ReplaceAccounts(configured)
-			}
-			if e != nil {
+			if e = reloadRuntime(r.Context()); e != nil {
 				http.Error(w, "runtime reload rejected", http.StatusBadRequest)
 				return
 			}
-			// MCP, webhook and admin handlers share this stable registry object.
-			// Publish validated credentials atomically so reload/revocation also
-			// takes effect for handlers constructed before this request.
-			if e = channelRegistry.Replace(nextChannels); e != nil {
-				http.Error(w, "runtime reload rejected", http.StatusBadRequest)
-				return
-			}
-			channelCallbacksDispatcher.Update(runtimeCallbacks(channelRows))
 			w.WriteHeader(http.StatusNoContent)
 		})))
 		mux.Handle("GET /api/audit", browserAuth.Protect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -668,6 +669,7 @@ func run() error {
 		// Return a bot-specific registration credential only to Hub admins. This
 		// endpoint never returns the master key or the Telegram Bot API token.
 		mux.Handle("GET /api/accounts/{account}/telegram/webhook", browserAuth.Protect(telegramWebhookSettings(channelRegistry, os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"), browserAuth.Session)))
+		mux.Handle("GET /api/channels/telegram/{account}/webhook", browserAuth.Protect(telegramWebhookSettings(channelRegistry, os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET"), browserAuth.Session)))
 		mux.HandleFunc("POST /webhooks/telegram/{account}", func(w http.ResponseWriter, r *http.Request) {
 			account := r.PathValue("account")
 			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -682,6 +684,7 @@ func run() error {
 			w.WriteHeader(http.StatusNoContent)
 		})
 		mux.Handle("GET /api/accounts/{account}/email/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
+		mux.Handle("GET /api/channels/email/{account}/webhook", browserAuth.Protect(channelWebhookSettings("email", channelRegistry.EmailWebhookSecret, os.Getenv("RELAY_EMAIL_WEBHOOK_SECRET"), browserAuth.Session)))
 		mux.HandleFunc("POST /webhooks/email/{account}", func(w http.ResponseWriter, r *http.Request) {
 			account := r.PathValue("account")
 			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 12<<20))

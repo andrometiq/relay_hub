@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/andrometiq/relay_hub/internal/accounts"
 	"github.com/andrometiq/relay_hub/internal/channels"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
@@ -35,7 +35,7 @@ func (s *simulation) activateChannels(a whatsapp.Account) error {
 func (s *simulation) channelHTTP() *http.Client {
 	return &http.Client{Transport: s.transport, Timeout: 12 * time.Second, CheckRedirect: denyRedirect}
 }
-func simulationChannels(a whatsapp.Account) []accounts.Channel {
+func simulationChannels(a whatsapp.Account) []containers.AccountChannel {
 	callback := func() map[string]any {
 		return map[string]any{"core_api_key": a.CoreAPIKey, "core_api_secret": a.CoreAPISecret, "callback_secret": a.CallbackSecret}
 	}
@@ -52,7 +52,7 @@ func simulationChannels(a whatsapp.Account) []accounts.Channel {
 	mail["from"] = "inbox@sim.invalid"
 	mail["imap_host"] = "127.0.0.1"
 	mail["imap_port"] = 993
-	return []accounts.Channel{{Channel: "WhatsApp", Enabled: true, Config: wa}, {Channel: "Telegram", Enabled: true, Config: callback()}, {Channel: "Email", Enabled: true, Config: mail}}
+	return []containers.AccountChannel{{Channel: "WhatsApp", Enabled: true, Config: wa}, {Channel: "Telegram", Enabled: true, Config: callback()}, {Channel: "Email", Enabled: true, Config: mail}}
 }
 func (s *simulation) channelWebhook(channel string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

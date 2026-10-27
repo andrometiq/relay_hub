@@ -206,7 +206,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				account := r.Form.Get("account")
 				known := false
 				if u.Role == "admin" {
-					e = h.Store.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM relay_accounts WHERE account_id=$1)", account).Scan(&known)
+					e = h.Store.DB.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM relay_sites WHERE site_id=$1)", account).Scan(&known)
 					if e != nil {
 						http.Error(w, "Account lookup unavailable", 503)
 						return
@@ -288,7 +288,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if before {
 			comparison, order = "<", "DESC"
 		}
-		rows, e := h.Store.DB.Query(ctx, "SELECT id,username,role,enabled,auth_version,ARRAY(SELECT account_id FROM relay_user_accounts WHERE user_id=relay_users.id ORDER BY account_id),ARRAY(SELECT g.account_id FROM relay_user_accounts g JOIN relay_accounts a ON a.account_id=g.account_id WHERE g.user_id=relay_users.id AND a.enabled AND relay_users.enabled ORDER BY g.account_id) FROM relay_users WHERE ($1::bigint=0 OR id "+comparison+" $1) AND username ILIKE $2 ORDER BY id "+order+" LIMIT 51", cursor, pattern)
+		rows, e := h.Store.DB.Query(ctx, "SELECT id,username,role,enabled,auth_version,ARRAY(SELECT site_id FROM relay_user_sites WHERE user_id=relay_users.id ORDER BY site_id),ARRAY(SELECT g.site_id FROM relay_user_sites g JOIN relay_sites a ON a.site_id=g.site_id WHERE g.user_id=relay_users.id AND a.enabled AND relay_users.enabled ORDER BY g.site_id) FROM relay_users WHERE ($1::bigint=0 OR id "+comparison+" $1) AND username ILIKE $2 ORDER BY id "+order+" LIMIT 51", cursor, pattern)
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return
@@ -334,7 +334,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if before {
 			comparison, order = "<", "DESC"
 		}
-		rows, e := h.Store.DB.Query(ctx, "SELECT id,name,account_id,array_to_string(scopes,', '),CASE WHEN expires_at='infinity'::timestamptz THEN 'Never' ELSE expires_at::text END,revoked_at IS NOT NULL FROM relay_api_tokens WHERE user_id=$1 AND ($2::bigint=0 OR id "+comparison+" $2) AND (name || ' ' || account_id) ILIKE $3 ORDER BY id "+order+" LIMIT 51", u.ID, cursor, pattern)
+		rows, e := h.Store.DB.Query(ctx, "SELECT id,name,site_id,array_to_string(scopes,', '),CASE WHEN expires_at='infinity'::timestamptz THEN 'Never' ELSE expires_at::text END,revoked_at IS NOT NULL FROM relay_api_tokens WHERE user_id=$1 AND ($2::bigint=0 OR id "+comparison+" $2) AND (name || ' ' || site_id) ILIKE $3 ORDER BY id "+order+" LIMIT 51", u.ID, cursor, pattern)
 		if e != nil {
 			http.Error(w, "Unavailable", 503)
 			return

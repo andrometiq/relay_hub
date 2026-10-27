@@ -1,4 +1,4 @@
-package accounts
+package containers
 
 import (
 	"bytes"
@@ -83,7 +83,7 @@ func TestRotationDatabaseTransactionAndUnreadablePreservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	old, _ := New(db, "rotation-old-fixture")
-	account := Account{ID: "rotation-fixture", Site: "https://example.invalid", Enabled: true, Channels: []Channel{{Channel: "Telegram", Enabled: true, Config: map[string]any{"core_api_secret": "private-fixture"}}, {Channel: "Email", Enabled: false}}}
+	account := Account{ID: "rotation-fixture", Site: "https://example.invalid", Enabled: true, Channels: []AccountChannel{{Channel: "Telegram", Enabled: true, Config: map[string]any{"core_api_key": "key-fixture", "core_api_secret": "private-fixture", "callback_secret": "callback-fixture-0123456789abcdef"}}, {Channel: "Email", Enabled: false}}}
 	if err = old.Save(ctx, account, map[string]string{"Telegram": "bot-fixture", "Email": "unreadable-fixture"}); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestRotationDatabaseTransactionAndUnreadablePreservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err := old.RotateKey(ctx, "rotation-new-fixture", false)
-	if err != nil || report.Rows != 2 || report.RotatedFields != 3 || len(report.Unreadable) != 1 {
+	if err != nil || report.Rows != 3 || report.RotatedFields != 4 || len(report.Unreadable) != 1 {
 		t.Fatal("dry run classification", report, err)
 	}
 	if value, err := old.Runtime(ctx); err != nil || len(value) != 1 || value[0].Secret != "bot-fixture" {
@@ -107,7 +107,7 @@ func TestRotationDatabaseTransactionAndUnreadablePreservation(t *testing.T) {
 		t.Fatal("new key cannot read rotated token")
 	}
 	var cipher, nonce []byte
-	if err = db.QueryRow(ctx, `SELECT config_ciphertext,config_nonce FROM relay_channel_credentials WHERE channel='Telegram'`).Scan(&cipher, &nonce); err != nil {
+	if err = db.QueryRow(ctx, `SELECT secret_ciphertext,secret_nonce FROM relay_sites`).Scan(&cipher, &nonce); err != nil {
 		t.Fatal(err)
 	}
 	values, err := next.configSecrets(cipher, nonce)
@@ -118,7 +118,7 @@ func TestRotationDatabaseTransactionAndUnreadablePreservation(t *testing.T) {
 		t.Fatal("unreadable field replaced")
 	}
 	report, err = old.RotateKey(ctx, "rotation-new-fixture", true)
-	if err != nil || report.RotatedFields != 0 || report.AlreadyUsingNewKey != 3 || len(report.Unreadable) != 1 {
+	if err != nil || report.RotatedFields != 0 || report.AlreadyUsingNewKey != 4 || len(report.Unreadable) != 1 {
 		t.Fatal("rotation replay", report, err)
 	}
 }

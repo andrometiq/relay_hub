@@ -14,7 +14,7 @@ func TestAccountBindingIsScopedAndContainsNoCredentials(t *testing.T) {
 	ctx := context.Background()
 	db, _ := simulationDatabase(t, ctx)
 	for _, a := range []string{"one", "two"} {
-		if _, err := db.Exec(ctx, `INSERT INTO relay_accounts(account_id,site,enabled) VALUES($1,$2,true)`, a, "https://"+a+".test"); err != nil {
+		if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin,enabled) VALUES($1,$2,true)`, a, "https://"+a+".test"); err != nil {
 			t.Fatal(err)
 		}
 	}

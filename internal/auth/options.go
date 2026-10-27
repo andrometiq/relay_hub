@@ -27,10 +27,10 @@ func (h *HTTP) searchOptions(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	sql := `SELECT account_id FROM relay_accounts WHERE account_id COLLATE "C" >= $1 AND account_id COLLATE "C" < $2 ORDER BY account_id COLLATE "C" LIMIT 31`
+	sql := `SELECT site_id FROM relay_sites WHERE site_id COLLATE "C" >= $1 AND site_id COLLATE "C" < $2 ORDER BY site_id COLLATE "C" LIMIT 31`
 	args := []any{query, query + "\U0010ffff"}
 	if kind == "grants" {
-		sql = `SELECT account_id FROM relay_user_accounts WHERE user_id=$3 AND account_id COLLATE "C" >= $1 AND account_id COLLATE "C" < $2 ORDER BY account_id COLLATE "C" LIMIT 31`
+		sql = `SELECT site_id FROM relay_user_sites WHERE user_id=$3 AND site_id COLLATE "C" >= $1 AND site_id COLLATE "C" < $2 ORDER BY site_id COLLATE "C" LIMIT 31`
 		args = append(args, u.ID)
 	}
 	rows, err := h.Store.DB.Query(ctx, sql, args...)

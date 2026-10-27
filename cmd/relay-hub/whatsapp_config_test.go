@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
-	"github.com/andrometiq/relay_hub/internal/accounts"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"testing"
 )
 
 func TestWhatsAppSavedConfigurationMatchesValidation(t *testing.T) {
-	stored := accounts.RuntimeCredential{Secret: "saved", Config: map[string]any{"phone_id": "111", "app_id": "333", "waba_id": "222", "app_secret": "private", "verify_token": "verify", "templates": true}}
+	stored := containers.RuntimeCredential{Secret: "saved", Config: map[string]any{"phone_id": "111", "app_id": "333", "waba_id": "222", "app_secret": "private", "verify_token": "verify", "templates": true}}
 	for _, config := range []map[string]any{nil, {}, {"phone_id": "", "app_id": "333", "waba_id": "222"}} {
 		if validateWhatsAppConfig(config) == nil {
 			t.Fatal("accepted incomplete public identity")
 		}
-		candidate := whatsappCandidate(accounts.Account{ID: "a"}, accounts.Channel{Config: config}, "", stored)
+		candidate := whatsappCandidate(containers.Account{ID: "a"}, containers.AccountChannel{Config: config}, "", stored)
 		if candidate.PhoneID != "" || candidate.Templates || candidate.AccessToken != "saved" || candidate.AppSecret != "private" {
 			t.Fatal("candidate restored omitted public config")
 		}
@@ -22,8 +22,8 @@ func TestWhatsAppSavedConfigurationMatchesValidation(t *testing.T) {
 		if err := validateWhatsAppConfig(config); err != nil {
 			t.Fatal(err)
 		}
-		candidate := whatsappCandidate(accounts.Account{ID: "a"}, accounts.Channel{Config: config}, "", stored)
-		rows, err := runtimeWhatsApp(context.Background(), fixtureRuntime{rows: []accounts.RuntimeCredential{{AccountID: "a", Channel: "WhatsApp", Config: config}}})
+		candidate := whatsappCandidate(containers.Account{ID: "a"}, containers.AccountChannel{Config: config}, "", stored)
+		rows, err := runtimeWhatsApp(context.Background(), fixtureRuntime{rows: []containers.RuntimeCredential{{Key: "a", Channel: "WhatsApp", Config: config}}})
 		if err != nil || len(rows) != 1 || candidate.MessagesPerSecond != rows[0].MessagesPerSecond {
 			t.Fatal("pacing mismatch", err)
 		}
@@ -32,7 +32,7 @@ func TestWhatsAppSavedConfigurationMatchesValidation(t *testing.T) {
 		if _, err := whatsappRate(value); err == nil {
 			t.Fatal("accepted invalid rate", value)
 		}
-		if _, err := runtimeWhatsApp(t.Context(), fixtureRuntime{rows: []accounts.RuntimeCredential{{Channel: "WhatsApp", Config: map[string]any{"messages_per_second": value}}}}); err == nil {
+		if _, err := runtimeWhatsApp(t.Context(), fixtureRuntime{rows: []containers.RuntimeCredential{{Channel: "WhatsApp", Config: map[string]any{"messages_per_second": value}}}}); err == nil {
 			t.Fatal("invalid stored rate loaded")
 		}
 	}

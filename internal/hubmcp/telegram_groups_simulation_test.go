@@ -166,7 +166,7 @@ func TestTelegramGroupsAuthenticatedSimulation(t *testing.T) {
 		t.Fatal(err)
 	}
 	issue := func(account, label string, scopes ...string) string {
-		if _, err := db.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES($1,'https://fixture.invalid') ON CONFLICT DO NOTHING`, account); err != nil {
+		if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES($1,'https://fixture.invalid') ON CONFLICT DO NOTHING`, account); err != nil {
 			t.Fatal(err)
 		}
 		t.Helper()

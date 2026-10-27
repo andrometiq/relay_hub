@@ -1,4 +1,4 @@
-package accounts
+package containers
 
 import (
 	"context"
@@ -85,7 +85,7 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	store, _ := New(pool, "test-only-encryption-key")
-	a := Account{ID: "test-account", Site: "https://example.test", Enabled: true, Channels: []Channel{{Channel: "WhatsApp", Enabled: true}}}
+	a := Account{ID: "test-account", Site: "https://example.test", Enabled: true, Channels: []AccountChannel{{Channel: "WhatsApp", Enabled: true}}}
 	if err = store.Save(ctx, a, nil); err != nil {
 		t.Fatal("blank secret insert", err)
 	}
@@ -110,8 +110,8 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 	}
 
 	t.Run("partial channel save", func(t *testing.T) {
-		defer pool.Exec(ctx, `DELETE FROM relay_accounts WHERE account_id='partial-save'`)
-		a := Account{ID: "partial-save", Site: "https://fixture.invalid", Enabled: true, Channels: []Channel{
+		defer pool.Exec(ctx, `DELETE FROM relay_channel_credentials WHERE channel_key='partial-save'; DELETE FROM relay_sites WHERE site_id='partial-save'`)
+		a := Account{ID: "partial-save", Site: "https://fixture.invalid", Enabled: true, Channels: []AccountChannel{
 			{Channel: "WhatsApp", Enabled: true, Config: map[string]any{"groups": true, "calls": true}},
 			{Channel: "Telegram", Enabled: true, Config: map[string]any{}},
 		}}
@@ -128,7 +128,7 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 		}
 		found := false
 		for _, row := range rows {
-			if row.AccountID == a.ID && row.Channel == "Telegram" {
+			if row.Key == a.ID && row.Channel == "Telegram" {
 				found = row.Secret == "synthetic-secret"
 			}
 		}
@@ -139,12 +139,12 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 
 	t.Run("bounded searchable keyset pages", func(t *testing.T) {
 		for i := 0; i < 65; i++ {
-			row := Account{ID: fmt.Sprintf("page_%03d", i), Site: "https://page.example.test", Enabled: true, Channels: []Channel{{Channel: "Telegram", Enabled: true}, {Channel: "Email", Enabled: true}}}
+			row := Account{ID: fmt.Sprintf("page_%03d", i), Site: "https://page.example.test", Enabled: true, Channels: []AccountChannel{{Channel: "Telegram", Enabled: true}, {Channel: "Email", Enabled: true}}}
 			if err := store.Save(ctx, row, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
-		defer pool.Exec(ctx, `DELETE FROM relay_accounts WHERE account_id LIKE 'page_%'`)
+		defer pool.Exec(ctx, `DELETE FROM relay_channel_credentials WHERE channel_key LIKE 'page_%'; DELETE FROM relay_sites WHERE site_id LIKE 'page_%'`)
 		seen := map[string]bool{}
 		cursor := ""
 		for {
@@ -181,12 +181,12 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 			t.Fatalf("backward page: %#v %v %v", before, more, err)
 		}
 	})
-	a.Channels[0].Config = map[string]any{"app_secret": "private-meta-secret", "core_api_secret": "private-core-secret", "callback_secret": "private-callback-secret", "phone_id": "123"}
+	a.Channels[0].Config = map[string]any{"app_secret": "private-meta-secret", "core_api_key": "private-core-key", "core_api_secret": "private-core-secret", "callback_secret": "private-callback-secret-0123456789abcdef", "phone_id": "123"}
 	if err = store.Save(ctx, a, nil); err != nil {
 		t.Fatal(err)
 	}
 	var raw []byte
-	if err = pool.QueryRow(ctx, `SELECT config FROM relay_channel_credentials WHERE account_id=$1`, a.ID).Scan(&raw); err != nil {
+	if err = pool.QueryRow(ctx, `SELECT config FROM relay_channel_credentials WHERE channel_key=$1`, a.ID).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "private-") {
@@ -200,7 +200,7 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 	if strings.Contains(string(public), "private-") {
 		t.Fatal("secret leaked in listing")
 	}
-	if len(listed[0].Channels[0].ConfiguredSecrets) != 4 {
+	if len(listed[0].Channels[0].ConfiguredSecrets) != 5 {
 		t.Fatal("missing presence indicators")
 	}
 	a.Channels[0].Config = map[string]any{"app_secret": "", "phone_id": "456"}
@@ -208,7 +208,7 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err = store.Runtime(ctx)
-	if err != nil || runtime[0].Config["core_api_secret"] != "private-core-secret" || runtime[0].Config["app_secret"] != "private-meta-secret" {
+	if err != nil || runtime[0].Core.APISecret != "private-core-secret" || runtime[0].Config["app_secret"] != "private-meta-secret" {
 		t.Fatal("blank edit lost secrets", err)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE relay_channel_credentials SET config=config || '{"verify_token":"legacy-private-verification"}'::jsonb`); err != nil {
@@ -223,7 +223,7 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 	if err != nil || runtime[0].Config["verify_token"] != "legacy-private-verification" {
 		t.Fatal("legacy migration failed", err)
 	}
-	pool.QueryRow(ctx, `SELECT config FROM relay_channel_credentials WHERE account_id=$1`, a.ID).Scan(&raw)
+	pool.QueryRow(ctx, `SELECT config FROM relay_channel_credentials WHERE channel_key=$1`, a.ID).Scan(&raw)
 	if strings.Contains(string(raw), "legacy-private") {
 		t.Fatal("legacy plaintext retained")
 	}
@@ -245,11 +245,11 @@ func TestAccountPersistenceLifecycle(t *testing.T) {
 	}
 	restarted, _ := New(pool, "test-only-encryption-key")
 	runtime, err = restarted.Runtime(ctx)
-	if err != nil || len(runtime) != 0 {
+	if err != nil || len(runtime) != 1 || runtime[0].SiteEnabled {
 		t.Fatal("disabled account reactivated after restart", err)
 	}
 	a.Enabled = true
-	a.Channels = []Channel{{Channel: "WhatsApp", Enabled: false}}
+	a.Channels = []AccountChannel{{Channel: "WhatsApp", Enabled: false}}
 	if err = store.Save(ctx, a, nil); err != nil {
 		t.Fatal(err)
 	}

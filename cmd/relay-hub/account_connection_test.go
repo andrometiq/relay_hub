@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andrometiq/relay_hub/internal/accounts"
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/jackc/pgx/v5"
 )
@@ -97,24 +97,24 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 	}
 }
 
-type savedCredential struct{ value accounts.RuntimeCredential }
+type savedCredential struct{ value containers.RuntimeCredential }
 
-func (s savedCredential) Credential(context.Context, string, string) (accounts.RuntimeCredential, error) {
+func (s savedCredential) Credential(context.Context, string, string) (containers.RuntimeCredential, error) {
 	if s.value.Secret == "" {
 		return s.value, pgx.ErrNoRows
 	}
 	return s.value, nil
 }
 func TestChannelAccountValidationPreservesSecrets(t *testing.T) {
-	account := accounts.Account{ID: "local", Enabled: true, Channels: []accounts.Channel{{Channel: "Telegram", Enabled: true, Config: map[string]any{}}}}
-	saved := savedCredential{accounts.RuntimeCredential{Secret: "123456:abcdefghijklmnopqrstuv"}}
+	account := containers.Account{ID: "local", Enabled: true, Channels: []containers.AccountChannel{{Channel: "Telegram", Enabled: true, Config: map[string]any{}}}}
+	saved := savedCredential{containers.RuntimeCredential{Secret: "123456:abcdefghijklmnopqrstuv"}}
 	if err := validateChannelAccount(t.Context(), saved, account, nil); err != nil {
 		t.Fatal(err)
 	}
 	if validateChannelAccount(t.Context(), saved, account, map[string]string{"Telegram": "bad"}) == nil {
 		t.Fatal("invalid replacement accepted")
 	}
-	account.Channels = []accounts.Channel{{Channel: "Email", Enabled: true, Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "sender@example.invalid", "imap_host": "imap.invalid", "username": "local"}}}
+	account.Channels = []containers.AccountChannel{{Channel: "Email", Enabled: true, Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "sender@example.invalid", "imap_host": "imap.invalid", "username": "local"}}}
 	if err := validateChannelAccount(t.Context(), saved, account, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +130,11 @@ func TestChannelAccountValidationPreservesSecrets(t *testing.T) {
 
 func TestMixedChannelSettingsRoundTrip(t *testing.T) {
 	ctx, db := adminTestDatabase(t)
-	store, err := accounts.New(db, "local-only-encryption-key")
+	store, err := containers.New(db, "local-only-encryption-key")
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := accounts.Account{ID: "mixed-local", Site: "https://core.invalid", Enabled: true, Channels: []accounts.Channel{
+	account := containers.Account{ID: "mixed-local", Site: "https://core.invalid", Enabled: true, Channels: []containers.AccountChannel{
 		{Channel: "Telegram", Enabled: true, Config: map[string]any{}},
 		{Channel: "Email", Enabled: true, Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "Local Sender <sender@example.invalid>", "username": "local", "imap_host": "imap.invalid", "imap_password": "local-imap-secret", "trusted_authserv_id": "mx.invalid", "trusted_dsn_domain": "dsn.invalid"}},
 	}}
@@ -165,7 +165,7 @@ func TestMixedChannelSettingsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, channel := range []string{"Telegram", "Email"} {
-		credential, err := store.Credential(ctx, account.ID, channel)
+		credential, err := store.Credential(ctx, channel, account.ID)
 		if err != nil || credential.Secret != secrets[channel] {
 			t.Fatal("secret not preserved", err)
 		}
@@ -182,11 +182,11 @@ func TestMixedChannelSettingsRoundTrip(t *testing.T) {
 }
 
 func TestMixedChannelsRejectConflictingCoreCredentials(t *testing.T) {
-	saved := savedCredential{accounts.RuntimeCredential{Secret: "123456:abcdefghijklmnopqrstuv"}}
+	saved := savedCredential{containers.RuntimeCredential{Secret: "123456:abcdefghijklmnopqrstuv"}}
 	config := func(signing string) map[string]any {
 		return map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "sender@example.invalid", "core_api_key": "local-key", "core_api_secret": "local-secret", "callback_secret": strings.Repeat(signing, 32)}
 	}
-	account := accounts.Account{ID: "local", Enabled: true, Channels: []accounts.Channel{
+	account := containers.Account{ID: "local", Enabled: true, Channels: []containers.AccountChannel{
 		{Channel: "Telegram", Enabled: true, Config: map[string]any{"core_api_key": "local-key", "core_api_secret": "local-secret", "callback_secret": strings.Repeat("a", 32)}},
 		{Channel: "Email", Enabled: true, Config: config("b")},
 	}}
@@ -199,98 +199,30 @@ func TestMixedChannelsRejectConflictingCoreCredentials(t *testing.T) {
 	}
 }
 
-func TestDisablingSharedCoreCredentialsRequiresReplacement(t *testing.T) {
+func TestDisablingAChannelKeepsSiteCoreCredentials(t *testing.T) {
 	ctx, db := adminTestDatabase(t)
-	store, err := accounts.New(db, "local-only-encryption-key")
+	store, err := containers.New(db, "local-only-encryption-key")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, owner := range []string{"Telegram", "Email"} {
-		t.Run(owner, func(t *testing.T) {
-			core := map[string]any{"core_api_key": "local-key", "core_api_secret": "local-secret", "callback_secret": strings.Repeat("a", 32)}
-			account := accounts.Account{ID: "disable-" + strings.ToLower(owner), Site: "https://core.invalid", Enabled: true, Channels: []accounts.Channel{
-				{Channel: "Telegram", Enabled: true, Config: map[string]any{}},
-				{Channel: "Email", Enabled: true, Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "local@example.invalid"}},
-			}}
-			for i := range account.Channels {
-				if account.Channels[i].Channel == owner {
-					for k, v := range core {
-						account.Channels[i].Config[k] = v
-					}
-				}
-			}
-			if err := store.Save(ctx, account, map[string]string{"Telegram": "123456:abcdefghijklmnopqrstuv", "Email": "local-password"}); err != nil {
-				t.Fatal(err)
-			}
-			for i := range account.Channels {
-				if account.Channels[i].Channel == owner {
-					account.Channels[i].Enabled = false
-				}
-				for k := range core {
-					delete(account.Channels[i].Config, k)
-				} // Same redacted payload returned to the UI.
-			}
-			if err := validateChannelAccount(ctx, store, account, nil); err == nil || !strings.Contains(err.Error(), "copy all three") {
-				t.Fatalf("unsafe save not rejected with action: %v", err)
-			}
-			// Partial updates must also consider the enabled channel omitted from Save.
-			partial := account
-			for _, ch := range account.Channels {
-				if ch.Channel == owner {
-					partial.Channels = []accounts.Channel{ch}
-				}
-			}
-			if err := validateChannelAccount(ctx, store, partial, nil); err == nil {
-				t.Fatal("partial save silently disabled shared callbacks")
-			}
-			disabled := account
-			disabled.Enabled = false
-			if err := validateChannelAccount(ctx, store, disabled, nil); err != nil {
-				t.Fatal("disabling entire account rejected", err)
-			}
-			bothOff := account
-			bothOff.Channels = append([]accounts.Channel(nil), account.Channels...)
-			for i := range bothOff.Channels {
-				bothOff.Channels[i].Enabled = false
-			}
-			if err := validateChannelAccount(ctx, store, bothOff, nil); err != nil {
-				t.Fatal("disabling both channels rejected", err)
-			}
-			for i := range account.Channels {
-				if account.Channels[i].Enabled {
-					for k, v := range core {
-						account.Channels[i].Config[k] = v
-					}
-				}
-			}
-			if err := validateChannelAccount(ctx, store, account, nil); err != nil {
-				t.Fatal("replacement callback credentials rejected", err)
-			}
-			if err := store.Save(ctx, account, nil); err != nil {
-				t.Fatal(err)
-			}
-			runtime, err := store.Runtime(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			found := false
-			for _, row := range runtime {
-				if row.AccountID == account.ID {
-					found = true
-					if row.Channel == owner || row.Config["callback_secret"] != core["callback_secret"] {
-						t.Fatal("runtime lost shared credentials")
-					}
-				}
-			}
-			if !found {
-				t.Fatal("remaining channel not active")
-			}
-			// Omitted disabled channels must stay disabled during later validation.
-			account.Channels = account.Channels[:0]
-			if err := validateChannelAccount(ctx, store, account, nil); err != nil {
-				t.Fatal("omitted saved channels validated incorrectly", err)
-			}
-		})
+	core := map[string]any{"core_api_key": "local-key", "core_api_secret": "local-secret", "callback_secret": strings.Repeat("a", 32)}
+	account := containers.Account{ID: "disable-telegram", Site: "https://core.invalid", Enabled: true, Channels: []containers.AccountChannel{
+		{Channel: "Telegram", Enabled: true, Config: core},
+		{Channel: "Email", Enabled: true, Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "local@example.invalid"}},
+	}}
+	if err := store.Save(ctx, account, map[string]string{"Telegram": "123456:abcdefghijklmnopqrstuv", "Email": "local-password"}); err != nil {
+		t.Fatal(err)
+	}
+	account.Channels[0] = containers.AccountChannel{Channel: "Telegram", Enabled: false, Config: map[string]any{}}
+	if err := validateChannelAccount(ctx, store, account, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, account, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := store.Runtime(ctx)
+	if err != nil || len(runtime) != 1 || runtime[0].Channel != "Email" || runtime[0].Core.CallbackSecret != core["callback_secret"] {
+		t.Fatal("remaining channel lost the site credentials", err)
 	}
 }
 

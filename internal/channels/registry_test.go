@@ -2,14 +2,14 @@ package channels
 
 import (
 	"context"
-	"github.com/andrometiq/relay_hub/internal/accounts"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/email"
 	"strings"
 	"testing"
 )
 
 func TestLoadRegistry(t *testing.T) {
-	r, err := Load([]accounts.RuntimeCredential{{AccountID: "tg", Channel: "Telegram", Secret: "123456:abcdefghijklmnopqrstuvwxyzABCDE"}, {AccountID: "mail", Channel: "Email", Secret: "pw", Config: map[string]any{"host": "smtp.example.com", "port": float64(587), "from": "relay@example.com"}}})
+	r, err := Load([]containers.RuntimeCredential{{Key: "tg", Channel: "Telegram", Secret: "123456:abcdefghijklmnopqrstuvwxyzABCDE"}, {Key: "mail", Channel: "Email", Secret: "pw", Config: map[string]any{"host": "smtp.example.com", "port": float64(587), "from": "relay@example.com"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestLoadRegistry(t *testing.T) {
 	}
 }
 func TestRejectBadEmailRuntime(t *testing.T) {
-	if _, err := Load([]accounts.RuntimeCredential{{AccountID: "mail", Channel: "Email", Secret: "pw", Config: map[string]any{"host": "smtp.example.com", "port": float64(587)}}}); err == nil {
+	if _, err := Load([]containers.RuntimeCredential{{Key: "mail", Channel: "Email", Secret: "pw", Config: map[string]any{"host": "smtp.example.com", "port": float64(587)}}}); err == nil {
 		t.Fatal("bad email accepted")
 	}
 }
@@ -32,9 +32,9 @@ func TestEmailWebhookRejectsInvalidSecretAndPayload(t *testing.T) {
 
 func TestEmailWebhookAccountIsolationAndPayloadClaims(t *testing.T) {
 	pool, _ := channelTestDB(t)
-	r, err := Load([]accounts.RuntimeCredential{
-		{AccountID: "alpha", Channel: "Email", Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "alpha@example.invalid"}},
-		{AccountID: "beta", Channel: "Email", Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "beta@example.invalid"}},
+	r, err := Load([]containers.RuntimeCredential{
+		{Key: "alpha", Channel: "Email", Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "alpha@example.invalid"}},
+		{Key: "beta", Channel: "Email", Config: map[string]any{"host": "smtp.invalid", "port": float64(587), "from": "beta@example.invalid"}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/andrometiq/relay_hub/internal/accounts"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"maps"
@@ -24,20 +24,29 @@ import (
 type Registry struct {
 	// Initialization-only maps. Runtime consumers use snapshot-backed methods;
 	// configuration reloads must call Replace on this stable registry instance.
-	Telegram   map[string]*telegram.Client
-	Email      map[string]*relayemail.Client
+	Telegram map[string]*telegram.Client
+	Email    map[string]*relayemail.Client
+	// Bindings maps "Provider/key" to the channel's site and display address.
+	// A registry without bindings treats each key as its own site.
+	Bindings   map[string]Binding
 	initialize sync.Once
 	current    atomic.Pointer[registrySnapshot]
 }
 type registrySnapshot struct {
 	telegram map[string]*telegram.Client
 	email    map[string]*relayemail.Client
+	bindings map[string]Binding
+}
+
+// Binding is the current owner of one channel. Site is empty while unassigned.
+type Binding struct {
+	Site, To string
 }
 type Status struct{ Telegram, Email int }
 
 func (r *Registry) snapshot() *registrySnapshot {
 	r.initialize.Do(func() {
-		r.current.Store(&registrySnapshot{telegram: maps.Clone(r.Telegram), email: maps.Clone(r.Email)})
+		r.current.Store(&registrySnapshot{telegram: maps.Clone(r.Telegram), email: maps.Clone(r.Email), bindings: maps.Clone(r.Bindings)})
 	})
 	return r.current.Load()
 }
@@ -60,16 +69,28 @@ func (r *Registry) Status() Status {
 	return Status{Telegram: len(s.telegram), Email: len(s.email)}
 }
 
-func Load(rows []accounts.RuntimeCredential) (*Registry, error) {
-	r := &Registry{Telegram: map[string]*telegram.Client{}, Email: map[string]*relayemail.Client{}}
+// Binding returns the site and display address of one Telegram or Email channel.
+func (r *Registry) Binding(provider, key string) Binding {
+	s := r.snapshot()
+	if s.bindings == nil {
+		return Binding{Site: key, To: key}
+	}
+	return s.bindings[provider+"/"+key]
+}
+
+func Load(rows []containers.RuntimeCredential) (*Registry, error) {
+	r := &Registry{Telegram: map[string]*telegram.Client{}, Email: map[string]*relayemail.Client{}, Bindings: map[string]Binding{}}
 	for _, v := range rows {
+		if v.Channel == "Telegram" || v.Channel == "Email" {
+			r.Bindings[v.Channel+"/"+v.Key] = Binding{Site: v.Site, To: displayAddress(v)}
+		}
 		switch v.Channel {
 		case "Telegram":
-			c, e := telegram.New(telegram.Config{AccountID: v.AccountID, BotToken: v.Secret, Enabled: true})
+			c, e := telegram.New(telegram.Config{AccountID: v.Key, BotToken: v.Secret, Enabled: true})
 			if e != nil {
 				return nil, e
 			}
-			r.Telegram[v.AccountID] = c
+			r.Telegram[v.Key] = c
 		case "Email":
 			port := 0
 			if n, ok := v.Config["port"].(float64); ok {
@@ -90,11 +111,11 @@ func Load(rows []accounts.RuntimeCredential) (*Registry, error) {
 			} else {
 				imapPort, _ = strconv.Atoi(text("imap_port"))
 			}
-			c, e := relayemail.New(relayemail.Config{AccountID: v.AccountID, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")})
+			c, e := relayemail.New(relayemail.Config{AccountID: v.Key, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")})
 			if e != nil {
 				return nil, e
 			}
-			r.Email[v.AccountID] = c
+			r.Email[v.Key] = c
 		}
 	}
 	return r, nil
@@ -255,4 +276,19 @@ func (r *Registry) TelegramTyping(ctx context.Context, account string, input tel
 		return nil, errors.New("Telegram account is not configured")
 	}
 	return c.Typing(ctx, input)
+}
+
+// displayAddress is the bot username or mailbox shown to Core as "to".
+func displayAddress(v containers.RuntimeCredential) string {
+	if v.Channel == "Telegram" {
+		if name, _ := v.Config["username"].(string); name != "" {
+			return "@" + strings.TrimPrefix(name, "@")
+		}
+	}
+	if v.Channel == "Email" {
+		if from, _ := v.Config["from"].(string); from != "" {
+			return from
+		}
+	}
+	return v.Address
 }

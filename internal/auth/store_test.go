@@ -94,7 +94,7 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	if _, e = s.Issue(ctx, member, "unauthorized", "site-a", []string{"messages:send"}, 30); e == nil {
 		t.Fatal("ungranted token")
 	}
-	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site) VALUES('site-a','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin) VALUES('site-a','https://fixture.invalid') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
 	if e = s.Grant(ctx, admin, id, "site-a", true); e != nil {
@@ -110,7 +110,7 @@ func TestIdentitiesTokensAndSessions(t *testing.T) {
 	}
 
 	for _, enabled := range []bool{false, true} {
-		if _, err := s.DB.Exec(ctx, "UPDATE relay_accounts SET enabled=$1 WHERE account_id='site-a'", enabled); err != nil {
+		if _, err := s.DB.Exec(ctx, "UPDATE relay_sites SET enabled=$1 WHERE site_id='site-a'", enabled); err != nil {
 			t.Fatal(err)
 		}
 		restarted := &Store{DB: s.DB}

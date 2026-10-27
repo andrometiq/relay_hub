@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/andrometiq/relay_hub/internal/accounts"
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"time"
@@ -33,7 +33,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	store, err := accounts.New(db, oldKey)
+	store, err := containers.New(db, oldKey)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Invalid credential key.")
 		os.Exit(1)

@@ -31,7 +31,7 @@ func TestAccountGrantsSeeNewNonWhatsAppAccounts(t *testing.T) {
 
 	// Insert after handler construction: the old startup snapshot missed these.
 	for _, id := range []string{"telegram-only", "email-only"} {
-		if _, e = s.DB.Exec(ctx, `INSERT INTO relay_accounts(account_id,site)VALUES($1,'https://core.example.test')`, id); e != nil {
+		if _, e = s.DB.Exec(ctx, `INSERT INTO relay_sites(site_id,origin)VALUES($1,'https://core.example.test')`, id); e != nil {
 			t.Fatal(e)
 		}
 	}

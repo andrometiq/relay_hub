@@ -150,7 +150,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			}
 			var site string
 			var enabled bool
-			if e := mediaStores[0].DB.QueryRow(ctx, `SELECT site,enabled FROM relay_accounts WHERE account_id=$1`, principal.Account).Scan(&site, &enabled); e != nil || !enabled {
+			if e := mediaStores[0].DB.QueryRow(ctx, `SELECT origin,enabled FROM relay_sites WHERE site_id=$1`, principal.Account).Scan(&site, &enabled); e != nil || !enabled {
 				return nil, nil, errors.New("account unavailable")
 			}
 			return nil, map[string]any{"account": principal.Account, "site": site, "enabled": enabled}, nil
