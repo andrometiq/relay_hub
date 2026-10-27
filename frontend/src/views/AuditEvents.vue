@@ -39,7 +39,7 @@ defineExpose({ refresh: usePendingRefresh(busy, load) });
 
 <template>
   <section aria-label="System activity">
-    <div class="entity-toolbar"><span class="text-sm text-ink-gray-6">Account, authentication, and runtime events</span><Button class="ml-auto" label="Refresh" icon-left="refresh-cw" :loading="busy" @click="load()" /></div>
+    <div class="entity-toolbar"><span class="text-sm text-ink-gray-6">User, authentication, and runtime events</span><Button class="ml-auto" label="Refresh" icon-left="refresh-cw" :loading="busy" @click="load()" /></div>
     <ErrorMessage :message="error" />
     <div class="event-list infinite-list" aria-label="System activity" @scroll.passive="scrolled">
       <button v-for="row in items" :key="row.id" type="button" class="event-list-row entity-row" @click="selected = row">
@@ -53,7 +53,7 @@ defineExpose({ refresh: usePendingRefresh(busy, load) });
     </div>
     <Button v-if="more" label="Load older activity" :loading="busy" @click="load(true)" />
     <Dialog :model-value="!!selected" :options="{ title: selected?.action || 'System activity', size: 'lg' }" @update:model-value="(value) => !value && (selected = null)">
-      <template #body-content><dl v-if="selected" class="entity-details"><div><dt>Time</dt><dd>{{ selected.occurred_at }}</dd></div><div><dt>Outcome</dt><dd>{{ selected.outcome }}</dd></div><div><dt>Account</dt><dd>{{ selected.account_id || 'Hub' }}</dd></div><div><dt>Actor</dt><dd>{{ selected.actor_type }}{{ selected.actor_id ? ` #${selected.actor_id}` : '' }}</dd></div><div v-if="selected.channel"><dt>Channel</dt><dd>{{ selected.channel }}</dd></div><div v-if="selected.error_message"><dt>Issue</dt><dd>{{ selected.error_message }}</dd></div><div v-if="selected.trace_id"><dt>Trace</dt><dd>{{ selected.trace_id }}</dd></div><div v-if="selected.request_id"><dt>Request</dt><dd>{{ selected.request_id }}</dd></div></dl></template>
+      <template #body-content><dl v-if="selected" class="entity-details"><div><dt>Time</dt><dd>{{ selected.occurred_at }}</dd></div><div><dt>Outcome</dt><dd>{{ selected.outcome }}</dd></div><div><dt>Site</dt><dd>{{ selected.account_id || 'Hub' }}</dd></div><div><dt>Actor</dt><dd>{{ selected.actor_type }}{{ selected.actor_id ? ` #${selected.actor_id}` : '' }}</dd></div><div v-if="selected.channel"><dt>Channel</dt><dd>{{ selected.channel }}</dd></div><div v-if="selected.error_message"><dt>Issue</dt><dd>{{ selected.error_message }}</dd></div><div v-if="selected.trace_id"><dt>Trace</dt><dd>{{ selected.trace_id }}</dd></div><div v-if="selected.request_id"><dt>Request</dt><dd>{{ selected.request_id }}</dd></div></dl></template>
       <template #actions="{ close }"><Button label="Close" @click="close" /></template>
     </Dialog>
   </section>

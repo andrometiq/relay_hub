@@ -91,7 +91,7 @@ async function checkPaging(width){
 try{
  await page.goto('http://127.0.0.1:18129/auth/users');
  await page.getByRole('button').filter({hasText:'local-only-user-0'}).click();
- await page.getByText('local-active · Account access enabled',{exact:true}).waitFor();
+ await page.getByText('local-active · Site access enabled',{exact:true}).waitFor();
  await page.getByText('local-disabled · User or account disabled',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Disable',exact:true}).click();
  await page.getByRole('dialog').getByRole('alert').filter({hasText:'Local action refused'}).waitFor();
@@ -99,16 +99,16 @@ try{
  await page.getByRole('button',{name:'Disable',exact:true}).click();
  await page.getByText('local-active · User or account disabled',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Enable',exact:true}).click();
- await page.getByText('local-active · Account access enabled',{exact:true}).waitFor();
+ await page.getByText('local-active · Site access enabled',{exact:true}).waitFor();
  await page.getByText('local-disabled · User or account disabled',{exact:true}).waitFor();
  assert.equal(grantReads.length,2,'Both status mutations must reload the selected user');
  failGrantRead=true;
  await page.getByRole('button',{name:'Disable',exact:true}).click();
- await page.getByRole('dialog').getByRole('alert').filter({hasText:'User status saved, but account access could not be refreshed: Local grant lookup unavailable'}).waitFor();
- await page.getByText('local-active · Account access not refreshed',{exact:true}).waitFor();
+ await page.getByRole('dialog').getByRole('alert').filter({hasText:'User status saved, but site access could not be refreshed: Local grant lookup unavailable'}).waitFor();
+ await page.getByText('local-active · Site access not refreshed',{exact:true}).waitFor();
  failGrantRead=false;
  await page.getByRole('button',{name:'Enable',exact:true}).click();
- await page.getByText('local-active · Account access enabled',{exact:true}).waitFor();
+ await page.getByText('local-active · Site access enabled',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Close',exact:true}).click();
  await noOverflow();
  await page.locator('.infinite-list > .overflow-auto').evaluate(el=>el.scrollTop=el.scrollHeight);

@@ -6,7 +6,7 @@ import InfiniteList from "../../components/InfiniteList.vue";
 import { securityRequest, searchSecurityOptions } from "../../composables/security";
 
 const props = defineProps({ data: Object });
-const accountSearch = searchSecurityOptions("accounts");
+const siteSearch = searchSecurityOptions("accounts");
 const query = ref("");
 const list = ref();
 const mode = ref("");
@@ -28,7 +28,7 @@ function open(row = null, nextMode = row ? "details" : "create") {
 }
 function fields() {
   if (mode.value === "create") return createFields;
-  if (mode.value === "grant") return [{ name: "account", label: "Account", type: "Link", search: accountSearch, placeholder: "Search account ID…", required: true, wide: true }];
+  if (mode.value === "grant") return [{ name: "account", label: "Site", type: "Link", search: siteSearch, placeholder: "Search site…", required: true, wide: true }];
   return [{ name: "password", label: "New password", type: "Password", required: true, minLength: 14, wide: true, autocomplete: "new-password" }];
 }
 async function load(params) {
@@ -64,7 +64,7 @@ async function toggleEnabled() {
       if (!updated) throw new Error("User is no longer available. Refresh the users list.");
       Object.assign(row, updated);
     } catch (exception) {
-      throw new Error(`User status saved, but account access could not be refreshed: ${exception.message}`);
+      throw new Error(`User status saved, but site access could not be refreshed: ${exception.message}`);
     }
   });
 }
@@ -76,7 +76,7 @@ function submit() {
 
 <template>
   <section class="entity-view" aria-label="Users">
-    <div class="view-heading"><div><h2>Users</h2><p>Manage Hub access and account assignments.</p></div><Button label="New user" icon-left="plus" variant="solid" @click="open()" /></div>
+    <div class="view-heading"><div><h2>Users</h2><p>Manage Hub access and site access.</p></div><Button label="New user" icon-left="plus" variant="solid" @click="open()" /></div>
     <div class="entity-toolbar"><FormControl v-model="query" placeholder="Search users" aria-label="Search users" type="search" autocomplete="off" /></div>
     <InfiniteList ref="list" :load="load" :query="query" :row-height="64">
       <template #default="{ row }">
@@ -89,21 +89,21 @@ function submit() {
       </template>
     </InfiniteList>
 
-    <Dialog :model-value="!!mode" :options="{ title: mode === 'create' ? 'New user' : mode === 'grant' ? 'Account access' : mode === 'reset' ? 'Reset password' : selected?.username || 'User', size: 'lg' }" :disable-outside-click-to-close="busy" @update:model-value="(value) => !value && (mode = '')">
+    <Dialog :model-value="!!mode" :options="{ title: mode === 'create' ? 'New user' : mode === 'grant' ? 'Site access' : mode === 'reset' ? 'Reset password' : selected?.username || 'User', size: 'lg' }" :disable-outside-click-to-close="busy" @update:model-value="(value) => !value && (mode = '')">
       <template #body-content>
         <ErrorMessage v-if="mode === 'details'" :message="error" />
         <section v-if="selected && ['details', 'grant'].includes(mode)" class="mb-4">
-          <h3 class="font-medium mb-2">Effective account access</h3>
-          <p class="text-sm text-ink-gray-6">{{ !selected.enabled ? 'Disabled users cannot access the Hub or use auth keys.' : selected.role === 'admin' ? 'Administrators manage all Hub accounts. API keys still require explicit account grants.' : 'Members can issue scoped auth keys for their granted accounts.' }}</p>
-          <p v-if="!selected.grants?.length" class="mt-2">No explicit account grants.</p>
-          <ul v-else class="mt-2"><li v-for="grant in selected.grants" :key="grant" class="py-2 break-all">{{ grant }} · {{ selected.effective_grants == null ? "Account access not refreshed" : selected.effective_grants.includes(grant) ? "Account access enabled" : "User or account disabled" }}</li></ul>
+          <h3 class="font-medium mb-2">Site access</h3>
+          <p class="text-sm text-ink-gray-6">{{ !selected.enabled ? 'Disabled users cannot access the Hub or use auth keys.' : selected.role === 'admin' ? 'Administrators manage every site and can issue auth keys for any site.' : 'Members can issue scoped auth keys for their granted sites.' }}</p>
+          <p v-if="!selected.grants?.length" class="mt-2">No site grants.</p>
+          <ul v-else class="mt-2"><li v-for="grant in selected.grants" :key="grant" class="py-2 break-all">{{ grant }} · {{ selected.effective_grants == null ? "Site access not refreshed" : selected.effective_grants.includes(grant) ? "Site access enabled" : "User or site disabled" }}</li></ul>
         </section>
         <RelayForm v-if="['create','grant','reset'].includes(mode)" v-model="model" :fields="fields()" :error="error" :busy="busy" @submit="submit" />
         <dl v-else-if="selected" class="entity-details"><div><dt>Username</dt><dd>{{ selected.username }}</dd></div><div><dt>Role</dt><dd>{{ selected.role === 'admin' ? 'Administrator' : 'Member' }}</dd></div><div><dt>Status</dt><dd>{{ selected.enabled ? 'Active' : 'Disabled' }}</dd></div></dl>
       </template>
       <template #actions="{ close }">
         <div class="flex justify-end gap-2">
-          <template v-if="mode === 'details' && selected"><Button label="Account access" @click="open(selected, 'grant')" /><Button v-if="selected.id !== data.User.id" label="Reset password" @click="open(selected, 'reset')" /><Button :label="selected.enabled ? 'Disable' : 'Enable'" :loading="busy" @click="toggleEnabled" /></template>
+          <template v-if="mode === 'details' && selected"><Button label="Site access" @click="open(selected, 'grant')" /><Button v-if="selected.id !== data.User.id" label="Reset password" @click="open(selected, 'reset')" /><Button :label="selected.enabled ? 'Disable' : 'Enable'" :loading="busy" @click="toggleEnabled" /></template>
           <template v-else><Button label="Cancel" :disabled="busy" @click="close" /><Button v-if="mode === 'grant'" label="Remove access" :disabled="busy || !model.account" @click="act({ action: 'grant', id: selected.id, account: model.account, allow: 'false' })" /></template>
         </div>
       </template>
