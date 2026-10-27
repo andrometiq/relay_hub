@@ -20,7 +20,7 @@ const coreReady = account => ['core_api_key','core_api_secret','callback_secret'
       <p class="my-3">{{ deliveries.queued ?? 0 }} queued · {{ deliveries.uncertain ?? 0 }} uncertain · {{ deliveries.failed ?? 0 }} failed</p>
       <Button label="Review deliveries and callbacks" @click="$emit('navigate', 'Deliveries')" />
     </div>
-    <div class="view-heading mt-6"><div><h2>Account setup</h2><p>Showing {{ accounts.length }} of {{ total }} accounts. Search all accounts in Accounts.</p></div><Button label="Manage accounts" @click="$emit('navigate', 'Accounts')" /></div>
+    <div class="view-heading mt-6"><div><h2>Account setup</h2><p>Showing {{ accounts.length }} of {{ total }} accounts. Link accounts to sites on the Sites page.</p></div><Button label="Manage sites" @click="$emit('navigate', 'Sites')" /></div>
     <p v-if="!accounts.length" class="entity-prompt">No accounts loaded. Add an account or check the request error above.</p>
     <article v-for="account in accounts" :key="account.id" class="hub-card mb-4">
       <h3 class="font-medium">{{ account.id }}</h3><p class="text-sm text-ink-gray-6 break-all mb-3">{{ account.site }}</p>

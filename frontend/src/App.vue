@@ -1,7 +1,7 @@
 <script setup>
 import { subscribeHub } from "./services/liveUpdates";
 import ThemeSwitcher from "./components/ThemeSwitcher.vue";
-import { onMounted, onUnmounted, ref } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { Button, FeatherIcon, ErrorMessage } from "@relay/ui";
 import { useViewRoute } from "./useViewRoute";
 import { useHubData } from "./composables/useHubData";
@@ -10,14 +10,15 @@ import OverviewView from "./views/OverviewView.vue";
 import ChannelsView from "./views/ChannelsView.vue";
 import DeliveryView from "./views/DeliveryView.vue";
 import EventsView from "./views/EventsView.vue";
-import AccountsView from "./views/AccountsView.vue";
-const nav = [["Overview", "activity"], ["Accounts", "briefcase"], ["Connections", "message-circle"], ["Deliveries", "send"], ["Events", "list"]];
-const view = useViewRoute(
-    nav.map(([name]) => name),
-    "Overview",
-  ),
-  mobile = ref(false);
+import ContainersView from "./views/containers/ContainersView.vue";
+import ContainerDetail from "./views/containers/ContainerDetail.vue";
+import SitesView from "./views/sites/SitesView.vue";
+import SiteDetail from "./views/sites/SiteDetail.vue";
+const nav = [["Overview", "activity"], ["Containers", "box"], ["Sites", "globe"], ["Connections", "message-circle"], ["Deliveries", "send"], ["Events", "list"]];
+const { view, detail } = useViewRoute(nav.map(([name]) => name), "Overview", { accounts: "sites" });
+const mobile = ref(false), detailTitle = ref("");
 const content = ref();
+watch(detail, () => { detailTitle.value = ""; });
 async function refreshView() { await refresh(); await content.value?.refresh?.(); }
 const {
   runtime, deliveries, updated, revision,
@@ -27,11 +28,10 @@ const {
   error,
   refresh,
   accountPage,
-  searchAccounts,
-  changePage,
 } = useHubData();
-function navigate(name) {
+function navigate(name, id = "") {
   view.value = name;
+  detail.value = id;
   mobile.value = false;
 }
 let unsubscribe;
@@ -64,7 +64,7 @@ onUnmounted(() => unsubscribe?.());
     </aside>
     <main class="min-w-0 flex flex-col min-h-0">
       <header class="hub-header">
-        <button class="hub-mobile-menu" aria-label="Toggle navigation" :aria-expanded="mobile" @click="mobile=!mobile"><FeatherIcon name="menu" class="h-4 w-4"/></button><span class="hub-breadcrumb">Relay Hub</span><span class="hub-breadcrumb text-ink-gray-3">/</span><h1 class="text-base font-medium">{{ view }}</h1>
+        <button class="hub-mobile-menu" aria-label="Toggle navigation" :aria-expanded="mobile" @click="mobile=!mobile"><FeatherIcon name="menu" class="h-4 w-4"/></button><span class="hub-breadcrumb">Relay Hub</span><span class="hub-breadcrumb text-ink-gray-3">/</span><h1 class="text-base font-medium">{{ detail ? detailTitle || detail : view }}</h1>
         <HubStatus :status="status" :error="error" :updated="updated" />
         <div class="ml-auto flex gap-2">
           <Button label="Refresh" :loading="busy" @click="refreshView" />
@@ -77,16 +77,10 @@ onUnmounted(() => unsubscribe?.());
         <ChannelsView v-else-if="view === 'Connections'" ref="content" @navigate="navigate" />
         <DeliveryView v-else-if="view === 'Deliveries'" ref="content" @changed="refresh" />
         <EventsView v-else-if="view === 'Events'" ref="content" />
-        <AccountsView
-          v-if="view === 'Accounts'"
-          :accounts="accounts"
-          :busy="busy"
-          :error="error"
-          :refresh="refresh"
-          :page="accountPage"
-          @search="searchAccounts"
-          @page="changePage"
-        />
+        <ContainerDetail v-else-if="view === 'Containers' && detail" :id="detail" ref="content" @title="detailTitle = $event" />
+        <ContainersView v-else-if="view === 'Containers'" ref="content" @open="navigate('Containers', $event)" />
+        <SiteDetail v-else-if="view === 'Sites' && detail" :id="detail" ref="content" @title="detailTitle = $event" />
+        <SitesView v-else-if="view === 'Sites'" ref="content" @open="navigate('Sites', $event)" />
       </div>
     </main>
   </div>
