@@ -70,7 +70,7 @@ Older API clients can still use `/api/accounts`. It shows the simple setup where
 
 The channel token or password, the container app secrets and the site Core credentials are encrypted with AES-GCM. Reads return only public fields and `configured_secrets` names. A blank secret in an edit keeps the stored value. Unknown configuration keys are rejected. Keep the same `RELAY_CREDENTIAL_KEY` and a secure backup of the database and the key. Key rotation is a separate operation.
 
-Grants and API tokens belong to a site. Grant choices read the current sites on each request, so a new site shows without a restart.
+Grants and API tokens belong to a site. Grant and token choices read the current sites on each request, so a new site shows without a restart. Administrators see every site in the token site picker; members see only their granted sites.
 
 ## Webhook registration
 

@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// Options are bounded and permission scoped. The account ID range uses the
-// directory index rather than downloading accounts to filter in the browser.
+// Options are bounded and permission scoped. The site ID range uses the
+// directory index rather than downloading sites to filter in the browser.
 func (h *HTTP) searchOptions(w http.ResponseWriter, r *http.Request, u User) {
 	query := strings.TrimSpace(r.URL.Query().Get("query"))
 	kind := r.URL.Query().Get("kind")
@@ -27,10 +27,11 @@ func (h *HTTP) searchOptions(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	sql := `SELECT site_id FROM relay_sites WHERE site_id COLLATE "C" >= $1 AND site_id COLLATE "C" < $2 ORDER BY site_id COLLATE "C" LIMIT 31`
+	// Administrators see every site; members see only their granted sites.
+	sql := `SELECT site_id,name FROM relay_sites WHERE site_id COLLATE "C" >= $1 AND site_id COLLATE "C" < $2 ORDER BY site_id COLLATE "C" LIMIT 31`
 	args := []any{query, query + "\U0010ffff"}
-	if kind == "grants" {
-		sql = `SELECT site_id FROM relay_user_sites WHERE user_id=$3 AND site_id COLLATE "C" >= $1 AND site_id COLLATE "C" < $2 ORDER BY site_id COLLATE "C" LIMIT 31`
+	if kind == "grants" && u.Role != "admin" {
+		sql = `SELECT g.site_id,COALESCE(a.name,'') FROM relay_user_sites g LEFT JOIN relay_sites a ON a.site_id=g.site_id WHERE g.user_id=$3 AND g.site_id COLLATE "C" >= $1 AND g.site_id COLLATE "C" < $2 ORDER BY g.site_id COLLATE "C" LIMIT 31`
 		args = append(args, u.ID)
 	}
 	rows, err := h.Store.DB.Query(ctx, sql, args...)
@@ -41,14 +42,16 @@ func (h *HTTP) searchOptions(w http.ResponseWriter, r *http.Request, u User) {
 	defer rows.Close()
 	ids := []string{}
 	seen := map[string]bool{}
+	names := map[string]string{}
 	for rows.Next() {
-		var id string
-		if rows.Scan(&id) != nil {
+		var id, name string
+		if rows.Scan(&id, &name) != nil {
 			http.Error(w, "Search unavailable", 503)
 			return
 		}
 		ids = append(ids, id)
 		seen[id] = true
+		names[id] = name
 	}
 	if rows.Err() != nil {
 		http.Error(w, "Search unavailable", 503)
@@ -69,7 +72,11 @@ func (h *HTTP) searchOptions(w http.ResponseWriter, r *http.Request, u User) {
 	}
 	items := []map[string]string{}
 	for _, id := range ids {
-		items = append(items, map[string]string{"value": id, "label": id})
+		label := id
+		if names[id] != "" && names[id] != id {
+			label = names[id] + " (" + id + ")"
+		}
+		items = append(items, map[string]string{"value": id, "label": label})
 	}
 	jsonResponse(w, 200, map[string]any{"items": items, "more": more})
 }

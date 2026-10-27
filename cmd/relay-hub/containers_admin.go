@@ -392,7 +392,16 @@ func (a directoryAdmin) createSite(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &in) {
 		return
 	}
-	a.saveSite(w, r, in, true)
+	user, err := a.session(r)
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err = a.store.CreateSite(r.Context(), in.Site, in.Secrets, user.ID); err != nil {
+		storeFailure(w, err)
+		return
+	}
+	a.changed(w, r)
 }
 
 func (a directoryAdmin) updateSite(w http.ResponseWriter, r *http.Request) {
@@ -405,11 +414,7 @@ func (a directoryAdmin) updateSite(w http.ResponseWriter, r *http.Request) {
 		storeFailure(w, err)
 		return
 	}
-	a.saveSite(w, r, in, false)
-}
-
-func (a directoryAdmin) saveSite(w http.ResponseWriter, r *http.Request, in siteInput, create bool) {
-	if err := a.store.SaveSite(r.Context(), in.Site, in.Secrets, create); err != nil {
+	if err := a.store.SaveSite(r.Context(), in.Site, in.Secrets, false); err != nil {
 		storeFailure(w, err)
 		return
 	}
