@@ -141,6 +141,7 @@ export const adminApi = {
   containerWebhook: (id) => hubApi(item("containers", id) + "/whatsapp/webhook"),
   createChannel: (container, channel) => hubApi(item("containers", container) + "/channels", channel),
   updateChannel: (container, channel) => hubApi(`${item("containers", container)}/channels/${encodeURIComponent(channel.channel)}/${encodeURIComponent(channel.key)}`, channel, "PUT"),
+  turnOffOldAddress: (container, channel) => hubApi(item("containers", container) + (channel ? `/channels/${encodeURIComponent(channel.channel)}/${encodeURIComponent(channel.key)}` : "") + "/old-address", {}, "DELETE"),
   checkChannel: (channel, action) => hubApi(`channels/${channel.channel.toLowerCase()}/${encodeURIComponent(channel.key)}/connection`, { action }),
   sites: (query = "") => loadPages("sites", query),
   site: (id) => hubApi(item("sites", id)),

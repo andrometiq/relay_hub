@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assignedRefs, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
+import { adminApi, assignedRefs, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
 import { channelForm, channelPayload, validateChannelForm } from '../src/composables/channelForm.js';
 import { parseRoute, routePath } from '../src/useViewRoute.js';
 
@@ -138,4 +138,18 @@ test('delivery and event pickers list one channel type of each site', () => {
   assert.deepEqual(siteChannelOptions(sites).map((row) => [row.key, row.site, row.label]), [['sales', 'yrp', 'YRP · Sales line'], ['pos-line', 'pos', 'pos.example.test · pos-line']]);
   assert.deepEqual(siteChannelOptions(sites, 'Telegram').map((row) => row.key), ['bot']);
   assert.deepEqual(siteChannelOptions(sites, 'Email'), []);
+});
+
+test('turning off an old address deletes it for the container or one channel', async t => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push([options.method, url]);
+    return new Response(null, { status: 204 });
+  });
+  await adminApi.turnOffOldAddress('ct 1');
+  await adminApi.turnOffOldAddress('ct 1', { channel: 'Telegram', key: 'sales/bot' });
+  assert.deepEqual(requests, [
+    ['DELETE', './api/containers/ct%201/old-address'],
+    ['DELETE', './api/containers/ct%201/channels/Telegram/sales%2Fbot/old-address'],
+  ]);
 });

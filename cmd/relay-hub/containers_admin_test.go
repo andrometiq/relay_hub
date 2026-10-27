@@ -228,3 +228,48 @@ func TestNewContainersGetRandomPublicWebhookPaths(t *testing.T) {
 		t.Fatal("a new bot answered on its readable key")
 	}
 }
+
+func TestTurnOffOldAddressStopsTheReadablePath(t *testing.T) {
+	c := newDirectoryClient(t)
+	ctx := context.Background()
+	var body map[string]string
+	json.Unmarshal(c.expect(201, "POST", "/api/containers", map[string]any{"name": "Old", "enabled": true}).Body.Bytes(), &body)
+	id := body["id"]
+	c.expect(204, "POST", "/api/containers/"+id+"/channels", map[string]any{"secret": "500002:bot-two-secret-abcdefghijklmnopqrstu",
+		"key": "old-bot", "channel": "Telegram", "label": "Old bot", "enabled": true, "config": map[string]any{"username": "old_bot"}})
+	if _, err := c.store.DB.Exec(ctx, `UPDATE relay_containers SET legacy_path=true WHERE container_id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.store.DB.Exec(ctx, `UPDATE relay_channel_credentials SET legacy_path=true WHERE channel_key='old-bot'`); err != nil {
+		t.Fatal(err)
+	}
+	answers := func() bool {
+		rows, err := c.store.Runtime(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry, err := channels.Load(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ok := registry.WebhookKey("Telegram", "old-bot")
+		return ok
+	}
+	container, _ := c.store.GetContainer(ctx, id)
+	bot, _ := c.store.GetChannel(ctx, containers.ChannelRef{Channel: "Telegram", Key: "old-bot"})
+	if !container.OldAddress || !bot.OldAddress || !answers() {
+		t.Fatal("old address is not on before the action")
+	}
+
+	reloads := c.reloads
+	c.expect(204, "DELETE", "/api/containers/"+id+"/channels/Telegram/old-bot/old-address", nil)
+	c.expect(204, "DELETE", "/api/containers/"+id+"/old-address", nil)
+	container, _ = c.store.GetContainer(ctx, id)
+	bot, _ = c.store.GetChannel(ctx, containers.ChannelRef{Channel: "Telegram", Key: "old-bot"})
+	if container.OldAddress || bot.OldAddress || answers() || c.reloads != reloads+2 {
+		t.Fatalf("old address still on: container=%v bot=%v reloads=%d", container.OldAddress, bot.OldAddress, c.reloads-reloads)
+	}
+	c.expect(404, "DELETE", "/api/containers/missing/old-address", nil)
+	c.role = "viewer"
+	c.expect(403, "DELETE", "/api/containers/"+id+"/old-address", nil)
+}

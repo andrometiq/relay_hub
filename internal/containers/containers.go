@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Container groups provider apps and their channels. It is not tied to a site.
@@ -18,9 +19,11 @@ type Container struct {
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
 	// WebhookPath is the random public WhatsApp callback path of the container.
-	WebhookPath string    `json:"webhook_path"`
-	WhatsApp    Provider  `json:"whatsapp"`
-	Channels    []Channel `json:"channels"`
+	WebhookPath string `json:"webhook_path"`
+	// OldAddress means the container also answers on its readable key path.
+	OldAddress bool      `json:"old_address"`
+	WhatsApp   Provider  `json:"whatsapp"`
+	Channels   []Channel `json:"channels"`
 }
 
 // Provider is the shared WhatsApp app of a container: app_id, graph_version,
@@ -70,7 +73,7 @@ func (s *Store) ListContainers(ctx context.Context, query, after string, limit i
 func (s *Store) GetContainer(ctx context.Context, id string) (Container, error) {
 	c := Container{ID: id, WhatsApp: Provider{Config: map[string]any{}, ConfiguredSecrets: []string{}}}
 	var public string
-	if err := s.DB.QueryRow(ctx, `SELECT name,enabled,public_id FROM relay_containers WHERE container_id=$1`, id).Scan(&c.Name, &c.Enabled, &public); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT name,enabled,public_id,legacy_path FROM relay_containers WHERE container_id=$1`, id).Scan(&c.Name, &c.Enabled, &public, &c.OldAddress); err != nil {
 		return c, err
 	}
 	c.WebhookPath = "/webhooks/whatsapp/" + public
@@ -229,4 +232,20 @@ func NewContainerID() string {
 		panic(err)
 	}
 	return "ct_" + hex.EncodeToString(raw)
+}
+
+// TurnOffOldAddress stops the container's WhatsApp webhook, or one bot's or
+// mailbox's webhook, from answering on its readable key path.
+func (s *Store) TurnOffOldAddress(ctx context.Context, container string, channel *ChannelRef) error {
+	var tag pgconn.CommandTag
+	var err error
+	if channel == nil {
+		tag, err = s.DB.Exec(ctx, `UPDATE relay_containers SET legacy_path=false,updated_at=now() WHERE container_id=$1`, container)
+	} else {
+		tag, err = s.DB.Exec(ctx, `UPDATE relay_channel_credentials SET legacy_path=false,updated_at=now() WHERE container_id=$1 AND channel=$2 AND channel_key=$3`, container, channel.Channel, channel.Key)
+	}
+	if err == nil && tag.RowsAffected() != 1 {
+		err = pgx.ErrNoRows
+	}
+	return err
 }

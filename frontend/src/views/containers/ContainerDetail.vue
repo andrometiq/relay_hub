@@ -43,6 +43,16 @@ async function copy(label, read) {
     copyNotice.value = `${label} could not be copied. ${exception.message || ""}`.trim();
   }
 }
+async function turnOffOldAddress(channel) {
+  if (!window.confirm("Turn off the old readable webhook address? Only the random address will work. Update the provider first.")) return;
+  error.value = "";
+  try {
+    await adminApi.turnOffOldAddress(props.id, channel);
+    await refresh();
+  } catch (exception) {
+    error.value = exception.message;
+  }
+}
 const copyVerifyToken = () => copy("Verify token", async () => (await adminApi.containerWebhook(props.id)).verify_token);
 
 function openChannel(row) { editing.value = row; adding.value = true; }
@@ -83,6 +93,7 @@ defineExpose({ refresh });
         </dl>
         <div class="webhook-address"><div><span>Callback URL</span><code>{{ callbackURL }}</code></div><Button label="Copy" icon-left="copy" @click="copy('Callback URL', () => callbackURL)" /></div>
         <div class="webhook-address"><div><span>Verify token</span><code>{{ appSecrets.includes("verify_token") ? "••••••••••••••••" : "Not set" }}</code></div><Button label="Copy" icon-left="copy" :disabled="!appSecrets.includes('verify_token')" @click="copyVerifyToken" /></div>
+        <div v-if="container.old_address" class="webhook-address"><div><span>Old address</span><code>{{ hubURL("/webhooks/whatsapp/" + container.id) }}</code></div><Button label="Turn off old address" @click="turnOffOldAddress()" /></div>
         <p v-if="copyNotice" role="status" class="admin-hint">{{ copyNotice }}</p>
       </div>
       <div v-else-if="tab === 'Telegram'" class="admin-card">
