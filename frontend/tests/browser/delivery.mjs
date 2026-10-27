@@ -11,7 +11,7 @@ export default async function deliveryTest(page) {
    return route.fulfill({status:204});
   }
   let result={};
-  if(path.startsWith('accounts'))result={accounts:[{id:'test-account',site:'https://test.invalid',channels:[]}],csrf:'test-csrf',total:1};
+  if(path.startsWith('sites'))result={sites:[{id:'test-site',name:'Test',origin:'https://test.invalid',enabled:true,configured_secrets:[],channels:[{channel:'WhatsApp',key:'test-account',label:'Test line',enabled:true,config:{}}]}],next:'',csrf:'test-csrf'};
   if(path==='deliveries')result={counts:{queued:1,uncertain:1}};
   if(path.startsWith('delivery-queue'))result={deliveries:[...(queued?[{id:1,state:'queued'}]:[]),{id:2,state:'uncertain'}],more:false};
   return route.fulfill({json:result});

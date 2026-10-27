@@ -15,6 +15,7 @@ const account = {id:'local-only-review',site:'https://local.invalid',enabled:fal
 const number = {key:'local-number',channel:'WhatsApp',container:'local-main',label:'Local number',address:'1001',site:'',enabled:true,config:{phone_id:'1001',waba_id:'2001'},configured_secrets:['secret']};
 const container = {id:'local-main',name:'Local main',enabled:true,whatsapp:{config:{app_id:'3001',graph_version:'v23.0'},configured_secrets:['app_secret','verify_token']},channels:[number]};
 const site = {id:account.id,origin:'https://local.invalid',enabled:true,configured_secrets:[],channels:[]};
+const pickerSite = {id:'review-site',name:'Review site',origin:'https://review.invalid',enabled:true,configured_secrets:[],channels:[{channel:'WhatsApp',key:account.id,label:'Review line',enabled:true,config:{}}]};
 let callbackFail = true, callbacks = true, delivery = true;
 await page.route('**/auth/tokens**', route => route.fulfill({json:{Tokens:[],More:false}}));
 await page.route('**/api/**', async route => {
@@ -30,7 +31,7 @@ await page.route('**/api/**', async route => {
  if(path === 'channels') data = {whatsapp:1};
  if(path === 'containers') data = {containers:[container],next:''};
  if(path === 'containers/local-main') data = container;
- if(path === 'sites') data = {sites:[site],next:''};
+ if(path === 'sites') data = {sites:[site,pickerSite],next:'',csrf:'local-only-csrf'};
  if(path === `sites/${account.id}`) data = site;
  if(path === 'deliveries') data = {counts:{queued:3,uncertain:2,failed:1}};
  if(path === 'accounts/health') data = {webhook_received_at:'2026-10-24 09:00',core_confirmed_at:'2026-10-24 09:01',callback_pending:3,callback_failed:2,callback_quarantined:1};
@@ -60,10 +61,10 @@ try {
  await page.getByRole('button',{name:'Add 1 account',exact:true}).click();
  assert.deepEqual(writes.at(-1),{method:'PUT',path:`sites/${account.id}/channels`,body:{channels:[{channel:'WhatsApp',key:'local-number'}]}});
  await nav('Overview');
- const before = reads.filter(path=>path==='accounts').length;
+ const before = reads.filter(path=>path==='sites').length;
  await page.getByRole('button',{name:'Refresh',exact:true}).click();
  await page.waitForTimeout(150);
- assert.ok(reads.filter(path=>path==='accounts').length > before);
+ assert.ok(reads.filter(path=>path==='sites').length > before);
  await nav('Connections');
  await page.getByRole('button',{name:'Open WhatsApp connection local-only-review',exact:true}).click();
  await page.getByText('+1555010100',{exact:true}).waitFor();

@@ -48,7 +48,7 @@ export function channelPayload(form, takenKeys = []) {
     config.from = String(config.from || "").trim().toLowerCase();
     for (const name of ["port", "imap_port"]) if (config[name] !== "" && config[name] != null) config[name] = Number(config[name]);
   }
-  return {
+  const payload = {
     channel: form.channel,
     key: form.key || channelKey(form.label, takenKeys),
     label: form.label.trim(),
@@ -56,4 +56,6 @@ export function channelPayload(form, takenKeys = []) {
     config,
     secret: form.secret,
   };
+  if (form.channel === "WhatsApp" && !form.override) payload.use_container_app = true;
+  return payload;
 }

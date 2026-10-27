@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assignedRefs, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteStatus, siteTokens } from '../src/composables/containers.js';
+import { assignedRefs, channelKey, channelStatus, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
 import { channelForm, channelPayload, validateChannelForm } from '../src/composables/channelForm.js';
 import { parseRoute, routePath } from '../src/useViewRoute.js';
 
@@ -81,10 +81,12 @@ test('WhatsApp numbers use the container app unless the number overrides it', ()
   assert.deepEqual(Object.keys(validateChannelForm(form, { containerToken: true })).sort(), ['app_secret', 'verify_token']);
   form.config.app_secret = 'number-secret'; form.config.verify_token = 'number-token';
   assert.equal(channelPayload(form).config.app_secret, 'number-secret');
+  assert.equal('use_container_app' in channelPayload(form), false);
   form.override = false;
   const payload = channelPayload(form, ['dispatch-line']);
   assert.equal(payload.key, 'dispatch-line-2');
   assert.equal('app_secret' in payload.config || 'verify_token' in payload.config, false);
+  assert.equal(payload.use_container_app, true);
 });
 
 test('editing keeps stored config and saved secrets', () => {
@@ -126,4 +128,14 @@ test('site tokens show only keys for that site', async t => {
     delete globalThis.window;
   }
   assert.equal(hubURL('/webhooks/whatsapp/main', { origin: 'https://x.test', pathname: '/' }), 'https://x.test/webhooks/whatsapp/main');
+});
+
+test('delivery and event pickers list one channel type of each site', () => {
+  const sites = [
+    { id: 'yrp', name: 'YRP', origin: 'https://yrp.example.test', channels: [whatsapp(), { channel: 'Telegram', key: 'bot', label: 'Bot' }] },
+    { id: 'pos', name: '', origin: 'https://pos.example.test', channels: [whatsapp({ key: 'pos-line', label: '' })] },
+  ];
+  assert.deepEqual(siteChannelOptions(sites).map((row) => [row.key, row.site, row.label]), [['sales', 'yrp', 'YRP · Sales line'], ['pos-line', 'pos', 'pos.example.test · pos-line']]);
+  assert.deepEqual(siteChannelOptions(sites, 'Telegram').map((row) => row.key), ['bot']);
+  assert.deepEqual(siteChannelOptions(sites, 'Email'), []);
 });
