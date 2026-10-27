@@ -269,9 +269,23 @@ func assign(ctx context.Context, tx pgx.Tx, site string, providers, keys []strin
 	if found != len(distinctRefs(providers, keys)) {
 		return false, errors.New("unknown channel")
 	}
-	added, err := tx.Exec(ctx, `UPDATE relay_channel_credentials c SET site_id=$1,assigned_at=now(),updated_at=now()
- FROM unnest($2::text[],$3::text[]) r(channel,channel_key) WHERE c.channel=r.channel AND c.channel_key=r.channel_key AND c.site_id IS NULL`, site, providers, keys)
+	rows, err := tx.Query(ctx, `UPDATE relay_channel_credentials c SET site_id=$1,assigned_at=now(),updated_at=now()
+ FROM unnest($2::text[],$3::text[]) r(channel,channel_key) WHERE c.channel=r.channel AND c.channel_key=r.channel_key AND c.site_id IS NULL
+ RETURNING c.channel,c.channel_key`, site, providers, keys)
 	if err != nil {
+		return false, err
+	}
+	var addedProviders, addedKeys []string
+	var provider, key string
+	_, err = pgx.ForEachRow(rows, []any{&provider, &key}, func() error {
+		addedProviders, addedKeys = append(addedProviders, provider), append(addedKeys, key)
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	// A newly linked channel gets the events that came while it had no site.
+	if _, err = replayHeld(ctx, tx, site, addedProviders, addedKeys); err != nil {
 		return false, err
 	}
 	removed, err := tx.Exec(ctx, `UPDATE relay_channel_credentials c SET site_id=NULL,assigned_at=NULL,updated_at=now()
@@ -279,7 +293,7 @@ func assign(ctx context.Context, tx pgx.Tx, site string, providers, keys []strin
 	if err != nil {
 		return false, err
 	}
-	return added.RowsAffected()+removed.RowsAffected() > 0, nil
+	return len(addedKeys) > 0 || removed.RowsAffected() > 0, nil
 }
 
 func distinctRefs(providers, keys []string) map[string]bool {

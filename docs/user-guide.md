@@ -193,6 +193,8 @@ Click **Test and add** (or **Test and save** when you edit). The Hub saves the n
 - If the test fails, the number is still saved. The dialog shows "Saved. The connection test failed: …". Fix the value and save again.
 - If the save worked but the site link failed, the dialog shows "Saved, but linking to the site failed: …". This happens when the number still has unfinished sends for its old site.
 
+When you open a linked number that has held messages, the dialog shows **Replay held messages (N)**. Held messages are messages that came while the number had no site. Click the button to give them to the linked site. The Hub gives each message only once.
+
 #### Telegram tab
 
 ![Container Telegram tab](images/guide/07-container-telegram.png)
@@ -249,7 +251,7 @@ You can create a site with no Core values and add them later. If you type one Co
 
 - **Add account** opens a picker. It lists every account in every container. Tick the free ones and click **Add N accounts**. From that moment, new messages to those accounts go to this site.
 - An account with **Already here** is on this site. An account with **On <other site>** belongs to another site and you cannot tick it. Remove it from the other site first.
-- **Remove** on a row unlinks the account after you confirm. New messages to it then stay in the Hub as unassigned. They do not reach any site. The account itself and its settings stay in its container.
+- **Remove** on a row unlinks the account after you confirm. New messages to it then stay in the Hub as held messages. They do not reach any site. When you link the account to a site again, the Hub gives the held messages to that site. The account itself and its settings stay in its container.
 
 ![Add accounts to a site](images/guide/11-site-add-account.png)
 
@@ -387,7 +389,7 @@ Use one of these two ways:
 - **Sites** → open the site → **Add account** → tick the number → **Add 1 account**.
 - **Containers** → open the container → click the number → **Link to site** → pick the site → **Test and save**.
 
-From that moment, new messages to the number go to that site. Messages that came while the number had no site stay in the Hub. They do not move by themselves (see [section 8](#8-things-the-hub-pages-cannot-do-yet)).
+From that moment, new messages to the number go to that site. The Hub also gives the site the messages that came while the number had no site. Core drops a message that it already has, so a message never shows two times.
 
 To move a number to another site, remove it from the old site first, then add it to the new site. The Hub refuses the move while the number still has sends that are not finished.
 
@@ -503,9 +505,9 @@ The Hub has no billing page. Billing is in Core: Relay → **WhatsApp** → **Bi
 
 **…I add a number but do not link it to a site?** The number receives messages and the Hub keeps them. It answers Meta with success. No message reaches Core.
 
-**…I remove a number from a site?** New messages stay in the Hub as unassigned. Old messages in Core stay in Core. The number and its settings stay in the container.
+**…I remove a number from a site?** New messages stay in the Hub as held messages. When you link the number to a site again, the Hub gives them to that site. Old messages in Core stay in Core. The number and its settings stay in the container.
 
-**…I link a number that was unlinked for some days?** New messages go to the site from that moment. The messages that came while it was unlinked do not move by themselves. An operator can replay them (see section 8).
+**…I link a number that was unlinked for some days?** New messages go to the site from that moment. The Hub also gives the site the messages that came while the number was unlinked.
 
 **…I disable a container?** All numbers, bots and mailboxes in it stop receiving and sending. Settings stay. Enable it again to restart.
 
@@ -535,6 +537,6 @@ The Hub has no billing page. Billing is in Core: Relay → **WhatsApp** → **Bi
 
 These tasks need an operator with the admin API in the [API reference](api-reference.md#administration-routes):
 
-- **Replay unassigned messages.** Messages that came while a number had no site stay in the Hub. `POST /api/unassigned-events/replay` gives them to the number's current site.
+- **Replay messages for a number that was not in the Hub.** When Meta sends a message for a phone number ID that no container has, the Hub keeps it without an account. After you add and link the number, `POST /api/unassigned-events/replay` gives it to the number's site.
 - **Delete** containers, accounts or sites.
 - **Change a Site ID** or a channel key.

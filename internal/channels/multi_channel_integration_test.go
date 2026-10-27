@@ -101,7 +101,7 @@ func TestBotsAndMailboxesKeepTheirOwnWebhooksAndSites(t *testing.T) {
 		t.Fatalf("event sites: %v", sites)
 	}
 
-	// The unassigned bot's event waits until the bot has a site.
+	// The unassigned bot's event waits until the bot has a site, then linking gives it to that site.
 	var id int64
 	if err = pool.QueryRow(ctx, `SELECT id FROM relay_channel_events WHERE account='bot-c'`).Scan(&id); err != nil {
 		t.Fatal(err)
@@ -110,9 +110,6 @@ func TestBotsAndMailboxesKeepTheirOwnWebhooksAndSites(t *testing.T) {
 		t.Fatalf("replay before assignment: %v", err)
 	}
 	if err = store.AssignChannels(ctx, "site-b", []containers.ChannelRef{{Channel: "Telegram", Key: "bot-b"}, {Channel: "Email", Key: "mail-help"}, {Channel: "Telegram", Key: "bot-c"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err = events.ReplayUnassigned(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if err = events.ReplayUnassigned(ctx, id); err != ErrNotAssigned {

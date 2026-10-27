@@ -151,6 +151,8 @@ export const adminApi = {
   createChannel: (container, channel) => hubApi(item("containers", container) + "/channels", channel),
   updateChannel: (container, channel) => hubApi(`${item("containers", container)}/channels/${encodeURIComponent(channel.channel)}/${encodeURIComponent(channel.key)}`, channel, "PUT"),
   checkChannel: (channel, action) => hubApi(`channels/${channel.channel.toLowerCase()}/${encodeURIComponent(channel.key)}/connection`, { action }),
+  heldEvents: (channel) => hubApi(channelPath(channel) + "/held"),
+  replayHeld: (channel) => hubApi(channelPath(channel) + "/held/replay", {}),
   sites: (query = "") => loadPages("sites", query),
   site: (id) => hubApi(item("sites", id)),
   createSite: (site) => hubApi("sites", site),
@@ -160,6 +162,10 @@ export const adminApi = {
   addForward: (provider, key, url) => hubApi(forwardPath(provider, key), { url }),
   removeForward: (provider, key, id) => hubApi(`${forwardPath(provider, key)}/${encodeURIComponent(id)}`, {}, "DELETE"),
 };
+
+function channelPath(channel) {
+  return `channels/${encodeURIComponent(channel.channel)}/${encodeURIComponent(channel.key)}`;
+}
 
 function forwardPath(provider, key) {
   return `forwards/${provider.toLowerCase()}/${encodeURIComponent(key)}`;

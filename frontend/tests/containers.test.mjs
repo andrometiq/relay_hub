@@ -52,6 +52,18 @@ test('channel keys are slugs that avoid keys already in use', () => {
   assert.equal(channelKey('***'), 'account');
 });
 
+test('held messages are counted and replayed for one account', async t => {
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    requests.push([options.method, url]);
+    return Response.json(options.method === 'GET' ? { count: 3 } : { replayed: 3 });
+  });
+  const ref = { channel: 'WhatsApp', key: 'sales line' };
+  assert.equal((await adminApi.heldEvents(ref)).count, 3);
+  assert.equal((await adminApi.replayHeld(ref)).replayed, 3);
+  assert.deepEqual(requests, [['GET', './api/channels/WhatsApp/sales%20line/held'], ['POST', './api/channels/WhatsApp/sales%20line/held/replay']]);
+});
+
 test('moving an account leaves the old site before it joins the new one', async t => {
   const requests = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {

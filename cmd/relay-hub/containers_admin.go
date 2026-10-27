@@ -39,6 +39,8 @@ func (a directoryAdmin) register(mux *http.ServeMux, protect func(http.Handler) 
 		"POST /api/containers/{container}/channels":                a.createChannel,
 		"PUT /api/containers/{container}/channels/{channel}/{key}": a.updateChannel,
 		"POST /api/channels/whatsapp/{key}/connection":             a.whatsappConnection,
+		"GET /api/channels/{channel}/{key}/held":                   a.heldEvents,
+		"POST /api/channels/{channel}/{key}/held/replay":           a.replayHeld,
 		"GET /api/sites":                                           a.listSites,
 		"POST /api/sites":                                          a.createSite,
 		"GET /api/sites/{site}":                                    a.getSite,
@@ -96,7 +98,7 @@ func storeFailure(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(err, containers.ErrConflict), errors.Is(err, containers.ErrPendingSends):
+	case errors.Is(err, containers.ErrConflict), errors.Is(err, containers.ErrPendingSends), errors.Is(err, containers.ErrNotLinked):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &pgErr), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -281,6 +283,26 @@ func (a directoryAdmin) whatsappConnection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, map[string]string{"status": "connected"})
+}
+
+// heldEvents counts the events a channel received while it had no site.
+func (a directoryAdmin) heldEvents(w http.ResponseWriter, r *http.Request) {
+	count, err := a.store.HeldEvents(r.Context(), containers.ChannelRef{Channel: r.PathValue("channel"), Key: r.PathValue("key")})
+	if err != nil {
+		storeFailure(w, err)
+		return
+	}
+	writeJSON(w, map[string]int{"count": count})
+}
+
+// replayHeld gives a channel's held events to its current site.
+func (a directoryAdmin) replayHeld(w http.ResponseWriter, r *http.Request) {
+	replayed, err := a.store.ReplayHeld(r.Context(), containers.ChannelRef{Channel: r.PathValue("channel"), Key: r.PathValue("key")})
+	if err != nil {
+		storeFailure(w, err)
+		return
+	}
+	writeJSON(w, map[string]int64{"replayed": replayed})
 }
 
 // candidate joins the edit with the stored channel or, for a new channel, the container app.
