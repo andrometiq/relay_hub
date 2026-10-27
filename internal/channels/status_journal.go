@@ -19,7 +19,12 @@ type StatusReceipt struct {
 	State      string          `json:"state"`
 	Receipt    json.RawMessage `json:"receipt"`
 	OccurredAt time.Time       `json:"occurred_at"`
+	ChannelKey string          `json:"channel_key,omitempty"`
+	To         string          `json:"to,omitempty"`
 }
+
+// routingReserve is room per row for channel_key and to, added after the batch is read.
+const routingReserve = 330
 
 // PendingStatusReceipts is used while the caller holds an account dispatch lock.
 // Acknowledgement is per row, so concurrent commits cannot fall behind a cursor.
@@ -43,11 +48,11 @@ func PendingStatusReceipts(ctx context.Context, db *pgx.Conn, account string) ([
 		if err != nil {
 			return nil, err
 		}
-		if size+len(raw)+1 > 512<<10 {
+		if size+len(raw)+1+routingReserve > 512<<10 {
 			break
 		}
 		items = append(items, row)
-		size += len(raw) + 1
+		size += len(raw) + 1 + routingReserve
 	}
 	return items, rows.Err()
 }

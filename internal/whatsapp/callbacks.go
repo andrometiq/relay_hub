@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +24,21 @@ type CallbackDispatcher struct {
 	URL        string
 	Service    *Service
 	BulkWindow time.Duration
+	sites      atomic.Pointer[[]Account]
+}
+
+// SetSites replaces the sites that receive site-level notices, such as
+// relay_channels. Each entry carries SiteID, Site (origin) and Core credentials.
+func (d *CallbackDispatcher) SetSites(sites []Account) {
+	copied := append([]Account(nil), sites...)
+	d.sites.Store(&copied)
+}
+
+func (d *CallbackDispatcher) siteNotices() []Account {
+	if current := d.sites.Load(); current != nil {
+		return *current
+	}
+	return nil
 }
 
 func (d *CallbackDispatcher) Run(ctx context.Context) {
@@ -50,14 +66,28 @@ func (d *CallbackDispatcher) Run(ctx context.Context) {
 					}
 					jobs = append(jobs, callbackworker.Job{Key: a.ID, Run: run})
 				}
+				if lane == "realtime" {
+					for _, site := range d.siteNotices() {
+						jobs = append(jobs, callbackworker.Job{Key: "site:" + site.SiteID, Run: func(jobCtx context.Context) { _ = d.deliver(jobCtx, site, lane) }})
+					}
+				}
 				return jobs
 			}, wake)
 		})
 	}
 }
 
+// deliver sends one batch of a number's events to its site. An account with
+// no ID sends the site's own notices, which carry no channel key.
 func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string) error {
 	normalizeAccount(&a)
+	if a.SiteID == "" {
+		return nil
+	}
+	cursor := a.ID
+	if cursor == "" {
+		cursor = "site:" + a.SiteID
+	}
 	started := time.Now()
 	c, err := pgx.Connect(ctx, d.URL)
 	if err != nil {
@@ -67,10 +97,10 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	// Session advisory lock avoids concurrent callbacks for the same account/lane
 	// across replicas. No transaction is held across the network operation.
 	var locked bool
-	if err = c.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1,1))", a.ID+":"+lane).Scan(&locked); err != nil || !locked {
+	if err = c.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1,1))", cursor+":"+lane).Scan(&locked); err != nil || !locked {
 		return err
 	}
-	if _, err = c.Exec(ctx, "INSERT INTO relay_callback_cursor(account,lane) VALUES($1,$2) ON CONFLICT DO NOTHING", a.ID, lane); err != nil {
+	if _, err = c.Exec(ctx, "INSERT INTO relay_callback_cursor(account,lane) VALUES($1,$2) ON CONFLICT DO NOTHING", cursor, lane); err != nil {
 		return err
 	}
 	eventLimit := 50
@@ -97,6 +127,9 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 			rows.Close()
 			return err
 		}
+		if a.ID != "" {
+			event.ChannelKey, event.To = a.ID, a.To()
+		}
 		events = append(events, event)
 		offsets[event.ID] = offset
 	}
@@ -108,7 +141,10 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	next := StatusCursor{EventID: events[len(events)-1].ID}
 	accepted := len(events)
 	endpoint := "/api/method/relay_core.inbound.receive"
-	values := map[string]any{"account": a.ID, "events": events}
+	values := map[string]any{"account": a.SiteID, "events": events}
+	if a.ID != "" {
+		values["channel_key"] = a.ID
+	}
 	if lane == "status" {
 		statuses := []CompactStatus{}
 		size := 2
@@ -154,14 +190,14 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 		events = consumed
 		accepted = len(statuses)
 		endpoint = "/api/method/relay_core.inbound.receive_statuses"
-		values = map[string]any{"account": a.ID, "statuses": statuses}
+		values = map[string]any{"account": a.SiteID, "channel_key": a.ID, "statuses": statuses}
 	} else {
 		for i := range events {
 			events[i].Payload = realtimePayload(events[i].Payload)
 		}
 	}
 	if accepted == 0 {
-		return acknowledgeCallbacks(ctx, c, a.ID, lane, events, next)
+		return acknowledgeCallbacks(ctx, c, cursor, lane, events, next)
 	}
 	ack, err := d.post(ctx, a, endpoint, values, accepted, started)
 	if err != nil {
@@ -170,7 +206,10 @@ func (d *CallbackDispatcher) deliver(ctx context.Context, a Account, lane string
 	saveCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if ack {
-		return acknowledgeCallbacks(saveCtx, c, a.ID, lane, events, next)
+		if err = acknowledgeCallbacks(saveCtx, c, cursor, lane, events, next); err != nil {
+			return err
+		}
+		return touchSite(saveCtx, c, a.SiteID)
 	}
 	if err := callbackFailure(saveCtx, c, events, lane, "Core did not acknowledge event batch", -1); err != nil {
 		return err
@@ -227,6 +266,14 @@ func acknowledgeCallbacks(ctx context.Context, c *pgx.Conn, account, lane string
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// touchSite records when the site last acknowledged a callback; writes are
+// limited to one per few seconds per site.
+func touchSite(ctx context.Context, c *pgx.Conn, site string) error {
+	_, err := c.Exec(ctx, `UPDATE relay_sites SET last_callback_at=now() WHERE site_id=$1
+ AND (last_callback_at IS NULL OR last_callback_at<now()-interval '5 seconds')`, site)
+	return err
 }
 
 func callbackFailure(ctx context.Context, c *pgx.Conn, events []Event, lane, reason string, position int) error {

@@ -173,9 +173,23 @@ func runtimeCallbacks(rows []accountstore.RuntimeCredential) []channels.RuntimeC
 		if (row.Channel != "Telegram" && row.Channel != "Email") || row.Site == "" || !row.SiteEnabled || !row.Core.Complete() {
 			continue
 		}
-		result = append(result, channels.RuntimeCallback{Account: row.Key, Site: row.Origin, APIKey: row.Core.APIKey, APISecret: row.Core.APISecret, CallbackSecret: row.Core.CallbackSecret})
+		result = append(result, channels.RuntimeCallback{Account: row.Key, Channel: row.Channel, SiteID: row.Site, Site: row.Origin,
+			To: map[string]string{row.Channel: channels.DisplayAddress(row)}, APIKey: row.Core.APIKey, APISecret: row.Core.APISecret, CallbackSecret: row.Core.CallbackSecret})
 	}
 	return result
+}
+
+// siteNotices lists the sites that receive site-level notices, such as relay_channels.
+func siteNotices(ctx context.Context, store *accountstore.Store) ([]whatsapp.Account, error) {
+	sites, err := store.CallbackSites(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]whatsapp.Account, len(sites))
+	for i, site := range sites {
+		result[i] = whatsapp.Account{SiteID: site.ID, Site: site.Origin, CoreAPIKey: site.Core.APIKey, CoreAPISecret: site.Core.APISecret, CallbackSecret: site.Core.CallbackSecret}
+	}
+	return result, nil
 }
 func run() error {
 	if err := envconfig.Load(".env"); err != nil {
@@ -313,6 +327,11 @@ func run() error {
 		if callbacks.BulkWindow, err = whatsapp.ParseBulkWindow(os.Getenv("RELAY_BULK_UPDATE_WINDOW")); err != nil {
 			return err
 		}
+		notices, err := siteNotices(context.Background(), accountStore)
+		if err != nil {
+			return errors.New("cannot load site callback credentials")
+		}
+		callbacks.SetSites(notices)
 		wa.Outbox, err = whatsapp.NewOutbox(context.Background(), os.Getenv("DATABASE_URL"), wa, workers)
 		if err != nil {
 			return err
@@ -344,6 +363,10 @@ func run() error {
 			if e == nil {
 				nextChannels, e = channels.Load(channelRows)
 			}
+			var nextSites []whatsapp.Account
+			if e == nil {
+				nextSites, e = siteNotices(ctx, accountStore)
+			}
 			if e == nil {
 				e = wa.ReplaceAccounts(configured)
 			}
@@ -354,6 +377,7 @@ func run() error {
 				return e
 			}
 			channelCallbacksDispatcher.Update(runtimeCallbacks(channelRows))
+			callbacks.SetSites(nextSites)
 			return nil
 		}
 		mux := http.NewServeMux()

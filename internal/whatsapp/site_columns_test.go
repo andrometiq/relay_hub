@@ -22,5 +22,6 @@ func migrationSQL(file string) ([]byte, error) {
 	end := strings.Index(text, "CREATE OR REPLACE FUNCTION relay_hub_invalidate()")
 	return []byte(`ALTER TABLE relay_whatsapp_events ADD COLUMN IF NOT EXISTS site_id text, ADD COLUMN IF NOT EXISTS container_id text, ADD COLUMN IF NOT EXISTS replayed_at timestamptz;
 ALTER TABLE relay_outbox ADD COLUMN IF NOT EXISTS site_id text;
+CREATE TABLE IF NOT EXISTS relay_sites(site_id text PRIMARY KEY, last_callback_at timestamptz);
 ` + text[start:end]), nil
 }
