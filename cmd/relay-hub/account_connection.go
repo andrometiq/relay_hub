@@ -23,6 +23,7 @@ const httpWriteTimeout = 30 * time.Second
 type accountConnections interface {
 	TelegramConnection(context.Context, string, string, string, bool) (telegram.WebhookHealth, error)
 	TestEmailConnection(context.Context, string) (channels.EmailConnection, error)
+	WebhookPath(provider, key string) string
 }
 
 // Only persisted, active account credentials are tested. Callers cannot supply
@@ -71,7 +72,7 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 		defer cancel()
 		var result any
 		if channel == "telegram" {
-			address := strings.TrimRight(publicURL, "/") + "/webhooks/telegram/" + account
+			address := strings.TrimRight(publicURL, "/") + "/webhooks/telegram/" + registry.WebhookPath("Telegram", account)
 			u, parseErr := url.Parse(address)
 			if parseErr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 				http.Error(w, "Configure the Hub public HTTPS URL before checking its webhook", 503)

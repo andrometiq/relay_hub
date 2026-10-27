@@ -20,7 +20,7 @@ func TestEmailWebhookSettingsAuthorization(t *testing.T) {
 	registry := &channels.Registry{Email: map[string]*email.Client{"mail": client}}
 	master := strings.Repeat("m", 32)
 	for _, role := range []string{"operator", "admin"} {
-		handler := channelWebhookSettings("email", registry.EmailWebhookSecret, master, func(*http.Request) (auth.User, error) { return auth.User{Role: role}, nil })
+		handler := channelWebhookSettings("email", registry.EmailWebhookSecret, registry, master, func(*http.Request) (auth.User, error) { return auth.User{Role: role}, nil })
 		req := httptest.NewRequest("GET", "/api/accounts/mail/email/webhook", nil)
 		req.SetPathValue("account", "mail")
 		response := httptest.NewRecorder()

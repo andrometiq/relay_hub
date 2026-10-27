@@ -29,7 +29,10 @@ type Registry struct {
 	Email    map[string]*relayemail.Client
 	// Bindings maps "Provider/key" to the channel's site and display address.
 	// A registry without bindings treats each key as its own site.
-	Bindings   map[string]Binding
+	Bindings map[string]Binding
+	// Paths maps "Provider/public path id" to the channel key. A registry
+	// without paths accepts the key itself as the path.
+	Paths      map[string]string
 	initialize sync.Once
 	current    atomic.Pointer[registrySnapshot]
 }
@@ -37,17 +40,20 @@ type registrySnapshot struct {
 	telegram map[string]*telegram.Client
 	email    map[string]*relayemail.Client
 	bindings map[string]Binding
+	paths    map[string]string
 }
 
 // Binding is the current owner of one channel. Site is empty while unassigned.
 type Binding struct {
 	Site, To string
+	// Path is the random public webhook path id of the channel.
+	Path string
 }
 type Status struct{ Telegram, Email int }
 
 func (r *Registry) snapshot() *registrySnapshot {
 	r.initialize.Do(func() {
-		r.current.Store(&registrySnapshot{telegram: maps.Clone(r.Telegram), email: maps.Clone(r.Email), bindings: maps.Clone(r.Bindings)})
+		r.current.Store(&registrySnapshot{telegram: maps.Clone(r.Telegram), email: maps.Clone(r.Email), bindings: maps.Clone(r.Bindings), paths: maps.Clone(r.Paths)})
 	})
 	return r.current.Load()
 }
@@ -79,6 +85,24 @@ func (r *Registry) Binding(provider, key string) Binding {
 	return s.bindings[provider+"/"+key]
 }
 
+// WebhookKey returns the channel key behind a public Telegram or Email webhook path.
+func (r *Registry) WebhookKey(provider, path string) (string, bool) {
+	s := r.snapshot()
+	if s.paths == nil {
+		return path, true
+	}
+	key, ok := s.paths[provider+"/"+path]
+	return key, ok
+}
+
+// WebhookPath returns the public webhook path id of a channel.
+func (r *Registry) WebhookPath(provider, key string) string {
+	if path := r.Binding(provider, key).Path; path != "" {
+		return path
+	}
+	return key
+}
+
 // SiteKeys lists the active channel keys of one provider that a site uses, sorted.
 func (r *Registry) SiteKeys(provider, site string) []string {
 	s := r.snapshot()
@@ -106,10 +130,14 @@ func (r *Registry) SiteKeys(provider, site string) []string {
 }
 
 func Load(rows []containers.RuntimeCredential) (*Registry, error) {
-	r := &Registry{Telegram: map[string]*telegram.Client{}, Email: map[string]*relayemail.Client{}, Bindings: map[string]Binding{}}
+	r := &Registry{Telegram: map[string]*telegram.Client{}, Email: map[string]*relayemail.Client{}, Bindings: map[string]Binding{}, Paths: map[string]string{}}
 	for _, v := range rows {
 		if v.Channel == "Telegram" || v.Channel == "Email" {
-			r.Bindings[v.Channel+"/"+v.Key] = Binding{Site: v.Site, To: DisplayAddress(v)}
+			r.Bindings[v.Channel+"/"+v.Key] = Binding{Site: v.Site, To: DisplayAddress(v), Path: v.WebhookID}
+			r.Paths[v.Channel+"/"+v.WebhookID] = v.Key
+			if v.LegacyPath {
+				r.Paths[v.Channel+"/"+v.Key] = v.Key
+			}
 		}
 		switch v.Channel {
 		case "Telegram":

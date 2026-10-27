@@ -172,17 +172,36 @@ func (a directoryAdmin) saveContainer(w http.ResponseWriter, r *http.Request, in
 			return
 		}
 	}
+	if create && in.ID == "" {
+		in.ID = containers.NewContainerID()
+	}
 	if err := a.store.SaveContainer(r.Context(), in.Container, in.WhatsApp, create); err != nil {
 		storeFailure(w, err)
 		return
 	}
-	a.changed(w, r)
+	if !create {
+		a.changed(w, r)
+		return
+	}
+	if err := a.reload(r.Context()); err != nil {
+		http.Error(w, "saved, but the runtime reload was rejected: "+err.Error(), http.StatusConflict)
+		return
+	}
+	saved, err := a.store.GetContainer(r.Context(), in.ID)
+	if err != nil {
+		storeFailure(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"id": saved.ID, "webhook_path": saved.WebhookPath, "csrf": csrf(r)})
 }
 
 // containerWebhook gives the admin the callback path and verify token to paste in Meta.
 func (a directoryAdmin) containerWebhook(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("container")
-	if _, err := a.store.GetContainer(r.Context(), id); err != nil {
+	container, err := a.store.GetContainer(r.Context(), id)
+	if err != nil {
 		storeFailure(w, err)
 		return
 	}
@@ -192,7 +211,7 @@ func (a directoryAdmin) containerWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	token, _ := config["verify_token"].(string)
-	writeJSON(w, map[string]any{"path": "/webhooks/whatsapp/" + id, "verify_token": token, "csrf": csrf(r)})
+	writeJSON(w, map[string]any{"path": container.WebhookPath, "verify_token": token, "csrf": csrf(r)})
 }
 
 type channelInput struct {

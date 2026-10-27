@@ -195,9 +195,9 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts := s.AccountsSnapshot()
 	if id != "" {
-		accounts = containerAccounts(accounts, id)
+		accounts = webhookAccounts(accounts, id)
 		if len(accounts) == 0 {
-			http.Error(w, "webhook unauthorized", http.StatusForbidden)
+			http.NotFound(w, r)
 			return
 		}
 	}
@@ -258,6 +258,22 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(200)
+}
+
+// webhookAccounts lists the numbers of the container behind a public webhook path.
+func webhookAccounts(accounts []Account, path string) []Account {
+	result := []Account{}
+	for _, a := range accounts {
+		normalizeAccount(&a)
+		id := a.WebhookID
+		if id == "" {
+			id = a.ContainerID
+		}
+		if id == path || (a.LegacyWebhook && a.ContainerID == path) {
+			result = append(result, a)
+		}
+	}
+	return result
 }
 
 func containerAccounts(accounts []Account, container string) []Account {

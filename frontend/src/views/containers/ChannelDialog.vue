@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from "vue";
 import { Button, Dialog, ErrorMessage, FeatherIcon, FormControl } from "@relay/ui";
-import { adminApi, moveChannel, siteHost } from "../../composables/containers";
+import { adminApi, hubURL, moveChannel, siteHost } from "../../composables/containers";
 import { channelForm, channelPayload, validateChannelForm } from "../../composables/channelForm";
 
 const props = defineProps({ modelValue: Boolean, container: Object, channelName: String, channel: Object, sites: { type: Array, default: () => [] } });
@@ -16,6 +16,10 @@ const tokenRequired = computed(() => !containerToken.value && !form.value.config
 const siteOptions = computed(() => [{ label: "Not linked", value: "" }, ...props.sites.map((site) => ({ label: siteHost(site.origin), value: site.id }))]);
 const smtpPorts = computed(() => withCurrent([{ label: "465 · SSL", value: 465 }, { label: "587 · STARTTLS", value: 587 }, { label: "25 · STARTTLS", value: 25 }], form.value.config.port));
 const imapPorts = computed(() => withCurrent([{ label: "993 · SSL", value: 993 }, { label: "143 · STARTTLS", value: 143 }], form.value.config.imap_port));
+const webhookURL = computed(() => (stored.value?.webhook_path ? hubURL(stored.value.webhook_path) : ""));
+async function copyWebhook() {
+  try { await navigator.clipboard.writeText(webhookURL.value); notice.value = "Webhook URL copied."; } catch { notice.value = "Copy failed; select the URL and copy it."; }
+}
 const placeholder = (name, blank) => (form.value.configured.includes(name) ? "Saved — leave blank to keep" : blank);
 
 function withCurrent(options, value) {
@@ -51,7 +55,7 @@ async function save() {
     saved = true;
     form.value.key = payload.key;
     form.value.secret = "";
-    stored.value = { ...payload, site: stored.value?.site || "" };
+    stored.value = { ...(stored.value || {}), ...payload, site: stored.value?.site || "" };
     await moveChannel(payload, stored.value.site, form.value.site);
     stored.value.site = form.value.site;
     const problem = payload.enabled ? await check(payload) : "";
@@ -119,6 +123,7 @@ async function save() {
           <span class="relay-field__label">Link to site <small>· optional{{ form.channel === 'WhatsApp' ? ', you can link it later on the Sites page' : '' }}</small></span>
           <FormControl v-model="form.site" type="select" aria-label="Link to site" placeholder="Not linked" :options="siteOptions" />
         </div>
+        <div v-if="form.channel === 'Email' && webhookURL" class="webhook-address admin-full"><div><span>Inbound webhook URL</span><code>{{ webhookURL }}</code></div><Button label="Copy" icon-left="copy" @click="copyWebhook" /></div>
         <FormControl v-if="stored" v-model="form.enabled" type="checkbox" label="Account enabled" class="admin-full" />
       </form>
       <p v-if="notice" role="status" class="feedback-panel mt-4">{{ notice }}</p>
