@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +115,30 @@ func TestBillingPricingValidation(t *testing.T) {
 		if _, err := s.Execute(context.Background(), testAccount(), in); err == nil {
 			t.Fatal("accepted", name)
 		}
+	}
+}
+
+func TestSharedWABAPricingIsSplitBySite(t *testing.T) {
+	s := fakeGraph(t, func(r *http.Request) string {
+		return `{"currency":"INR","pricing_analytics":{"data":[{"data_points":[{"phone_number":"+91 98400 00001","cost":1},{"phone_number":"919840000002","cost":2},{"cost":3}]}]}}`
+	})
+	own, other := testAccount(), testAccount()
+	own.SiteID, own.DisplayNumber = "site-one", "+91 98400 00001"
+	other.ID, other.SiteID, other.PhoneID, other.DisplayNumber, other.CoreToken = "site-b", "site-two", "333", "919840000002", strings.Repeat("b", 64)
+	if err := s.ReplaceAccounts([]Account{own, other}); err != nil {
+		t.Fatal(err)
+	}
+	in := Input{Operation: "billing.pricing", Start: 1, End: 2, Granularity: "DAILY", Dimensions: []string{"PRICING_CATEGORY"}}
+	if _, err := s.Execute(context.Background(), own, in); err == nil || !strings.Contains(err.Error(), "PHONE") {
+		t.Fatalf("shared WABA without PHONE: %v", err)
+	}
+	in.Dimensions = append(in.Dimensions, "PHONE")
+	result, err := s.Execute(context.Background(), own, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	points, _ := result["data_points"].([]any)
+	if len(points) != 1 || points[0].(map[string]any)["cost"] != 1.0 || points[0].(map[string]any)["channel_key"] != "site-a" {
+		t.Fatalf("site pricing rows: %v", points)
 	}
 }

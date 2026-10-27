@@ -4,52 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/andrometiq/relay_hub/internal/database"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestMetadataDatabaseRefresh(t *testing.T) {
-	dsn := os.Getenv("RELAY_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set RELAY_TEST_DATABASE_URL for PostgreSQL integration")
-	}
 	ctx := context.Background()
-	base, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer base.Close()
-	schema := fmt.Sprintf("relay_metadata_test_%d", time.Now().UnixNano())
-	if _, err = base.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	defer base.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = database.Migrate(ctx, conn.Conn())
-	conn.Release()
-	if err != nil {
-		t.Fatal(err)
-	}
+	pool := migratedPool(t)
 	a := testAccount()
 	a.SyncMetadata = true
 	s, err := New([]Account{a})
