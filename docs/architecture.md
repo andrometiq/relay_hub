@@ -41,7 +41,7 @@ WhatsApp's durable outbox admits bounded batches of up to 50 intents with stable
 
 A lost provider response can leave an intent uncertain. The Hub does not blindly replay that mutation. Stored status events can reconcile receipts without resending. Direct WhatsApp execution, Telegram message operations and SMTP sending do not inherit the WhatsApp queue's admission/deduplication guarantees.
 
-Verified inbound payloads are journaled before acknowledgement. Callback cursors advance after Core acknowledges durable processing. WhatsApp separates realtime and batched-status lanes; Telegram/email use the channel-event callback path. Raw payloads remain available for provenance and typed projection. Reactions, edited messages and membership events are not equivalent to new conversational text.
+Verified inbound payloads are journaled before acknowledgement. After the journal, a verified request can also be copied to other URLs in the background; see [webhook forwarding](configuration.md#webhook-forwarding). Callback cursors advance after Core acknowledges durable processing. WhatsApp separates realtime and batched-status lanes; Telegram/email use the channel-event callback path. Raw payloads remain available for provenance and typed projection. Reactions, edited messages and membership events are not equivalent to new conversational text.
 
 ## Bounded resources
 
