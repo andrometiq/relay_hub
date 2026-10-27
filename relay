@@ -6,9 +6,11 @@ RUNTIME="$ROOT/.runtime"
 mkdir -p "$RUNTIME"; chmod 700 "$RUNTIME"
 exec 9>"$RUNTIME/operations.lock"
 flock -n 9 || { echo 'Another Relay operation is running.' >&2; exit 1; }
-command -v go >/dev/null || { echo "Go 1.26+ is required; install it before running Relay." >&2; exit 1; }
+if ! command -v go >/dev/null && [[ -x /usr/local/go/bin/go ]]; then PATH="/usr/local/go/bin:$PATH"; fi
+command -v go >/dev/null || { echo 'Go 1.26+ is required. Install it from https://go.dev/dl/ into /usr/local/go, add /usr/local/go/bin to PATH, then rerun.' >&2; exit 1; }
 # Parse through Go, never source/eval .env. The temporary stream is private.
 umask 077
+if [[ "${1:-}" == setup && ! -e .env ]]; then printf '# Private Relay Hub configuration. Never commit.\n' >.env; echo 'Created private .env'; fi
 ENVFILE=$(mktemp "$RUNTIME/env.XXXXXX")
 trap 'rm -f "$ENVFILE"' EXIT
 if [[ "${1:-}" == install ]]; then
@@ -26,8 +28,15 @@ export RELAY_ADDR=${RELAY_ADDR:-127.0.0.1:18081}
 PGDIR="$RUNTIME/postgres"
 PGSOCKET="$RUNTIME/pgsocket"
 PGPORT=${RELAY_PG_PORT:-18432}
+CONFIGURED_DATABASE_URL=${DATABASE_URL:-}
 export DATABASE_URL=${DATABASE_URL:-"host=$PGSOCKET port=$PGPORT user=$(id -un) dbname=relay_hub sslmode=disable"}
 fail(){ echo "$*" >&2; exit 1; }
+SERVICE=${RELAY_SERVICE_NAME:-relay-hub}
+[[ "$SERVICE" =~ ^[A-Za-z0-9_.-]+$ ]] || fail 'Invalid RELAY_SERVICE_NAME'
+UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE.service"
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+# shellcheck source=scripts/relay-service.sh
+source "$ROOT/scripts/relay-service.sh"
 prerequisites(){
  for tool in go node npm curl flock setsid; do command -v "$tool" >/dev/null || fail "Missing $tool; install it and rerun ./relay install"; done
  local gov nodev
@@ -59,7 +68,7 @@ start_db(){
   createdb -h "$PGSOCKET" -p "$PGPORT" relay_hub
  fi
 }
-build_ui(){ (cd frontend; npm ci --ignore-scripts --no-audit --no-fund; npm run build); }
+build_ui(){ (cd frontend && npm ci --ignore-scripts --no-audit --no-fund && npm run build); }
 compile(){ mkdir -p "$RUNTIME/releases"; CANDIDATE="$RUNTIME/releases/relay-hub-$(date +%s%N)"; go build -o "$CANDIDATE" ./cmd/relay-hub; }
 owned_pid(){
  [[ -f "$RUNTIME/hub.pid" ]] || return 1
@@ -95,7 +104,13 @@ case "${1:-help}" in
  install) prerequisites; go mod download; start_db; compile; "$CANDIDATE" doctor; "$CANDIDATE" migrate; build_ui; echo 'Installed. Start with ./relay restart.';;
  build-ui) prerequisites; build_ui;;
  migrate) prerequisites; start_db; compile; "$CANDIDATE" migrate;;
+ setup) setup;;
+ create-admin) create_admin;;
+ update) managed_update "${2:-}";;
+ logs) if is_managed; then exec journalctl --user -u "$SERVICE" -n 100 -f 9>&-; else exec tail -n 100 -f "$RUNTIME/hub.log" 9>&-; fi;;
  restart)
+  # A legacy unit runs ./relay restart as its ExecStart, so only a managed unit outside systemd takes the new path.
+  if is_managed && [[ -z "${INVOCATION_ID:-}" ]]; then managed_restart; exit; fi
   prerequisites; start_db; build_ui; compile; "$CANDIDATE" doctor
   # Schema is checked before touching the running service.
   go run ./cmd/relay-check
@@ -109,8 +124,8 @@ case "${1:-help}" in
   fi
   echo "Relay Hub ready: http://$RELAY_ADDR";;
  config) printf "Configuration: %s/.env\nHTTP address: %s\nPostgreSQL port: %s\nDatabase: %s\n" "$ROOT" "$RELAY_ADDR" "$(if [[ "${RELAY_DATABASE_MODE:-}" == docker ]]; then echo "${RELAY_DB_PORT:-18433}"; else echo "$PGPORT"; fi)" "$(if [[ "$DATABASE_URL" == "host=$PGSOCKET "* ]]; then echo local; else echo "${RELAY_DATABASE_MODE:-external}"; fi)";;
- status) if owned_pid; then echo "Hub running (PID $PID)"; curl -fsS --max-time 3 "http://$RELAY_ADDR/readyz"; else fail 'Hub is stopped'; fi;;
- stop) stop_hub;;
+ status) if is_managed; then managed_status; elif owned_pid; then echo "Hub running (PID $PID)"; curl -fsS --max-time 3 "http://$RELAY_ADDR/readyz"; else fail 'Hub is stopped'; fi;;
+ stop) if is_managed && [[ -z "${INVOCATION_ID:-}" ]]; then user_systemctl stop "$SERVICE"; else stop_hub; fi;;
  doctor) prerequisites; compile; "$CANDIDATE" doctor;;
- *) printf '%s\n' './relay install    Check dependencies, initialize isolated local DB, migrate, build UI' './relay build-ui   Build the frontend' './relay restart    Rebuild UI + Go and restart the Hub' './relay migrate    Apply pending database migrations' './relay doctor     Check tool versions and database connection' './relay status     Check running Hub and readiness' './relay stop       Stop only this repository Hub';;
+ *) printf '%s\n' './relay setup      Configure, build, migrate and start the Hub as a systemd user service' './relay update     git pull, build, stop, migrate, start and check readiness' './relay logs       Follow the Hub log' './relay create-admin  Create the first Hub administrator' './relay install    Check dependencies, initialize isolated local DB, migrate, build UI' './relay build-ui   Build the frontend' './relay restart    Rebuild UI + Go and restart the Hub; keeps the old one if the build fails' './relay migrate    Apply pending database migrations' './relay doctor     Check tool versions and database connection' './relay status     Check running Hub and readiness' './relay stop       Stop only this repository Hub';;
 esac
