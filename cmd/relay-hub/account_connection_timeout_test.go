@@ -88,7 +88,7 @@ func TestConnectionDiagnosticsSurviveStalledProviders(t *testing.T) {
 			}
 			registry := &channels.Registry{Email: map[string]*relayemail.Client{"local": client}}
 			mux := http.NewServeMux()
-			mux.Handle("POST /api/accounts/{account}/{channel}/connection", accountConnection(registry, func(*http.Request) (auth.User, error) { return auth.User{Role: "admin"}, nil }, "http://hub.invalid", "", ""))
+			mux.Handle("POST /api/accounts/{account}/{channel}/connection", accountConnection(registry, func(*http.Request) (auth.User, error) { return auth.User{Role: "admin"}, nil }, "http://hub.invalid", "", "", nil))
 			server := httptest.NewUnstartedServer(mux)
 			server.Config.WriteTimeout = httpWriteTimeout
 			server.Config.ReadTimeout = 10 * time.Second

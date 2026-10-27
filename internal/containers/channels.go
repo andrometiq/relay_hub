@@ -22,6 +22,8 @@ type Channel struct {
 	Enabled           bool           `json:"enabled"`
 	Config            map[string]any `json:"config"`
 	ConfiguredSecrets []string       `json:"configured_secrets"`
+	// ClearSecrets removes stored private values, such as a number's own app secret.
+	ClearSecrets []string `json:"-"`
 }
 
 // ChannelRef names one channel. Keys are unique per provider.
@@ -117,9 +119,9 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 	}
 	var container, site, address, label string
 	var enabled bool
-	var oldCipher, oldNonce []byte
-	err := tx.QueryRow(ctx, `SELECT container_id,coalesce(site_id,''),coalesce(address,''),label,enabled,config_ciphertext,config_nonce
- FROM relay_channel_credentials WHERE channel=$1 AND channel_key=$2 FOR UPDATE`, c.Channel, c.Key).Scan(&container, &site, &address, &label, &enabled, &oldCipher, &oldNonce)
+	var oldCipher, oldNonce, oldConfig []byte
+	err := tx.QueryRow(ctx, `SELECT container_id,coalesce(site_id,''),coalesce(address,''),label,enabled,config_ciphertext,config_nonce,config
+ FROM relay_channel_credentials WHERE channel=$1 AND channel_key=$2 FOR UPDATE`, c.Channel, c.Key).Scan(&container, &site, &address, &label, &enabled, &oldCipher, &oldNonce, &oldConfig)
 	exists := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
@@ -143,10 +145,22 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 	if err != nil {
 		return err
 	}
+	for _, key := range c.ClearSecrets {
+		delete(private, key)
+	}
 	public := map[string]any{}
 	for key, value := range c.Config {
 		if channelPublicKeys[c.Channel][key] {
 			public[key] = value
+		}
+	}
+	stored := map[string]any{}
+	if len(oldConfig) > 0 && json.Unmarshal(oldConfig, &stored) != nil {
+		return errors.New("invalid stored configuration")
+	}
+	for _, key := range statusKeys {
+		if _, set := public[key]; !set && stored[key] != nil && channelPublicKeys[c.Channel][key] {
+			public[key] = stored[key]
 		}
 	}
 	nextAddress := channelAddress(c.Channel, public, secret, address)
@@ -226,4 +240,19 @@ func uniqueKey(ctx context.Context, tx pgx.Tx, c Channel) error {
 		return errors.New("channel key is already used by another channel")
 	}
 	return nil
+}
+
+// SetStatus records the result of a connection check on a channel.
+func (s *Store) SetStatus(ctx context.Context, ref ChannelRef, values map[string]any) error {
+	for key := range values {
+		if !contains(statusKeys, key) {
+			return errors.New("unsupported status field")
+		}
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(ctx, `UPDATE relay_channel_credentials SET config=config||$3::jsonb,updated_at=now() WHERE channel=$1 AND channel_key=$2`, ref.Channel, ref.Key, raw)
+	return err
 }

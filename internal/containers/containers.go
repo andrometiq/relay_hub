@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -23,6 +24,7 @@ type Container struct {
 type Provider struct {
 	Config            map[string]any `json:"config"`
 	ConfiguredSecrets []string       `json:"configured_secrets"`
+	LastEventAt       *time.Time     `json:"last_event_at"`
 }
 
 // ProviderInput edits a container's WhatsApp app. Blank secrets keep stored values.
@@ -83,6 +85,9 @@ func (s *Store) GetContainer(ctx context.Context, id string) (Container, error) 
 		if len(token) > 0 {
 			c.WhatsApp.ConfiguredSecrets = append(c.WhatsApp.ConfiguredSecrets, "access_token")
 		}
+	}
+	if err = s.DB.QueryRow(ctx, `SELECT max(created_at) FROM (SELECT created_at FROM relay_whatsapp_events WHERE container_id=$1 ORDER BY id DESC LIMIT 1) latest`, id).Scan(&c.WhatsApp.LastEventAt); err != nil {
+		return c, err
 	}
 	c.Channels, err = s.Channels(ctx, ChannelFilter{Container: id})
 	return c, err

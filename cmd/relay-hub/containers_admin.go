@@ -105,6 +105,15 @@ func storeFailure(w http.ResponseWriter, err error) {
 	}
 }
 
+// csrf returns the session's CSRF token; the admin UI reads it from any JSON response.
+func csrf(r *http.Request) string {
+	cookie, err := r.Cookie(auth.Cookie)
+	if err != nil {
+		return ""
+	}
+	return auth.CSRF(cookie.Value)
+}
+
 func (a directoryAdmin) changed(w http.ResponseWriter, r *http.Request) {
 	if err := a.reload(r.Context()); err != nil {
 		http.Error(w, "saved, but the runtime reload was rejected: "+err.Error(), http.StatusConflict)
@@ -119,7 +128,7 @@ func (a directoryAdmin) listContainers(w http.ResponseWriter, r *http.Request) {
 		storeFailure(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"containers": rows, "next": next})
+	writeJSON(w, map[string]any{"containers": rows, "next": next, "csrf": csrf(r)})
 }
 
 func (a directoryAdmin) getContainer(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +137,10 @@ func (a directoryAdmin) getContainer(w http.ResponseWriter, r *http.Request) {
 		storeFailure(w, err)
 		return
 	}
-	writeJSON(w, container)
+	writeJSON(w, struct {
+		containers.Container
+		CSRF string `json:"csrf"`
+	}{container, csrf(r)})
 }
 
 type containerInput struct {
@@ -180,12 +192,14 @@ func (a directoryAdmin) containerWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	token, _ := config["verify_token"].(string)
-	writeJSON(w, map[string]any{"path": "/webhooks/whatsapp/" + id, "verify_token": token})
+	writeJSON(w, map[string]any{"path": "/webhooks/whatsapp/" + id, "verify_token": token, "csrf": csrf(r)})
 }
 
 type channelInput struct {
 	containers.Channel
 	Secret string `json:"secret"`
+	// UseContainerApp removes a WhatsApp number's own app secret and verify token.
+	UseContainerApp bool `json:"use_container_app"`
 }
 
 func (a directoryAdmin) createChannel(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +223,9 @@ func (a directoryAdmin) saveChannel(w http.ResponseWriter, r *http.Request, in c
 	in.Container = r.PathValue("container")
 	if in.Config == nil {
 		in.Config = map[string]any{}
+	}
+	if in.UseContainerApp && in.Channel.Channel == "WhatsApp" {
+		in.ClearSecrets = []string{"app_secret", "verify_token"}
 	}
 	if _, err := a.store.GetContainer(r.Context(), in.Container); err != nil {
 		storeFailure(w, err)
@@ -261,6 +278,16 @@ func (a directoryAdmin) candidate(ctx context.Context, ch containers.Channel, se
 	if err != nil {
 		return stored, err
 	}
+	if len(ch.ClearSecrets) > 0 {
+		provider, _, err := a.store.ProviderCredential(ctx, ch.Container)
+		if err != nil {
+			return stored, err
+		}
+		for _, key := range ch.ClearSecrets {
+			delete(ch.Config, key)
+			stored.Config[key] = provider[key]
+		}
+	}
 	for key, value := range ch.Config {
 		if text, ok := value.(string); !ok || text != "" {
 			stored.Config[key] = value
@@ -275,8 +302,9 @@ func (a directoryAdmin) candidate(ctx context.Context, ch containers.Channel, se
 // checkChannel validates an enabled channel before save. A WhatsApp number is
 // checked with Meta and gets its connection status.
 func (a directoryAdmin) checkChannel(ctx context.Context, ch *containers.Channel, secret string) error {
-	delete(ch.Config, "connection_status")
-	delete(ch.Config, "verified_at")
+	for _, key := range []string{"connection_status", "verified_at", "webhook_status", "checked_at"} {
+		delete(ch.Config, key)
+	}
 	if !ch.Enabled {
 		if ch.Channel == "WhatsApp" {
 			ch.Config["connection_status"] = "disabled"
@@ -320,7 +348,7 @@ func (a directoryAdmin) listSites(w http.ResponseWriter, r *http.Request) {
 		storeFailure(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"sites": rows, "next": next})
+	writeJSON(w, map[string]any{"sites": rows, "next": next, "csrf": csrf(r)})
 }
 
 func (a directoryAdmin) getSite(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +357,10 @@ func (a directoryAdmin) getSite(w http.ResponseWriter, r *http.Request) {
 		storeFailure(w, err)
 		return
 	}
-	writeJSON(w, site)
+	writeJSON(w, struct {
+		containers.Site
+		CSRF string `json:"csrf"`
+	}{site, csrf(r)})
 }
 
 type siteInput struct {

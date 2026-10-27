@@ -28,8 +28,10 @@ ALTER TABLE relay_sites RENAME CONSTRAINT relay_accounts_account_id_key TO relay
 ALTER TABLE relay_sites RENAME CONSTRAINT relay_accounts_pkey TO relay_sites_pkey;
 ALTER INDEX relay_accounts_option_prefix RENAME TO relay_sites_option_prefix;
 ALTER TABLE relay_sites
+ ADD COLUMN name text NOT NULL DEFAULT '' CHECK (length(name) <= 200),
  ADD COLUMN secret_ciphertext bytea NOT NULL DEFAULT ''::bytea,
- ADD COLUMN secret_nonce bytea NOT NULL DEFAULT ''::bytea;
+ ADD COLUMN secret_nonce bytea NOT NULL DEFAULT ''::bytea,
+ ADD COLUMN last_callback_at timestamptz;
 
 ALTER TABLE relay_user_accounts RENAME TO relay_user_sites;
 ALTER TABLE relay_user_sites RENAME COLUMN account_id TO site_id;
@@ -65,6 +67,7 @@ ALTER TABLE relay_whatsapp_events
  ADD COLUMN container_id text,
  ADD COLUMN replayed_at timestamptz;
 UPDATE relay_whatsapp_events SET site_id = account, container_id = account;
+CREATE INDEX relay_whatsapp_events_container ON relay_whatsapp_events(container_id, id);
 CREATE INDEX relay_whatsapp_events_unassigned ON relay_whatsapp_events(id) WHERE site_id IS NULL AND replayed_at IS NULL;
 ALTER TABLE relay_channel_events ADD COLUMN site_id text, ADD COLUMN replayed_at timestamptz;
 UPDATE relay_channel_events SET site_id = account;
