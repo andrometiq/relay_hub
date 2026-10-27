@@ -6,9 +6,34 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
+
+// simulationNumbers maps each fake phone number ID to its WABA and display number.
+var simulationNumbers = map[string]struct{ WABA, Display string }{
+	"110": {"220", "919999999999"},
+	"111": {"221", "919999999998"},
+}
+
+// graphNode splits a fake Graph path into its node and edge, and reports
+// whether the node is a fake number (phone) or a fake WABA.
+func graphNode(path string) (node, edge string, phone, waba bool) {
+	parts := strings.Split(strings.TrimPrefix(path, "/v25.0/"), "/")
+	if len(parts) > 2 || !strings.HasPrefix(path, "/v25.0/") {
+		return "", "", false, false
+	}
+	node = parts[0]
+	if len(parts) == 2 {
+		edge = parts[1]
+	}
+	_, phone = simulationNumbers[node]
+	for _, number := range simulationNumbers {
+		waba = waba || number.WABA == node
+	}
+	return node, edge, phone, waba
+}
 
 type fakeMeta struct {
 	mu        sync.Mutex
@@ -32,6 +57,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	status := 200
 	var result any
+	node, edge, phone, waba := graphNode(r.URL.Path)
 	fault := m.records.fault("graph")
 	captured := true
 	m.mu.Lock()
@@ -43,7 +69,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Header.Get("Authorization") != "Bearer sim-provider-token":
 		status = 401
 		result = map[string]any{"error": "invalid fake provider token"}
-	case r.Method == "POST" && r.URL.Path == "/v25.0/110/messages":
+	case r.Method == "POST" && phone && edge == "messages":
 		m.messages++
 		id := providerID("wamid.sim")
 		result = map[string]any{"messages": []any{map[string]any{"id": id}}}
@@ -53,8 +79,8 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Tracking string `json:"biz_opaque_callback_data"`
 		}
 		// Campaign sends are counted by bulkReceipts instead of captured one by one.
-		captured = json.Unmarshal(body, &send) != nil || send.Type != "template" || !m.bulk.accept(send.To, id, send.Tracking)
-	case r.Method == "POST" && r.URL.Path == "/v25.0/220/message_templates":
+		captured = json.Unmarshal(body, &send) != nil || send.Type != "template" || !m.bulk.accept(node, send.To, id, send.Tracking)
+	case r.Method == "POST" && waba && edge == "message_templates":
 		var row map[string]any
 		if json.Unmarshal(body, &row) != nil || row["name"] == nil {
 			status = 400
@@ -65,7 +91,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		row["status"] = "PENDING"
 		m.templates = append(m.templates, row)
 		result = map[string]any{"id": row["id"], "status": "PENDING", "category": row["category"]}
-	case r.Method == "GET" && r.URL.Path == "/v25.0/220/message_templates":
+	case r.Method == "GET" && waba && edge == "message_templates":
 		filtered := []map[string]any{}
 		for _, row := range m.templates {
 			if name := r.URL.Query().Get("name"); name == "" || row["name"] == name {
@@ -91,11 +117,11 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if end < len(filtered) {
 			query := r.URL.Query()
 			query.Set("after", fmt.Sprint(end))
-			page["paging"] = map[string]any{"cursors": map[string]any{"after": fmt.Sprint(end)}, "next": "https://graph.facebook.com/v25.0/220/message_templates?" + query.Encode()}
+			page["paging"] = map[string]any{"cursors": map[string]any{"after": fmt.Sprint(end)}, "next": "https://graph.facebook.com/v25.0/" + node + "/message_templates?" + query.Encode()}
 		}
 		result = page
-	case r.Method == "GET" && r.URL.Path == "/v25.0/110":
-		result = map[string]any{"id": "110", "display_phone_number": "919999999999", "verified_name": "Local simulation", "quality_rating": "GREEN"}
+	case r.Method == "GET" && phone && edge == "":
+		result = map[string]any{"id": node, "display_phone_number": simulationNumbers[node].Display, "verified_name": "Local simulation", "quality_rating": "GREEN"}
 	default:
 		status = 404
 		result = map[string]any{"error": "unimplemented fake Meta route"}

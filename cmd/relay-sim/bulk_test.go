@@ -12,12 +12,12 @@ func TestBulkReceiptsScheduleStatusesFailuresAndReplies(t *testing.T) {
 	b.numbers = map[string]bool{"916200000001": true, "916200000002": true}
 	b.failures["916200000002"] = 131049
 	b.repliers["916200000001"] = true
-	if b.accept("916200000009", "wamid.other", "relay-outbox:9") {
+	if b.accept("110", "916200000009", "wamid.other", "relay-outbox:9") {
 		t.Fatal("a number outside the campaign was answered")
 	}
-	b.accept("916200000001", "wamid.one", "relay-outbox:1")
-	b.accept("916200000002", "wamid.two", "relay-outbox:2")
-	b.accept("916200000001", "wamid.again", "relay-outbox:3")
+	b.accept("110", "916200000001", "wamid.one", "relay-outbox:1")
+	b.accept("110", "916200000002", "wamid.two", "relay-outbox:2")
+	b.accept("110", "916200000001", "wamid.again", "relay-outbox:3")
 	if b.stats.Sends != 3 || b.stats.Duplicates != 1 {
 		t.Fatalf("sends %d duplicates %d", b.stats.Sends, b.stats.Duplicates)
 	}
@@ -44,7 +44,7 @@ func TestBulkReceiptsScheduleStatusesFailuresAndReplies(t *testing.T) {
 func TestBulkReceiptsRetryWebhooksHubRefused(t *testing.T) {
 	b := newBulkReceipts()
 	b.numbers["916200000001"] = true
-	b.accept("916200000001", "wamid.one", "relay-outbox:1")
+	b.accept("110", "916200000001", "wamid.one", "relay-outbox:1")
 	codes := []int{503, 200, 200, 200}
 	posted := []map[string]any{}
 	b.post = func(_ context.Context, payload []byte) (int, error) {

@@ -37,7 +37,7 @@ func emailFixture(t *testing.T, path string) (*fakeEmail, *relayemail.Client) {
 		t.Fatal(err)
 	}
 	t.Cleanup(fake.close)
-	client, err := fake.client("sim-v1")
+	client, err := fake.client("sim-v1", "inbox@sim.invalid", true)
 	if err != nil {
 		t.Fatal(err)
 	}

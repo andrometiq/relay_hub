@@ -161,8 +161,15 @@ func (e *fakeEmail) close() {
 	e.mu.Unlock()
 	e.workers.Wait()
 }
-func (e *fakeEmail) client(account string) (*relayemail.Client, error) {
-	return relayemail.NewWithTransport(relayemail.Config{AccountID: account, Enabled: true, Host: "127.0.0.1", Port: 587, Username: simulationMailUser, Password: simulationMailPassword, From: "inbox@sim.invalid", IMAPHost: "127.0.0.1", IMAPPort: 993, TrustedAuthservID: simulationAuthserv, TrustedDSNDomain: "sim.invalid"}, e.roots, e.dial)
+
+// client is a mailbox on the fake servers. Only one mailbox may read the
+// shared fake IMAP inbox; the others receive mail through their webhook.
+func (e *fakeEmail) client(account, from string, imap bool) (*relayemail.Client, error) {
+	config := relayemail.Config{AccountID: account, Enabled: true, Host: "127.0.0.1", Port: 587, Username: simulationMailUser, Password: simulationMailPassword, From: from, TrustedAuthservID: simulationAuthserv, TrustedDSNDomain: "sim.invalid"}
+	if imap {
+		config.IMAPHost, config.IMAPPort = "127.0.0.1", 993
+	}
+	return relayemail.NewWithTransport(config, e.roots, e.dial)
 }
 func (e *fakeEmail) dial(ctx context.Context, network, address string) (net.Conn, error) {
 	if network != "tcp" {

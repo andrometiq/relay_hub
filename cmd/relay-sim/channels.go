@@ -22,7 +22,7 @@ func (s *simulation) activateChannels(a whatsapp.Account) error {
 	if err != nil {
 		return err
 	}
-	mail, err := s.email.client(a.ID)
+	mail, err := s.email.client(a.ID, "inbox@sim.invalid", true)
 	if err != nil {
 		return err
 	}
@@ -62,10 +62,16 @@ func (s *simulation) channelWebhook(channel string) http.HandlerFunc {
 			return
 		}
 		store := channels.Store{DB: s.db, Wake: s.channelWake}
+		provider := map[string]string{"telegram": "Telegram", "email": "Email"}[channel]
+		key, known := s.registry.WebhookKey(provider, r.PathValue("account"))
+		if !known {
+			http.NotFound(w, r)
+			return
+		}
 		if channel == "telegram" {
-			err = s.registry.TelegramWebhook(r.Context(), store, r.PathValue("account"), s.token, []byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), raw)
+			err = s.registry.TelegramWebhook(r.Context(), store, key, s.token, []byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), raw)
 		} else {
-			err = s.registry.EmailWebhook(r.Context(), store, r.PathValue("account"), s.token, []byte(r.Header.Get("X-Relay-Email-Secret")), raw)
+			err = s.registry.EmailWebhook(r.Context(), store, key, s.token, []byte(r.Header.Get("X-Relay-Email-Secret")), raw)
 		}
 		if err != nil {
 			http.Error(w, "ingress rejected", 400)
@@ -74,12 +80,17 @@ func (s *simulation) channelWebhook(channel string) http.HandlerFunc {
 		writeJSON(w, map[string]bool{"ok": true})
 	}
 }
-func (s *simulation) emitChannel(ctx context.Context, channel string, payload []byte, invalid bool) (int, error) {
-	secret, err := s.registry.TelegramWebhookSecret("sim-v1", s.token)
-	header := "X-Telegram-Bot-Api-Secret-Token"
+
+// emitChannel posts a provider webhook for one bot or mailbox (key) to its public path.
+func (s *simulation) emitChannel(ctx context.Context, channel, key string, payload []byte, invalid bool) (int, error) {
+	if key == "" {
+		key = "sim-v1"
+	}
+	secret, err := s.registry.TelegramWebhookSecret(key, s.token)
+	header, provider := "X-Telegram-Bot-Api-Secret-Token", "Telegram"
 	if channel == "email" {
-		secret, err = s.registry.EmailWebhookSecret("sim-v1", s.token)
-		header = "X-Relay-Email-Secret"
+		secret, err = s.registry.EmailWebhookSecret(key, s.token)
+		header, provider = "X-Relay-Email-Secret", "Email"
 	}
 	if err != nil {
 		return 0, err
@@ -87,7 +98,7 @@ func (s *simulation) emitChannel(ctx context.Context, channel string, payload []
 	if invalid {
 		secret = "invalid"
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", s.hub.String()+"/webhooks/"+channel+"/sim-v1", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", s.hub.String()+"/webhooks/"+channel+"/"+s.registry.WebhookPath(provider, key), bytes.NewReader(payload))
 	if err != nil {
 		return 0, err
 	}
@@ -126,6 +137,7 @@ func (s *simulation) providerControl(w http.ResponseWriter, r *http.Request) {
 		ID             string          `json:"id"`
 		Webhook        bool            `json:"webhook"`
 		Invalid        bool            `json:"invalid_signature"`
+		Key            string          `json:"key"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 9<<20)).Decode(&in) != nil {
 		http.Error(w, "invalid request", 400)
@@ -139,7 +151,7 @@ func (s *simulation) providerControl(w http.ResponseWriter, r *http.Request) {
 	case "/_sim/telegram/emit":
 		err = s.telegram.queue(in.Payload)
 		if err == nil {
-			result["status"], err = s.emitChannel(r.Context(), "telegram", in.Payload, in.Invalid)
+			result["status"], err = s.emitChannel(r.Context(), "telegram", in.Key, in.Payload, in.Invalid)
 		}
 	case "/_sim/telegram/queue":
 		err = s.telegram.queue(in.Payload)
@@ -165,7 +177,7 @@ func (s *simulation) providerControl(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			payload, _ := json.Marshal(map[string]any{"id": in.ID, "raw": raw})
-			result["status"], err = s.emitChannel(r.Context(), "email", payload, in.Invalid)
+			result["status"], err = s.emitChannel(r.Context(), "email", in.Key, payload, in.Invalid)
 		} else {
 			result["uid"], err = s.email.appendMail(raw, in.UID)
 		}
