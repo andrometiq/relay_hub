@@ -1,33 +1,43 @@
 # Relay Hub architecture
 
-Relay Hub is the Go transport boundary. Relay Core is a Frappe app installed alongside business apps and uses Frappe authentication. Hub's separate administrator login manages transport accounts, users and tokens; it is not a replacement Core login.
+Relay Hub is the Go transport boundary. Relay Core is a Frappe app installed alongside business apps and uses Frappe authentication. Hub's separate administrator login manages containers, sites, users and tokens; it is not a replacement Core login.
 
 ```mermaid
 flowchart LR
     UI[Hub administration UI] -->|Secure session and CSRF| Hub[Go Relay Hub]
-    Core[Relay Core on each Frappe site] -->|Account-scoped MCP token| Hub
-    Hub --> Auth[(PostgreSQL accounts, users, sessions, audit)]
+    Core[Relay Core on each Frappe site] -->|Site-scoped MCP token| Hub
+    Hub --> Auth[(PostgreSQL containers, sites, users, sessions, audit)]
     Hub -->|WhatsApp delivery intents| Queue[(Durable WhatsApp outbox)]
-    Queue --> Workers[Bounded workers and account pacing]
+    Queue --> Workers[Bounded workers and number pacing]
     Workers --> WA[Meta WhatsApp]
     Hub -->|Direct submission| TG[Telegram Bot API]
     Hub -->|TLS SMTP| Mail[Email server]
     WA -->|Verified webhook| Events[(Durable event journals)]
-    TG -->|Per-account verified webhook| Events
+    TG -->|Per-bot verified webhook| Events
     Ingress[Normalized email ingress] -->|Verified JSON| Events
     Events --> Callbacks[Durable callback cursors]
-    Callbacks -->|Signed events and status batches| Core
+    Callbacks -->|Signed events and status batches per site| Core
 ```
 
 ## Ownership and identity
 
-A Hub account links one Core site and can enable several channels. Provider credentials stay in Hub; tokens authorize an account and explicit tool scopes. Core resolves Contacts, business records, teams, user permissions, conversation bindings and AI actions. An account-level Hub permission does not replace a business-record check in Core.
+A container groups provider apps and their channels: for example one Meta app with several WhatsApp numbers in several WABAs, and some Telegram bots and mailboxes. A site is one Core site. Each channel belongs to one site, or to no site. Many sites can share one container. See [configuration](configuration.md#containers-sites-and-channels).
+
+Provider credentials stay in the Hub. An API token belongs to one site and has explicit tool scopes. The token can use only the channels of its site. Core resolves Contacts, business records, teams, user permissions, conversation bindings and AI actions. A Hub scope does not replace a business-record check in Core.
 
 PostgreSQL stores sequential numeric identities for high-volume journals and queue rows. Provider message IDs, Telegram chat/topic IDs and caller request keys are separate fields. Group conversations remain separate from participant DMs; quoted replies retain the original provider message ID. See the [database model](database-authentication-model.md) and [API reference](api-reference.md).
 
+## Routing between sites
+
+Inbound: one WhatsApp webhook address serves a container. The Hub checks the signature with the container app secret, then finds the number by its phone number ID and journals the event with the number's site. Template status changes come per WABA; the Hub marks the WABA's templates as old and fetches them again only when a number of that WABA syncs. Telegram and email events take the site of their bot or mailbox. An event of a channel without a site is stored and answered with success, but no site gets it until an administrator replays it.
+
+Callbacks: each batch goes to one site. The top-level `account` field is the site ID and `channel_key` is the channel. Each event, status and bulk update also has `channel_key` and `to` (the number, bot username or mailbox address that received it), so Core can reply from the same channel. Each channel has its own callback cursor, so a slow site does not hold back another site. A site also gets a `relay_channels` event when its channel list changes.
+
+Outbound: a send takes the channel from its `channel` argument, or the only channel of that type that the site has. A channel of another site is refused. A send keeps its site after it is queued. Pricing of a WABA that another site shares needs the `PHONE` dimension; the Hub returns only the site's own numbers and adds `channel_key` to each row.
+
 ## Send and receive guarantees
 
-WhatsApp's durable outbox admits bounded batches of up to 50 intents with stable-key deduplication. Workers claim work through PostgreSQL and obey account pacing. A queued result means accepted locally, while submitted means the provider returned an accepted result; neither proves delivery or reading.
+WhatsApp's durable outbox admits bounded batches of up to 50 intents with stable-key deduplication. Workers claim work through PostgreSQL and obey the pacing of each number. A queued result means accepted locally, while submitted means the provider returned an accepted result; neither proves delivery or reading.
 
 A lost provider response can leave an intent uncertain. The Hub does not blindly replay that mutation. Stored status events can reconcile receipts without resending. Direct WhatsApp execution, Telegram message operations and SMTP sending do not inherit the WhatsApp queue's admission/deduplication guarantees.
 
@@ -35,7 +45,7 @@ Verified inbound payloads are journaled before acknowledgement. Callback cursors
 
 ## Bounded resources
 
-The launcher defaults to limited Go/build concurrency. WhatsApp adapts worker count between one and the configured ceiling, up to eight; this is process worker scaling, not automatic deployment scaling. PostgreSQL coordinates account send pacing across workers.
+The launcher defaults to limited Go/build concurrency. WhatsApp adapts worker count between one and the configured ceiling, up to eight; this is process worker scaling, not automatic deployment scaling. PostgreSQL coordinates the send pacing of each number across workers.
 
 Queries, batches, provider bodies, photo dimensions and sticker downloads have explicit bounds. Frontend lists use [bounded rendering](frappe-virtualization.md) and server pagination. Capacity depends on provider latency, database limits and workload; simulations do not promise a production throughput figure.
 
@@ -45,7 +55,7 @@ Runtime registry replacement publishes validated snapshots so later requests see
 
 The main channel secret is encrypted. Some generic configuration fields that contain secrets are not; the [configuration reference](configuration.md#current-administration-limits) records that production gap and the current grant-list limitation.
 
-Sticker retrieval requires an account-owned inbound record and uses bounded, constrained provider downloads. Hub returns bytes and MIME metadata to Core, which checks message visibility before serving the browser. This is not a general private media store, attachment archive or call-recording service.
+Sticker retrieval requires an inbound record of one of the site's channels and uses bounded, constrained provider downloads. Hub returns bytes and MIME metadata to Core, which checks message visibility before serving the browser. This is not a general private media store, attachment archive or call-recording service.
 
 ## Current boundaries
 
