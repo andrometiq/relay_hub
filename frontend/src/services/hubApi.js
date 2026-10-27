@@ -13,12 +13,12 @@ export function safeServerError(text, fallback) {
     .replace(/[\u0000-\u0008\u000b-\u001f]/g, '').slice(0, 800);
 }
 
-export async function hubApi(path, body) {
+export async function hubApi(path, body, method = 'POST') {
   const write = body !== undefined;
   let response;
   try {
     response = await fetch(`./api/${path}`, {
-      method: write ? 'POST' : 'GET', credentials: 'same-origin',
+      method: write ? method : 'GET', credentials: 'same-origin',
       headers: { Accept: 'application/json', ...(write ? { 'Content-Type': 'application/json', 'X-Relay-CSRF': csrf } : {}) },
       ...(write ? { body: JSON.stringify(body) } : {}),
     });

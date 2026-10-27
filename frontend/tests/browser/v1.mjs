@@ -12,12 +12,15 @@ const errors = [], writes = [], reads = [];
 page.on('pageerror', error => errors.push(error.message));
 page.on('console', message => { if(message.type() === 'error' && !message.text().includes('Failed to load resource')) errors.push(message.text()); });
 const account = {id:'local-only-review',site:'https://local.invalid',enabled:false,channels:[{channel:'WhatsApp',enabled:true,config:{connection_status:'connected',verified_at:'2026-10-24',groups:true,calls:true,templates:true,sync_metadata:true},configured_secrets:['secret','app_secret','verify_token']},{channel:'Telegram',enabled:true,config:{retained:true}}]};
-let reloadFail = true, callbackFail = true, callbacks = true, delivery = true;
+const number = {key:'local-number',channel:'WhatsApp',container:'local-main',label:'Local number',address:'1001',site:'',enabled:true,config:{phone_id:'1001',waba_id:'2001'},configured_secrets:['secret']};
+const container = {id:'local-main',name:'Local main',enabled:true,whatsapp:{config:{app_id:'3001',graph_version:'v23.0'},configured_secrets:['app_secret','verify_token']},channels:[number]};
+const site = {id:account.id,origin:'https://local.invalid',enabled:true,configured_secrets:[],channels:[]};
+let callbackFail = true, callbacks = true, delivery = true;
+await page.route('**/auth/tokens**', route => route.fulfill({json:{Tokens:[],More:false}}));
 await page.route('**/api/**', async route => {
  const req = route.request(), url = new URL(req.url()), path = url.pathname.split('/api/')[1];
- if(req.method() === 'POST') {
-  const body = req.postDataJSON(); writes.push({path,body});
-  if(path === 'accounts/reload' && reloadFail) return route.fulfill({status:503,body:'Local activation unavailable'});
+ if(req.method() !== 'GET') {
+  const body = req.postDataJSON(); writes.push({method:req.method(),path,body});
   if(path === 'callback-failures/retry') { if(callbackFail) return route.fulfill({status:409,body:'Callback remains quarantined'}); callbacks = false; }
   if(path === 'delivery-queue') delivery = false;
   return route.fulfill({status:204});
@@ -25,6 +28,10 @@ await page.route('**/api/**', async route => {
  reads.push(path); let data = {};
  if(path === 'accounts') data = {accounts:[account],total:1,csrf:'local-only-csrf'};
  if(path === 'channels') data = {whatsapp:1};
+ if(path === 'containers') data = {containers:[container],next:''};
+ if(path === 'containers/local-main') data = container;
+ if(path === 'sites') data = {sites:[site],next:''};
+ if(path === `sites/${account.id}`) data = site;
  if(path === 'deliveries') data = {counts:{queued:3,uncertain:2,failed:1}};
  if(path === 'accounts/health') data = {webhook_received_at:'2026-10-24 09:00',core_confirmed_at:'2026-10-24 09:01',callback_pending:3,callback_failed:2,callback_quarantined:1};
  if(path === 'accounts/metadata') data = {status:'ready',last_success:'2026-10-24',profile:{display_phone_number:'+1555010100',verified_name:'Local fixture',quality_rating:'GREEN'},templates:[{}]};
@@ -46,16 +53,13 @@ try {
  await page.goto(origin);
  await page.getByText('3 queued · 2 uncertain · 1 failed').waitFor();
  await page.getByText('2026-10-24 09:01',{exact:true}).waitFor();
- await nav('Accounts');
- await page.getByRole('button',{name:'Open account local-only-review',exact:true}).click();
- await page.getByRole('button',{name:'Save account',exact:true}).click();
- await page.getByText(/Account saved. Activation failed:/).waitFor();
- assert.equal(writes[0].body.account.channels.find(row=>row.channel==='Telegram').enabled,true);
- assert.equal(writes[0].body.account.channels.find(row=>row.channel==='WhatsApp').config.groups,true);
- reloadFail = false;
- await page.getByRole('button',{name:'Retry activation',exact:true}).click();
- await page.getByText(/Runtime reloaded. Check Connections/).waitFor();
- await page.getByRole('button',{name:'Cancel',exact:true}).click();
+ await nav('Sites');
+ await page.getByRole('button',{name:`Open site ${account.id}`,exact:true}).click();
+ await page.getByRole('button',{name:'Add account',exact:true}).click();
+ await page.getByRole('checkbox',{name:'Local number',exact:true}).check();
+ await page.getByRole('button',{name:'Add 1 account',exact:true}).click();
+ assert.deepEqual(writes.at(-1),{method:'PUT',path:`sites/${account.id}/channels`,body:{channels:[{channel:'WhatsApp',key:'local-number'}]}});
+ await nav('Overview');
  const before = reads.filter(path=>path==='accounts').length;
  await page.getByRole('button',{name:'Refresh',exact:true}).click();
  await page.waitForTimeout(150);
@@ -88,19 +92,20 @@ try {
  await page.getByText('account.save',{exact:true}).waitFor();
  for(const width of [320,375,640,768,1440]) {
   await page.setViewportSize({width,height:900});
-  for(const name of ['Overview','Accounts','Connections','Deliveries','Events']) {
+  for(const name of ['Overview','Containers','Sites','Connections','Deliveries','Events']) {
    await nav(name); await page.waitForTimeout(60); await noOverflow(`${name} at ${width}`);
    assert.equal(await page.getByRole('button',{name:/^Notifications/}).isVisible(),true);
   }
  }
  await page.setViewportSize({width:375,height:850});
- await nav('Accounts'); await page.getByRole('button',{name:'New account',exact:true}).click();
- for(const step of ['Account','Meta connection','Webhook','Features','Core delivery']) {
-  await page.getByRole('button',{name:step,exact:true}).click(); await noOverflow(`Editor ${step}`);
+ await nav('Containers'); await page.getByRole('button',{name:'Open container Local main',exact:true}).click();
+ for(const tab of ['WhatsApp','Telegram','Email']) {
+  await page.getByRole('tab',{name:new RegExp('^'+tab)}).click();
+  await page.getByRole('button',{name:/^Add (WhatsApp number|Telegram bot|mailbox)$/}).click(); await noOverflow(`Add ${tab}`);
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  }
  await page.screenshot({path:process.cwd()+'/.runtime/v1-mobile.png'});
- await page.getByRole('button',{name:'Cancel',exact:true}).click();
  const idleReads=reads.length; await page.waitForTimeout(1200); assert.equal(reads.length,idleReads,'No polling');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,fixtureAPIs:true,widths:[320,375,640,768,1440],hiddenConfigPreserved:true,activationRetry:true,callbackReplayFailureAndSuccess:true,cancellationRefresh:true,noPolling:true,browserErrors:errors}));
+ console.log(JSON.stringify({passed:true,fixtureAPIs:true,widths:[320,375,640,768,1440],siteAssignment:true,callbackReplayFailureAndSuccess:true,cancellationRefresh:true,noPolling:true,browserErrors:errors}));
 } catch(error) { console.error({errors,body:(await page.locator('body').innerText()).slice(-5000)}); await page.screenshot({path:process.cwd()+'/.runtime/v1-failure.png'}); throw error; } finally {await browser.close();}

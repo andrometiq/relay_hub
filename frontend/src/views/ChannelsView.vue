@@ -80,7 +80,7 @@ defineExpose({ refresh: () => list.value?.reload() });
         <h2>Connections</h2>
         <p>Provider readiness and metadata sync for every Relay account.</p>
       </div>
-      <Button label="Manage accounts" @click="$emit('navigate', 'Accounts')" />
+      <Button label="Manage containers" @click="$emit('navigate', 'Containers')" />
     </div>
     <div class="entity-toolbar">
       <FormControl
@@ -183,7 +183,7 @@ defineExpose({ refresh: () => list.value?.reload() });
             </div>
           </dl>
           <p v-else-if="!selected.configured" class="text-sm text-ink-gray-5">
-            Open Accounts to configure WhatsApp for this site.
+            Open Containers to configure WhatsApp numbers.
           </p>
           </template>
         </div>
@@ -192,11 +192,11 @@ defineExpose({ refresh: () => list.value?.reload() });
         <div class="flex justify-end gap-2">
           <Button label="Close" @click="close" />
           <Button
-            label="Edit account"
+            label="Open containers"
             variant="solid"
             @click="
               close();
-              $emit('navigate', 'Accounts');
+              $emit('navigate', 'Containers');
             "
           />
         </div>

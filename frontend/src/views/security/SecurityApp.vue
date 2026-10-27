@@ -22,7 +22,7 @@ onMounted(refresh)
   <button v-if="mobile" class="hub-nav-backdrop" aria-label="Close navigation" @click="mobile=false" />
   <aside class="hub-nav" :class="{'mobile-nav-open':mobile}" aria-label="Account navigation">
     <a :href="prefix+'/'" class="hub-brand" aria-label="Relay Hub home"><span class="hub-brand-mark"><FeatherIcon name="radio" class="h-4 w-4" /></span><strong class="nav-label">Relay Hub</strong></a>
-    <a v-for="[path,label] in [['overview','Overview'],['accounts','Accounts'],['connections','Connections'],['deliveries','Deliveries'],['events','Events']]" :key="path" :href="prefix+'/#/'+path" class="hub-nav-item"><span class="nav-label">{{ label }}</span></a>
+    <a v-for="[path,label] in [['overview','Overview'],['containers','Containers'],['sites','Sites'],['connections','Connections'],['deliveries','Deliveries'],['events','Events']]" :key="path" :href="prefix+'/#/'+path" class="hub-nav-item"><span class="nav-label">{{ label }}</span></a>
     <div class="hub-nav-caption nav-label">Users &amp; access</div>
     <a v-for="[key,label] in nav" :key="key" :href="prefix+'/auth/'+key" @click.prevent="navigate(key)" class="hub-nav-item" :class="{selected:view===key}" :aria-label="label" :title="label" :aria-current="view===key?'page':undefined">
       <FeatherIcon :name="icons[key]" class="h-4 w-4" /><span class="nav-label">{{label}}</span>
