@@ -487,7 +487,11 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 	case "account.profile":
 		method = "GET"
 		path = a.PhoneID
-		query.Set("fields", "id,display_phone_number,verified_name,quality_rating")
+		query.Set("fields", phoneProfileFields)
+	case "account.business":
+		method = "GET"
+		path = a.WABAID
+		query.Set("fields", businessProfileFields)
 	case "templates.delete":
 		if !a.Templates || !templateName.MatchString(in.Name) {
 			return nil, errors.New("enabled templates and template name required")
@@ -549,6 +553,7 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		method = "GET"
 		path = a.WABAID + "/message_templates"
 		query.Set("limit", "50")
+		query.Set("fields", templateListFields)
 		if len(in.After) > 2048 {
 			return nil, errors.New("invalid cursor")
 		}

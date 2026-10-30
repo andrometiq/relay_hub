@@ -272,6 +272,9 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		if templateChange(entry) {
 			_ = s.Metadata.MarkTemplatesStale(r.Context(), entry.ID)
 		}
+		if accountChange(entry) {
+			_ = s.Metadata.RefreshAccounts(r.Context(), entry.ID)
+		}
 	}
 	w.WriteHeader(200)
 }
@@ -296,6 +299,17 @@ func webhookAccounts(accounts []Account, path string) []Account {
 func templateChange(entry webhookEntry) bool {
 	for _, change := range entry.Changes {
 		if strings.Contains(change.Field, "template") {
+			return true
+		}
+	}
+	return false
+}
+
+// accountChange reports a number quality, limit, name or WABA review webhook.
+func accountChange(entry webhookEntry) bool {
+	for _, change := range entry.Changes {
+		switch change.Field {
+		case "phone_number_quality_update", "phone_number_name_update", "account_update", "account_review_update", "business_capability_update":
 			return true
 		}
 	}

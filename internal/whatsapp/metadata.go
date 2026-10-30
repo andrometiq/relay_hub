@@ -9,8 +9,17 @@ import (
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
 	"sync/atomic"
 	"time"
+)
+
+// Graph fields of the number, its WABA and its templates that the Hub reads for account health.
+const (
+	phoneProfileFields    = "id,display_phone_number,verified_name,quality_rating,whatsapp_business_manager_messaging_limit,throughput,status,name_status"
+	businessProfileFields = "id,name,account_review_status,business_verification_status,whatsapp_business_manager_messaging_limit"
+	// Meta's default template fields plus quality and rejection reason, which it leaves out by default.
+	templateListFields = "id,name,status,language,category,previous_category,sub_category,components,parameter_format,message_send_ttl_seconds,is_primary_device_delivery_only,disable_ios_autofill,quality_score,rejected_reason"
 )
 
 // MetadataSync only calls providers for accounts explicitly opting into sync.
@@ -91,12 +100,18 @@ func (m *MetadataSync) Sync(ctx context.Context, a Account) error {
 	if err != nil {
 		return fail()
 	}
-	safeProfile := map[string]any{}
-	for _, key := range []string{"id", "display_phone_number", "verified_name", "quality_rating"} {
-		if value, ok := profile[key].(string); ok && len(value) <= 1000 {
-			safeProfile[key] = value
+	if !m.current(a) {
+		return fail()
+	}
+	// Number health stays useful when the token cannot read the WABA, so its values are optional.
+	business, _ := m.Service.Execute(ctx, a, Input{Operation: "account.business"})
+	safeProfile := safeStrings(profile, strings.Split(phoneProfileFields, ","))
+	if throughput, ok := profile["throughput"].(map[string]any); ok {
+		if level, ok := throughput["level"].(string); ok && len(level) <= 100 {
+			safeProfile["throughput_level"] = level
 		}
 	}
+	safeProfile["business"] = safeStrings(business, strings.Split(businessProfileFields, ","))
 	if !m.current(a) {
 		return fail()
 	}
@@ -107,6 +122,18 @@ func (m *MetadataSync) Sync(ctx context.Context, a Account) error {
 	}
 	return nil
 }
+
+// safeStrings keeps the short string values of the listed keys.
+func safeStrings(data map[string]any, keys []string) map[string]any {
+	safe := map[string]any{}
+	for _, key := range keys {
+		if value, ok := data[key].(string); ok && len(value) <= 1000 {
+			safe[key] = value
+		}
+	}
+	return safe
+}
+
 func (m *MetadataSync) Read(ctx context.Context, account string) (map[string]any, error) {
 	var profile []byte
 	templates := []byte(`[]`)
@@ -201,7 +228,7 @@ func (m *MetadataSync) fetchTemplates(ctx context.Context, a Account) ([]map[str
 				return nil, false, failed
 			}
 			safe := map[string]any{}
-			for _, key := range []string{"id", "name", "status", "language", "category", "components", "parameter_format"} {
+			for _, key := range []string{"id", "name", "status", "language", "category", "components", "parameter_format", "quality_score", "rejected_reason"} {
 				if field, ok := item[key]; ok {
 					safe[key] = field
 				}
@@ -226,6 +253,21 @@ func (m *MetadataSync) fetchTemplates(ctx context.Context, a Account) ([]map[str
 		after = cursor
 	}
 	return templates, true, nil
+}
+
+// RefreshAccounts makes the next sync tick read the profiles of the WABA's numbers again.
+func (m *MetadataSync) RefreshAccounts(ctx context.Context, waba string) error {
+	if m == nil || m.DB == nil || waba == "" {
+		return nil
+	}
+	accounts := []string{}
+	for _, a := range m.Service.AccountsSnapshot() {
+		if a.WABAID == waba {
+			accounts = append(accounts, a.ID)
+		}
+	}
+	_, err := m.DB.Exec(ctx, `UPDATE relay_whatsapp_metadata SET next_attempt=now() WHERE account=ANY($1)`, accounts)
+	return err
 }
 
 // MarkTemplatesStale makes the next sync of any number in the WABA fetch its templates again.

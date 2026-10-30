@@ -63,7 +63,7 @@ A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send
 
 | Group | Operations |
 | --- | --- |
-| Account | `capabilities`, `account.profile`, `account.metadata`, `billing.pricing` |
+| Account | `capabilities`, `account.profile` (number quality, limit, status, throughput), `account.business` (WABA review, verification, limit), `account.metadata` (hourly cached copy of both and the templates), `billing.pricing` |
 | Read | `messages.history`, `events.list`, `events.latest` |
 | Send | `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send` |
 | Templates and flows | `templates.list` and template mutations; `flows.*` |
