@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"io"
 	"net/http"
 	"strconv"
@@ -49,7 +50,7 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	limit := int64(2 << 20)
 	if strings.HasSuffix(r.URL.Path, "/media") {
-		limit = 5 << 20 // A media upload carries up to 4 MiB of file bytes in a multipart body.
+		limit = attachment.MaxBytes + 1<<20 // A media upload carries one attachment in a multipart body.
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {

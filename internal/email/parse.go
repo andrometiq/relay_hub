@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"golang.org/x/text/encoding/charmap"
 	"io"
 	"mime"
@@ -17,7 +18,7 @@ import (
 	"unicode/utf8"
 )
 
-const MaxMessageBytes = 6 * 1024 * 1024
+const MaxMessageBytes = attachment.EnvelopeBytes
 
 type Received struct {
 	Authentication   Authentication   `json:"authentication"`
@@ -171,11 +172,11 @@ func parse(raw []byte, trustedServer string) (Received, error) {
 		if filename == "" {
 			filename = params["name"]
 		}
-		attachment := filename != "" || disposition == "attachment" || (kind != "text/plain" && kind != "text/html")
-		if attachment {
-			raw, err := io.ReadAll(io.LimitReader(reader, MaxAttachmentBytes+1))
+		isAttachment := filename != "" || disposition == "attachment" || (kind != "text/plain" && kind != "text/html")
+		if isAttachment {
+			raw, err := io.ReadAll(io.LimitReader(reader, attachment.MaxBytes+1))
 			total += len(raw)
-			if err != nil || total > MaxAttachmentBytes || len(result.Attachments) >= 8 {
+			if err != nil || total > attachment.MaxBytes || len(result.Attachments) >= 8 {
 				return errors.New("email attachments exceed limit")
 			}
 			if filename == "" {

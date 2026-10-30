@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"io"
 	"math"
 	"net/http"
@@ -192,7 +193,7 @@ func TestMultipartMediaBoundaries(t *testing.T) {
 			}
 		})
 	}
-	in := MessageInput{Operation: "document", ChatID: 123, Filename: "large.bin", ContentBase64: strings.Repeat("A", base64.StdEncoding.EncodedLen(MaxMediaBytes)+4)}
+	in := MessageInput{Operation: "document", ChatID: 123, Filename: "large.bin", ContentBase64: strings.Repeat("A", base64.StdEncoding.EncodedLen(attachment.MaxBytes)+4)}
 	if in.Validate() == nil {
 		t.Fatal("oversized media accepted")
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"net/mail"
 	"regexp"
@@ -89,7 +90,7 @@ func (o Outbox) Submit(ctx context.Context, account, key, operation string, inpu
 		}
 	}
 
-	if err != nil || len(payload) > 6<<20 {
+	if err != nil || len(payload) > attachment.EnvelopeBytes {
 		return nil, errors.New("invalid delivery payload")
 	}
 	if key == "" {

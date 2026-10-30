@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
@@ -334,7 +335,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			return nil, result, nil
 		})
 
-		mcp.AddTool(server, &mcp.Tool{Name: "telegram.attachment", Description: "Read an account-journaled Telegram attachment up to 4 MiB without exposing provider credentials."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+		mcp.AddTool(server, &mcp.Tool{Name: "telegram.attachment", Description: "Read an account-journaled Telegram attachment up to 10 MiB without exposing provider credentials."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			FileID  string `json:"file_id"`
 			Channel string `json:"channel,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
@@ -350,7 +351,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err != nil {
 				return nil, nil, errors.New("attachment is unavailable for this account")
 			}
-			return mediaResult(file.Data, file.ContentType, file.Filename, telegram.MaxMediaBytes)
+			return mediaResult(file.Data, file.ContentType, file.Filename, attachment.MaxBytes)
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "telegram.media", Description: "Read a bounded sticker already received by this account. Provider credentials and download URLs stay in Hub."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			FileID  string `json:"file_id"`
@@ -406,7 +407,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			}
 			return nil, result, err
 		})
-		mcp.AddTool(server, &mcp.Tool{Name: "email.attachment", Description: "Read an account-scoped mailbox attachment up to 4 MiB."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
+		mcp.AddTool(server, &mcp.Tool{Name: "email.attachment", Description: "Read an account-scoped mailbox attachment up to 10 MiB."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			ProviderID string `json:"provider_id"`
 			Index      int    `json:"index"`
 			Channel    string `json:"channel,omitempty"`
@@ -423,7 +424,7 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			if err := mediaStore.DB.QueryRow(ctx, `SELECT content,content_type,filename FROM relay_email_attachments WHERE account=$1 AND provider_id=$2 AND slot=$3`, mailbox, in.ProviderID, in.Index).Scan(&data, &mime, &name); err != nil {
 				return nil, nil, errors.New("attachment unavailable")
 			}
-			return mediaResult(data, mime, name, 4<<20)
+			return mediaResult(data, mime, name, attachment.MaxBytes)
 		})
 		mcp.AddTool(server, &mcp.Tool{Name: "email.mailbox", Description: "Read mailbox sync status and the twenty latest rejected messages for this account."}, func(ctx context.Context, r *mcp.CallToolRequest, in struct {
 			Channel string `json:"channel,omitempty"`
@@ -565,7 +566,9 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 		}
 		publicHost = origin.Host
 	}
-	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true})
+	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true,
+		// One attachment is base64 encoded inside MCP. Other operations keep their smaller adapter payload limits.
+		MaxRequestBodyBytes: attachment.EnvelopeBytes})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hostname := r.Host
 		if host, _, err := net.SplitHostPort(hostname); err == nil {
@@ -604,9 +607,6 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		// A single bounded group JPEG (5 MiB) is base64 encoded inside MCP.
-		// Other operations retain their smaller adapter-specific payload limits.
-		r.Body = http.MaxBytesReader(w, r.Body, 7<<20)
 		transport.ServeHTTP(w, r)
 	}), nil
 }
