@@ -20,6 +20,8 @@ func TestOperations(t *testing.T) {
 		{Input{Operation: "messages.send", To: "919999999999", Body: "hello", ReplyTo: "wamid.reply"}, "POST", "/v25.0/111/messages", "text"},
 		{Input{Operation: "messages.react", To: "919999999999", ReplyTo: "wamid.reply", Emoji: "👍"}, "POST", "/v25.0/111/messages", "reaction"},
 		{Input{Operation: "templates.list"}, "GET", "/v25.0/222/message_templates", ""},
+		{Input{Operation: "account.profile"}, "GET", "/v25.0/111", ""},
+		{Input{Operation: "account.business"}, "GET", "/v25.0/222", ""},
 		{Input{Operation: "templates.create", Name: "order_update", Language: "en_US", Category: "UTILITY", Components: []map[string]any{{"type": "BODY", "text": "Hello"}}}, "POST", "/v25.0/222/message_templates", ""},
 		{Input{Operation: "templates.send", To: "919999999999", Name: "order_update", Language: "en_US"}, "POST", "/v25.0/111/messages", "template"},
 		{Input{Operation: "groups.list"}, "GET", "/v25.0/111/groups", ""},

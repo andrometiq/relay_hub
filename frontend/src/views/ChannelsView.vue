@@ -6,6 +6,7 @@ import AccountHealth from "../components/AccountHealth.vue";
 import InfiniteList from "../components/InfiniteList.vue";
 import { hubApi } from "../services/hubApi";
 import { adminApi, channelStatus, connectionRows, provider } from "../composables/containers";
+import { whatsappHealth } from "../composables/whatsappHealth";
 
 defineEmits(["navigate"]);
 const list = ref();
@@ -95,7 +96,7 @@ defineExpose({ refresh: () => list.value?.reload() });
             <dl v-else-if="metadata" class="entity-details">
               <div><dt>Display number</dt><dd>{{ metadata.profile?.display_phone_number || "Not cached yet" }}</dd></div>
               <div><dt>Verified name</dt><dd>{{ metadata.profile?.verified_name || "Not cached yet" }}</dd></div>
-              <div><dt>Quality rating</dt><dd>{{ metadata.profile?.quality_rating || "Not cached yet" }}</dd></div>
+              <div v-for="row in whatsappHealth(metadata.profile)" :key="row.name"><dt>{{ row.name }}</dt><dd><Badge v-if="row.theme" :label="row.label" :theme="row.theme" /><template v-else>{{ row.text }}</template></dd></div>
               <div><dt>Sync status</dt><dd>{{ metadata.status }}</dd></div>
               <div><dt>Last successful sync</dt><dd>{{ metadata.last_success || "Not synced yet" }}</dd></div>
               <div><dt>Cached templates</dt><dd>{{ metadata.templates?.length || 0 }}{{ metadata.truncated ? " (cache limit reached)" : "" }}</dd></div>
