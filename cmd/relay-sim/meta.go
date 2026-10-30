@@ -99,8 +99,13 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			result = map[string]any{"error": "invalid template"}
 			break
 		}
+		if problem := templateButtonProblem(row["components"]); problem != "" {
+			status, result = 400, templateRejection(problem)
+			break
+		}
 		row["id"] = fmt.Sprint(m.records.start.UnixMicro() + int64(len(m.templates)))
 		row["status"] = "PENDING"
+		row["quality_score"] = map[string]any{"score": "UNKNOWN"}
 		m.templates = append(m.templates, row)
 		result = map[string]any{"id": row["id"], "status": "PENDING", "category": row["category"]}
 	case r.Method == "GET" && waba && edge == "message_templates":
@@ -132,8 +137,24 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			page["paging"] = map[string]any{"cursors": map[string]any{"after": fmt.Sprint(end)}, "next": "https://graph.facebook.com/v25.0/" + node + "/message_templates?" + query.Encode()}
 		}
 		result = page
+	case r.Method == "POST" && edge == "" && m.template(node) != nil:
+		var change map[string]any
+		if json.Unmarshal(body, &change) != nil || change["components"] == nil {
+			status, result = 400, map[string]any{"error": "invalid template"}
+			break
+		}
+		if problem := templateButtonProblem(change["components"]); problem != "" {
+			status, result = 400, templateRejection(problem)
+			break
+		}
+		row := m.template(node)
+		row["components"], row["status"] = change["components"], "PENDING"
+		result = map[string]any{"success": true}
 	case r.Method == "GET" && phone && edge == "":
-		result = map[string]any{"id": node, "display_phone_number": simulationNumbers[node].Display, "verified_name": "Local simulation", "quality_rating": "GREEN"}
+		result = map[string]any{"id": node, "display_phone_number": simulationNumbers[node].Display, "verified_name": "Local simulation", "quality_rating": "GREEN",
+			"whatsapp_business_manager_messaging_limit": "TIER_100K", "throughput": map[string]any{"level": "STANDARD"}, "status": "CONNECTED", "name_status": "APPROVED"}
+	case r.Method == "GET" && waba && edge == "":
+		result = map[string]any{"id": node, "name": "Local simulation", "account_review_status": "APPROVED", "business_verification_status": "verified", "whatsapp_business_manager_messaging_limit": "TIER_100K"}
 	default:
 		status = 404
 		result = map[string]any{"error": "unimplemented fake Meta route"}
@@ -147,6 +168,17 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(status)
 	w.Write(reply)
 }
+
+// template finds a stored template by ID; callers hold m.mu.
+func (m *fakeMeta) template(id string) map[string]any {
+	for _, row := range m.templates {
+		if row["id"] == id {
+			return row
+		}
+	}
+	return nil
+}
+
 func (m *fakeMeta) approve(id, status string) (map[string]any, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
