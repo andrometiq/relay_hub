@@ -13,7 +13,7 @@ const bulkUpdateLimit = 500
 
 // DefaultBulkWindow is how long a bulk delivery change may wait for others
 // before Core receives the batch.
-const DefaultBulkWindow = 30 * time.Second
+const DefaultBulkWindow = 3 * time.Second
 
 // BulkUpdate is the latest coalesced state of one bulk outbox row.
 type BulkUpdate struct {

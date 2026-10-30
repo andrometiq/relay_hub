@@ -172,7 +172,7 @@ The result is `{"data_points":[...],"currency":"INR"}`. `currency` is the WABA c
 
 Use `queued` (all queued or submitting intents of the number) for backpressure: stop pushing while it is above your own limit and pace by `messages_per_second`. `limit` is the bulk share of the queue. Workers send bulk rows one by one at the number's rate, after any non-bulk sends of the same number. Retries follow the outbox rules: only errors that Meta marks as transient or rate limits are retried.
 
-Bulk results do not use the realtime or status lanes. The Hub posts the latest state of each changed bulk row to `/api/method/relay_core.inbound.receive_bulk_updates`, signed like the status callbacks. A batch is sent when 500 rows changed or when the oldest change waited `RELAY_BULK_UPDATE_WINDOW` (default 30 s). Rows are in ascending `id` order:
+Bulk results do not use the realtime or status lanes. The Hub posts the latest state of each changed bulk row to `/api/method/relay_core.inbound.receive_bulk_updates`, signed like the status callbacks. A batch is sent when 500 rows changed or when the oldest change waited `RELAY_BULK_UPDATE_WINDOW` (default 3 s). Rows are in ascending `id` order:
 
 ```json
 {"account":"essdee","channel_key":"sales","updates":[{"id":812,"key":"winter-launch-1","state":"submitted","message_id":"wamid.SYNTHETIC","status":"read","updated_at":"2026-10-25T18:00:00Z","channel_key":"sales","to":"+91 90000 00101"},{"id":813,"key":"winter-launch-7","state":"rejected","message_id":"","status":"","error":{"code":131009,"title":"Parameter value is not valid","message":"Header image URL could not be downloaded."},"updated_at":"2026-10-25T18:00:01Z","channel_key":"sales","to":"+91 90000 00101"}]}
