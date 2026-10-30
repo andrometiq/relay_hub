@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"io"
 	"net/http"
 	"path"
@@ -104,7 +105,7 @@ func (t *fakeTelegram) queue(raw json.RawMessage) error {
 	})
 }
 func telegramBody(w http.ResponseWriter, r *http.Request) (map[string]any, map[string]telegramFile, error) {
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, attachment.MaxBytes+1<<20)
 	body := map[string]any{}
 	files := map[string]telegramFile{}
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {

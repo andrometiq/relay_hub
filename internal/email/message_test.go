@@ -3,6 +3,7 @@ package email
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -10,6 +11,8 @@ import (
 	"net/mail"
 	"strings"
 	"testing"
+
+	"github.com/andrometiq/relay_hub/internal/attachment"
 )
 
 func TestMIMEAttachmentsThreadAndHiddenRecipients(t *testing.T) {
@@ -83,5 +86,32 @@ func TestMIMERoundTripAndLoopFlags(t *testing.T) {
 	}
 	if _, err = Parse(make([]byte, MaxMessageBytes+1)); err == nil {
 		t.Fatal("oversized mail accepted")
+	}
+}
+
+func TestLargestAttachmentsFitOneMessageAndParseBack(t *testing.T) {
+	c, _ := New(Config{AccountID: "fixture", Host: "smtp.example.invalid", Port: 587, From: "sender@example.invalid", Enabled: true})
+	message := func(sizes ...int) Message {
+		in := Message{To: []string{"to@example.invalid"}, Subject: "Large", Body: "Plain message"}
+		for i, size := range sizes {
+			in.Attachments = append(in.Attachments, Attachment{Filename: fmt.Sprintf("part%d.bin", i), ContentType: "application/octet-stream", ContentBase64: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), size))})
+		}
+		return in
+	}
+	half := attachment.MaxBytes / 2
+	if err := message(half, attachment.MaxBytes-half+1).Validate(); err == nil {
+		t.Fatal("attachments above the combined limit accepted")
+	}
+	in := message(half, attachment.MaxBytes-half)
+	if err := in.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	raw, _, err := c.compose(in)
+	if err != nil || len(raw) > MaxMessageBytes {
+		t.Fatal("largest message does not fit", len(raw), err)
+	}
+	received, err := Parse(raw)
+	if err != nil || len(received.Attachments) != 2 {
+		t.Fatal("largest message did not parse back", err)
 	}
 }

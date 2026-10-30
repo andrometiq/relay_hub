@@ -106,7 +106,7 @@ Other direct-message payloads, placed in the inner `message` object or passed to
 
 Use exactly one of `media_id` or `media_url`. Media types are `image`, `video`, `audio`, `document` and `sticker`; a sticker cannot carry a caption or filename. An outbound `media_url` is sent to the provider, not fetched by the Hub's inbound sticker proxy.
 
-`messages.media_upload` uploads one private attachment to the number and returns its media ID. It sends no message. Call it through `whatsapp.execute` without `request_key`. It uses the same validation and 4 MiB limit as inline `content_base64` on `messages.media`:
+`messages.media_upload` uploads one private attachment to the number and returns its media ID. It sends no message. Call it through `whatsapp.execute` without `request_key`. It uses the same validation and 10 MiB limit as inline `content_base64` on `messages.media`:
 
 ```json
 {"operation":"messages.media_upload","media_type":"document","mime_type":"application/pdf","filename":"invoice.pdf","content_base64":"JVBERi0xLjQK..."}

@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +10,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/andrometiq/relay_hub/internal/attachment"
 )
 
 func TestPrivateAttachmentUploadAndSend(t *testing.T) {
@@ -119,6 +122,19 @@ func TestMediaUploadReturnsIDWithoutSending(t *testing.T) {
 	}
 	if uploaded != 1 {
 		t.Fatal("invalid input uploaded")
+	}
+}
+
+func TestAttachmentAcceptsTheLimitAndRefusesOneByteMore(t *testing.T) {
+	pdf := func(size int) Input {
+		raw := append([]byte("%PDF-1.4\n"), bytes.Repeat([]byte("x"), size-9)...)
+		return Input{MediaType: "document", MIMEType: "application/pdf", Filename: "large.pdf", ContentBase64: base64.StdEncoding.EncodeToString(raw)}
+	}
+	if raw, _, err := attachmentBytes(pdf(attachment.MaxBytes)); err != nil || len(raw) != attachment.MaxBytes {
+		t.Fatal("attachment at the limit refused", err)
+	}
+	if _, _, err := attachmentBytes(pdf(attachment.MaxBytes + 1)); err == nil {
+		t.Fatal("attachment above the limit accepted")
 	}
 }
 

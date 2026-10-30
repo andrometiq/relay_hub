@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"mime"
 	"mime/multipart"
 	"mime/quotedprintable"
@@ -17,8 +18,6 @@ import (
 	"strings"
 	"time"
 )
-
-const MaxAttachmentBytes = 4 * 1024 * 1024
 
 type Attachment struct {
 	Filename      string `json:"filename"`
@@ -79,13 +78,13 @@ func (in Message) Validate() error {
 		if _, _, err := mime.ParseMediaType(a.ContentType); err != nil || strings.ContainsAny(a.ContentType, "\r\n") {
 			return errors.New("invalid attachment content type")
 		}
-		if len(a.ContentBase64) > base64.StdEncoding.EncodedLen(MaxAttachmentBytes) {
-			return errors.New("attachments exceed 4 MiB")
+		if len(a.ContentBase64) > base64.StdEncoding.EncodedLen(attachment.MaxBytes) {
+			return errors.New("attachments exceed 10 MiB")
 		}
 		raw, err := base64.StdEncoding.Strict().DecodeString(a.ContentBase64)
 		total += len(raw)
-		if err != nil || len(raw) == 0 || total > MaxAttachmentBytes {
-			return errors.New("attachments exceed 4 MiB or contain invalid data")
+		if err != nil || len(raw) == 0 || total > attachment.MaxBytes {
+			return errors.New("attachments exceed 10 MiB or contain invalid data")
 		}
 	}
 	return nil

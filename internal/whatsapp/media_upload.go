@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -12,17 +13,15 @@ import (
 	"strings"
 )
 
-const MaxAttachmentBytes = 4 << 20
-
 func attachmentBytes(in Input) ([]byte, string, error) {
 	if len(in.Filename) > 120 || strings.ContainsAny(in.Filename, "/\\\r\n\"") {
 		return nil, "", errors.New("invalid attachment filename")
 	}
-	if in.ContentBase64 == "" || len(in.ContentBase64) > base64.StdEncoding.EncodedLen(MaxAttachmentBytes) || in.MediaID != "" || in.MediaURL != "" {
-		return nil, "", errors.New("supply one private attachment up to 4 MiB")
+	if in.ContentBase64 == "" || len(in.ContentBase64) > base64.StdEncoding.EncodedLen(attachment.MaxBytes) || in.MediaID != "" || in.MediaURL != "" {
+		return nil, "", errors.New("supply one private attachment up to 10 MiB")
 	}
 	raw, err := base64.StdEncoding.Strict().DecodeString(in.ContentBase64)
-	if err != nil || len(raw) == 0 || len(raw) > MaxAttachmentBytes {
+	if err != nil || len(raw) == 0 || len(raw) > attachment.MaxBytes {
 		return nil, "", errors.New("invalid attachment encoding or size")
 	}
 	mediaType, _, err := mime.ParseMediaType(in.MIMEType)

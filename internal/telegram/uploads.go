@@ -7,13 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andrometiq/relay_hub/internal/attachment"
 	"mime/multipart"
 	"net/http"
 	"path"
 	"strings"
 )
-
-const MaxMediaBytes = 4 * 1024 * 1024
 
 func mediaOperation(operation string) bool {
 	return operation == "photo" || operation == "video" || operation == "audio" || operation == "voice" || operation == "document"
@@ -28,11 +27,11 @@ func (in MessageInput) uploadBytes() ([]byte, error) {
 	if !cleanSingleLine(in.Filename, 120) || in.Filename == "" || path.Base(in.Filename) != in.Filename || strings.ContainsAny(in.Filename, "\\\"") {
 		return nil, errors.New("invalid attachment filename")
 	}
-	if len(in.ContentBase64) > base64.StdEncoding.EncodedLen(MaxMediaBytes) {
-		return nil, errors.New("attachment exceeds 4 MiB")
+	if len(in.ContentBase64) > base64.StdEncoding.EncodedLen(attachment.MaxBytes) {
+		return nil, errors.New("attachment exceeds 10 MiB")
 	}
 	data, err := base64.StdEncoding.Strict().DecodeString(in.ContentBase64)
-	if err != nil || len(data) == 0 || len(data) > MaxMediaBytes {
+	if err != nil || len(data) == 0 || len(data) > attachment.MaxBytes {
 		return nil, errors.New("invalid attachment content")
 	}
 	mime := http.DetectContentType(data)

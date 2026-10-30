@@ -11,6 +11,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/channels"
 	accountstore "github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/database"
+	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/envconfig"
 	"github.com/andrometiq/relay_hub/internal/forward"
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
@@ -742,7 +743,7 @@ func run() error {
 				http.NotFound(w, r)
 				return
 			}
-			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 12<<20))
+			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, relayemail.MaxMessageBytes+2<<20))
 			if readErr != nil {
 				http.Error(w, "invalid body", 413)
 				return
