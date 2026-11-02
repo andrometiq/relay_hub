@@ -109,7 +109,8 @@ func (s *simulation) resume(ctx context.Context) error {
 		}
 		return s.wa.ReplaceAccounts([]whatsapp.Account{a})
 	}
-	return errors.New("no enabled simulation account to resume")
+	// Sites and self-service signups resume from the stored runtime.
+	return s.activateSites(ctx, store)
 }
 
 func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
@@ -459,16 +460,11 @@ func runSimulation(validateDatabase func(string) error) error {
 		return err
 	}
 	channelWake := make(chan struct{}, 1)
-	handler, err := hubmcp.NewAuthenticatedChannels(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake})
-	if err != nil {
-		return err
-	}
 	browser, err := auth.NewHTTP(authStore, hub.String(), "", []string{"sim-v1"})
 	if err != nil {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
 	mux.Handle("/auth/", browser.Headers(browser))
 	mux.HandleFunc("/webhooks/whatsapp/{account}", wa.Webhook)
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -501,6 +497,17 @@ func runSimulation(validateDatabase func(string) error) error {
 	if sim.credentialKey == "" {
 		return errors.New("RELAY_CREDENTIAL_KEY is required")
 	}
+	signupService, err := sim.onboarding(authStore, client, meta)
+	if err != nil {
+		return err
+	}
+	signupService.Register(mux)
+	wa.AccountUpdate = signupService.AccountUpdate
+	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService})
+	if err != nil {
+		return err
+	}
+	mux.Handle("/mcp", handler)
 	if *resume {
 		if err := sim.resume(ctx); err != nil {
 			return err
@@ -549,6 +556,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	}
 	sim.notices.BulkWindow = bulkWindow
 	sim.notices.Run(ctx)
+	signupService.Run(ctx)
 	fmt.Println("relay-sim ready (loopback only)")
 	select {
 	case <-ctx.Done():

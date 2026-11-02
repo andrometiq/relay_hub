@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/onboarding"
 )
 
 var enrolmentTokenPattern = regexp.MustCompile(`^relay_enrol_[a-f0-9]{64}$`)
@@ -87,4 +89,17 @@ func (s *simulation) saveSignupContainer(ctx context.Context, store *containers.
 		expires_at=EXCLUDED.expires_at, revoked_at=EXCLUDED.revoked_at`,
 		auth.Hash(in.Token), in.Kind, in.OriginPattern, in.MaxSites, float64(*in.ExpiresIn), in.Revoked)
 	return err
+}
+
+// onboarding builds the Hub onboarding service against the fake Meta
+// address: the SDK and dialog come from there, and Graph calls go through
+// the simulation transport.
+func (s *simulation) onboarding(authStore *auth.Store, client *http.Client, meta *url.URL) (*onboarding.Service, error) {
+	store, err := containers.New(s.db, s.credentialKey)
+	if err != nil {
+		return nil, err
+	}
+	return onboarding.New(onboarding.Config{DB: s.db, Store: store, Auth: authStore, Client: client, PublicOrigin: s.hub.String(),
+		SDKURL: meta.String() + "/sdk.js", DialogOrigin: onboarding.ExactOrigin(meta.String()),
+		Reload: func(ctx context.Context) error { return s.activateSites(ctx, store) }})
 }
