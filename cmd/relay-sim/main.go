@@ -120,21 +120,34 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		s.bulkControl(w, r)
 		return
 	}
+	if strings.HasPrefix(r.URL.Path, "/_sim/es/") {
+		s.signupControl(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/_sim/telegram/") || strings.HasPrefix(r.URL.Path, "/_sim/email/") || r.URL.Path == "/_sim/providers" {
 		s.providerControl(w, r)
 		return
 	}
 	if r.Method == "GET" && r.URL.Path == "/_sim/state" {
 		state := map[string]any{}
-		for key, query := range map[string]string{
-			"channel_callbacks":  "SELECT d.event_id,e.site_id,d.acknowledged,d.failures FROM relay_channel_callback_delivery d JOIN relay_channel_events e ON e.id=d.event_id WHERE e.account LIKE 'sim-%' ORDER BY d.event_id",
-			"channel_events":     "SELECT id,account,site_id,channel,provider_id,payload FROM relay_channel_events WHERE account LIKE 'sim-%' ORDER BY id",
-			"channel_deliveries": "SELECT id,account,site_id,request_key,state,result FROM relay_channel_outbox WHERE account LIKE 'sim-%' ORDER BY id",
-			"events":             "SELECT id,account,site_id,lane,payload FROM relay_whatsapp_events WHERE account LIKE 'sim-%' ORDER BY id",
-			"incoming":           "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE account LIKE 'sim-%' ORDER BY id",
-			"deliveries":         "SELECT id,account,site_id,request_key,state,result->'messages'->0->>'id' AS provider_message_id FROM relay_outbox WHERE account LIKE 'sim-%' ORDER BY id",
-			"callbacks":          "SELECT d.event_id,e.site_id,d.lane,d.acknowledged,d.status_offset,d.failures FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id WHERE e.account LIKE 'sim-%' ORDER BY d.event_id,d.lane",
-		} {
+		queries := map[string]string{
+			"channel_callbacks":  "SELECT d.event_id,e.site_id,d.acknowledged,d.failures FROM relay_channel_callback_delivery d JOIN relay_channel_events e ON e.id=d.event_id WHERE (e.account LIKE 'sim-%' OR e.account LIKE 'wa-%') ORDER BY d.event_id",
+			"channel_events":     "SELECT id,account,site_id,channel,provider_id,payload FROM relay_channel_events WHERE (account LIKE 'sim-%' OR account LIKE 'wa-%') ORDER BY id",
+			"channel_deliveries": "SELECT id,account,site_id,request_key,state,result FROM relay_channel_outbox WHERE (account LIKE 'sim-%' OR account LIKE 'wa-%') ORDER BY id",
+			"events":             "SELECT id,account,site_id,lane,payload FROM relay_whatsapp_events WHERE (account LIKE 'sim-%' OR account LIKE 'wa-%') ORDER BY id",
+			"incoming":           "SELECT id,provider_id FROM relay_whatsapp_incoming WHERE (account LIKE 'sim-%' OR account LIKE 'wa-%') ORDER BY id",
+			"deliveries":         "SELECT id,account,site_id,request_key,state,result->'messages'->0->>'id' AS provider_message_id FROM relay_outbox WHERE (account LIKE 'sim-%' OR account LIKE 'wa-%') ORDER BY id",
+			"callbacks":          "SELECT d.event_id,e.site_id,d.lane,d.acknowledged,d.status_offset,d.failures FROM relay_whatsapp_callback_delivery d JOIN relay_whatsapp_events e ON e.id=d.event_id WHERE (e.account LIKE 'sim-%' OR e.account LIKE 'wa-%') ORDER BY d.event_id,d.lane",
+		}
+		var sessions bool
+		if s.db.QueryRow(r.Context(), "SELECT to_regclass('relay_signup_sessions') IS NOT NULL").Scan(&sessions) != nil {
+			http.Error(w, "snapshot unavailable", 503)
+			return
+		}
+		if sessions {
+			queries["signup_sessions"] = "SELECT to_jsonb(s) - 'launch_hash' - 'code_hash' - 'token_ciphertext' - 'token_nonce' AS session FROM relay_signup_sessions s ORDER BY s.created_at"
+		}
+		for key, query := range queries {
 			rows, err := s.db.Query(r.Context(), query)
 			if err != nil {
 				http.Error(w, "snapshot unavailable", 503)
@@ -220,12 +233,12 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]any{"tokens": tokens})
 	case "/_sim/faults":
-		if in.Target != "status" && in.Target != "graph" {
+		if in.Target != "status" && in.Target != "graph" && in.Target != "signup" {
 			http.Error(w, "invalid fault target", 400)
 			return
 		}
 		for _, f := range in.Faults {
-			if f != "429" && f != "503" && !(f == "wrong_ack" && in.Target == "status") {
+			if !validFault(in.Target, f) {
 				http.Error(w, "invalid fault", 400)
 				return
 			}
@@ -259,6 +272,15 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
+
+// validFault reports whether a control fault applies to its target.
+func validFault(target, fault string) bool {
+	if target == "signup" {
+		return signupFaults[fault]
+	}
+	return fault == "429" || fault == "503" || fault == "wrong_ack" && target == "status"
+}
+
 func (s *simulation) emit(w http.ResponseWriter, r *http.Request, payload []byte, invalid bool) {
 	started := time.Now()
 	var monotonic unix.Timespec
@@ -295,6 +317,19 @@ func (s *simulation) webhook(ctx context.Context, payload []byte, invalid bool) 
 	reply, _ := io.ReadAll(io.LimitReader(res.Body, 65536))
 	return req, res, reply, nil
 }
+
+// postSignupWebhook sends one signup webhook and keeps a capture of it.
+func (s *simulation) postSignupWebhook(ctx context.Context, payload []byte) (int, error) {
+	started := time.Now()
+	req, res, reply, err := s.webhook(ctx, payload, false)
+	if err != nil {
+		s.meta.records.record(req, "webhook", webhookCapture(payload), 0, []byte(`{"error":"webhook failed"}`), started, "")
+		return 0, err
+	}
+	s.meta.records.record(req, "webhook", webhookCapture(payload), res.StatusCode, reply, started, "")
+	return res.StatusCode, nil
+}
+
 func (s *simulation) whatsappPath() string {
 	if path := s.webhookPath.Load(); path != nil {
 		return *path
@@ -438,7 +473,11 @@ func runSimulation(validateDatabase func(string) error) error {
 		}
 		writeJSON(w, map[string]bool{"ready": true})
 	})
-	fake := &fakeMeta{records: records, pageSize: 1, bulk: newBulkReceipts()}
+	signup, err := openSignupState(filepath.Join(*stateDir, "signup.json"), records)
+	if err != nil {
+		return err
+	}
+	fake := &fakeMeta{records: records, pageSize: 1, bulk: newBulkReceipts(), signup: signup}
 	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, channelWake: channelWake, callbacks: &channels.CallbackDispatcher{URL: dsn, Wake: channelWake}}
 	sim.callbacks.Run(ctx, nil)
 	fake.bulk.post = func(ctx context.Context, payload []byte) (int, error) {
@@ -449,6 +488,8 @@ func runSimulation(validateDatabase func(string) error) error {
 		return res.StatusCode, nil
 	}
 	go fake.bulk.run(ctx)
+	signup.webhooks.post = sim.postSignupWebhook
+	go signup.webhooks.run(ctx)
 	mux.HandleFunc("POST /webhooks/telegram/{account}", sim.channelWebhook("telegram"))
 	mux.HandleFunc("POST /webhooks/email/{account}", sim.channelWebhook("email"))
 	if sim.credentialKey == "" {
@@ -462,6 +503,9 @@ func runSimulation(validateDatabase func(string) error) error {
 	mm := http.NewServeMux()
 	mm.HandleFunc("/_sim/", sim.control)
 	mm.Handle("/ai/chat/completions", &fakeAI{records: records})
+	esBrowser := signup.browser()
+	mm.Handle("GET /sdk.js", esBrowser)
+	mm.Handle("/es/", esBrowser)
 	mm.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/bot") || strings.HasPrefix(r.URL.Path, "/file/bot") {
 			fakeTelegram.ServeHTTP(w, r)
