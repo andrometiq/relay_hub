@@ -1,11 +1,12 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { Badge, Button, ErrorMessage, FeatherIcon, TextInput } from "@relay/ui";
+import EnrolmentTokens from "./EnrolmentTokens.vue";
 import SiteDialog from "./SiteDialog.vue";
 import { PROVIDERS, adminApi, countByProvider, plural, siteStatus } from "../../composables/containers";
 
 const emit = defineEmits(["open"]);
-const rows = ref([]), containers = ref([]), query = ref(""), busy = ref(false), error = ref(""), creating = ref(false);
+const rows = ref([]), containers = ref([]), query = ref(""), busy = ref(false), error = ref(""), creating = ref(false), enrolling = ref(false);
 const unlinked = computed(() => containers.value.flatMap((row) => row.channels).filter((row) => !row.site).length);
 let ticket = 0, timer;
 
@@ -33,7 +34,7 @@ defineExpose({ refresh });
   <section aria-label="Sites" class="entity-view">
     <div class="view-heading">
       <div><h2>Sites</h2><p>A site is one Frappe site with Relay Core. Link the accounts that belong to it. One account belongs to one site only.</p></div>
-      <Button label="New site" variant="solid" icon-left="plus" @click="creating = true" />
+      <div class="admin-actions"><Button label="Enrolment" icon-left="key" @click="enrolling = true" /><Button label="New site" variant="solid" icon-left="plus" @click="creating = true" /></div>
     </div>
     <div class="entity-toolbar">
       <div><TextInput v-model="query" type="search" placeholder="Search sites" aria-label="Search sites" autocomplete="off" @update:model-value="search"><template #prefix><FeatherIcon name="search" /></template></TextInput></div>
@@ -59,5 +60,6 @@ defineExpose({ refresh });
     </div>
     <p v-else-if="!busy && !error" class="entity-prompt">No sites found. Create a site for each Frappe site that runs Relay Core.</p>
     <SiteDialog v-model="creating" @saved="emit('open', $event)" />
+    <EnrolmentTokens v-model="enrolling" />
   </section>
 </template>

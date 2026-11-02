@@ -81,6 +81,7 @@ defineExpose({ refresh });
           <div><dt>App secret</dt><dd>{{ appSecrets.includes("app_secret") ? "Set" : "Not set" }}</dd></div>
           <div><dt>Graph API version</dt><dd>{{ app.config.graph_version || "Not set" }}</dd></div>
           <div><dt>Last event</dt><dd>{{ app.last_event_at ? new Date(app.last_event_at).toLocaleString() : "Not reported" }}</dd></div>
+          <div><dt>Self-service signup</dt><dd>{{ container.signup ? "On · " + (app.config.es_config_id || "no configuration ID") : "Off" }}</dd></div>
         </dl>
         <div class="webhook-address"><div><span>Callback URL</span><code>{{ callbackURL }}</code></div><Button label="Copy" icon-left="copy" @click="copy('Callback URL', () => callbackURL)" /></div>
         <div class="webhook-address"><div><span>Verify token</span><code>{{ appSecrets.includes("verify_token") ? "••••••••••••••••" : "Not set" }}</code></div><Button label="Copy" icon-left="copy" :disabled="!appSecrets.includes('verify_token')" @click="copyVerifyToken" /></div>

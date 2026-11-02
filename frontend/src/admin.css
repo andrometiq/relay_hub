@@ -40,6 +40,9 @@ button.admin-row:hover{background:var(--surface-gray-1)}
 .forward-add>:first-child{flex:1;min-width:0}
 .cols-sites{grid-template-columns:minmax(200px,1.1fr) minmax(220px,1.3fr) minmax(220px,1.3fr) 90px 100px 20px}
 .cols-linked{grid-template-columns:30px minmax(170px,1.1fr) minmax(170px,1fr) minmax(150px,1fr) 110px 90px}
+.cols-enrol{grid-template-columns:minmax(120px,1.2fr) 90px minmax(150px,1.4fr) 70px 90px 90px 80px}
+.cols-signups{grid-template-columns:minmax(150px,1fr) 100px 120px 120px minmax(160px,1.4fr)}
+.view-heading .admin-actions{display:flex;gap:8px;flex-wrap:wrap}
 .admin-pill{display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:0 9px;border-radius:6px;background:var(--surface-gray-2);color:var(--ink-gray-8);font-size:12px;font-weight:500}
 .admin-pill--none{background:transparent;border:1px dashed var(--outline-gray-3);color:var(--ink-gray-5);font-weight:400}
 
@@ -116,4 +119,7 @@ button.admin-row:hover{background:var(--surface-gray-1)}
   .cols-linked>.wide-m{grid-column:2;grid-row:2}
   .cols-linked>.admin-stat{display:block;grid-column:3;grid-row:2;justify-self:end}
   .cols-linked>span:last-child{grid-column:3;grid-row:1;justify-self:end}
+  .cols-enrol>.admin-stat{grid-column:2;grid-row:1}
+  .cols-enrol>span:last-child{grid-column:2;grid-row:2;justify-self:end}
+  .cols-signups>.admin-stat{grid-column:2;grid-row:1}
 }

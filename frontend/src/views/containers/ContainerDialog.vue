@@ -13,7 +13,7 @@ const secretPlaceholder = (name, blank) => (saved(name) ? "Saved — leave blank
 watch(() => props.modelValue, (open) => {
   if (!open) return;
   const config = props.container?.whatsapp?.config || {};
-  form.value = { id: "", name: props.container?.name || "", enabled: props.container?.enabled ?? true, app_id: config.app_id || "", graph_version: config.graph_version || "v23.0", app_secret: "", verify_token: "", access_token: "" };
+  form.value = { id: "", name: props.container?.name || "", enabled: props.container?.enabled ?? true, app_id: config.app_id || "", graph_version: config.graph_version || "v23.0", signup: !!props.container?.signup, es_config_id: config.es_config_id || "", app_secret: "", verify_token: "", access_token: "" };
   errors.value = {}; error.value = ""; showToken.value = false;
 });
 
@@ -25,6 +25,8 @@ function validate() {
     if (!/^v\d+\.0$/.test(value.graph_version)) result.graph_version = "Use a Graph API version such as v23.0.";
     if (!saved("app_secret") && !value.app_secret) result.app_secret = "Enter the Meta app secret.";
     if (!saved("verify_token") && !value.verify_token) result.verify_token = "Enter or generate a verify token.";
+    if (value.signup && !value.app_id) result.app_id = "Self-service signup needs the Meta app ID.";
+    if (value.signup && !/^[\w-]{1,100}$/.test(value.es_config_id.trim())) result.es_config_id = "Enter the Embedded Signup configuration ID.";
   }
   return result;
 }
@@ -45,7 +47,10 @@ async function save() {
       emit("saved", created.id);
     } else {
       const changes = { name: value.name.trim(), enabled: value.enabled };
-      if (props.mode === "app") changes.whatsapp = { config: { app_id: value.app_id, graph_version: value.graph_version, app_secret: value.app_secret, verify_token: value.verify_token }, access_token: value.access_token };
+      if (props.mode === "app") {
+        changes.signup = value.signup;
+        changes.whatsapp = { config: { app_id: value.app_id, graph_version: value.graph_version, es_config_id: value.es_config_id.trim(), app_secret: value.app_secret, verify_token: value.verify_token }, access_token: value.access_token };
+      }
       await adminApi.updateContainer(props.container.id, changes);
       emit("saved", props.container.id);
     }
@@ -82,6 +87,9 @@ async function save() {
             <ErrorMessage :message="errors.verify_token" />
           </div>
           <div class="admin-full"><FormControl v-model="form.access_token" label="System-user access token" type="password" autocomplete="new-password" :placeholder="secretPlaceholder('access_token', 'Optional. Numbers without their own token use it')" /></div>
+          <FormControl v-model="form.signup" type="checkbox" label="Use for self-service WhatsApp signup" class="admin-full" />
+          <div v-if="form.signup" class="admin-full"><FormControl v-model="form.es_config_id" label="Embedded Signup configuration ID" placeholder="From Facebook Login for Business → Configurations" autocomplete="off" /><ErrorMessage :message="errors.es_config_id" /></div>
+          <p v-if="form.signup" class="admin-hint admin-full">Sites add their own WhatsApp numbers to this container. Only one container can have self-service signup.</p>
           <p class="admin-hint admin-full">Secrets are write-only. Leave a saved secret blank to keep it.</p>
         </template>
       </form>

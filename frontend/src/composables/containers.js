@@ -161,7 +161,60 @@ export const adminApi = {
   forwards: (provider, key, before = "") => hubApi(forwardPath(provider, key) + (before ? "?before=" + encodeURIComponent(before) : "")),
   addForward: (provider, key, url) => hubApi(forwardPath(provider, key), { url }),
   removeForward: (provider, key, id) => hubApi(`${forwardPath(provider, key)}/${encodeURIComponent(id)}`, {}, "DELETE"),
+  enrolmentTokens: async () => (await hubApi("enrolment-tokens")).tokens || [],
+  createEnrolmentToken: (token) => hubApi("enrolment-tokens", token),
+  revokeEnrolmentToken: (id) => hubApi(`enrolment-tokens/${encodeURIComponent(id)}/revoke`, {}),
+  siteSignups: (site) => hubApi(item("sites", site) + "/signups"),
 };
+
+const TOKEN_THEMES = { active: "green", used: "blue", expired: "gray", revoked: "gray" };
+
+// tokenRow labels one enrolment token for the token list.
+export function tokenRow(token) {
+  return {
+    ...token,
+    kindLabel: token.kind === "setup_code" ? "Setup code" : "Bench",
+    usage: token.max_sites ? `${token.used_sites} of ${token.max_sites}` : `${token.used_sites} sites`,
+    expiry: token.expires_at ? new Date(token.expires_at).toLocaleDateString() : "Never",
+    statusLabel: token.status.charAt(0).toUpperCase() + token.status.slice(1),
+    theme: TOKEN_THEMES[token.status] || "gray",
+  };
+}
+
+// tokenPayload builds the create request. Blank number fields use the Hub defaults.
+export function tokenPayload(form) {
+  const payload = { name: form.name.trim(), kind: form.kind, origin_pattern: form.origin_pattern.trim() };
+  if (String(form.max_sites).trim()) payload.max_sites = Number(form.max_sites);
+  if (String(form.expiry_days).trim()) payload.expiry_days = Number(form.expiry_days);
+  return payload;
+}
+
+export function validateTokenForm(form) {
+  const errors = {};
+  if (!form.name.trim()) errors.name = "Enter a name.";
+  if (form.kind === "bench" && !form.origin_pattern.trim()) errors.origin_pattern = "Enter an origin pattern such as https://*.example.com.";
+  if (form.origin_pattern.trim() && !/^https?:\/\/(\*\.)?[a-z0-9.-]+(:\d+)?\/?$/i.test(form.origin_pattern.trim())) errors.origin_pattern = "Use https://*.example.com or https://shop.example.com.";
+  if (String(form.max_sites).trim() && !(Number.isInteger(Number(form.max_sites)) && Number(form.max_sites) >= 1)) errors.max_sites = "Enter a whole number of 1 or more.";
+  const days = String(form.expiry_days).trim(), limit = form.kind === "setup_code" ? 90 : 3650;
+  if (days && !(Number.isInteger(Number(days)) && Number(days) >= (form.kind === "setup_code" ? 1 : 0) && Number(days) <= limit)) errors.expiry_days = `Enter a number of days up to ${limit}.`;
+  return errors;
+}
+
+const SIGNUP_THEMES = { completed: "green", failed: "red", cancelled: "gray", expired: "gray", superseded: "gray" };
+
+// signupRow labels one WhatsApp signup session for the site detail table.
+export function signupRow(session) {
+  const step = (session.steps || []).find((row) => row.status !== "done" && row.status !== "skipped");
+  return {
+    id: session.session_id,
+    started: new Date(session.created_at).toLocaleString(),
+    flow: session.flow_actual || session.flow,
+    state: session.state.replace(/_/g, " "),
+    theme: SIGNUP_THEMES[session.state] || "orange",
+    step: step ? step.name : "",
+    error: session.error ? session.error.message || session.error.code : "",
+  };
+}
 
 function channelPath(channel) {
   return `channels/${encodeURIComponent(channel.channel)}/${encodeURIComponent(channel.key)}`;

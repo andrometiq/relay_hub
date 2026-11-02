@@ -3,22 +3,27 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Badge, Button, Dialog, ErrorMessage, FeatherIcon } from "@relay/ui";
 import SiteAccountPicker from "./SiteAccountPicker.vue";
 import SiteDialog from "./SiteDialog.vue";
-import { adminApi, assignedRefs, channelAddress, channelStatus, hubURL, provider, siteStatus, siteTokens, tokenState } from "../../composables/containers";
+import { adminApi, assignedRefs, channelAddress, channelStatus, hubURL, provider, signupRow, siteStatus, siteTokens, tokenState } from "../../composables/containers";
 
 const props = defineProps({ id: String });
 const emit = defineEmits(["title"]);
 const site = ref(null), containers = ref([]), sites = ref([]), tokens = ref({ tokens: [], more: false });
+const signups = ref({ enrolment: null, rows: [] }), signupError = ref("");
 const busy = ref(false), error = ref(""), tokenError = ref(""), notice = ref("");
 const editing = ref(""), picking = ref(false), removing = ref(null), removeBusy = ref(false), removeError = ref("");
 let ticket = 0;
 
 const secrets = computed(() => site.value?.configured_secrets || []);
 const containerName = (id) => containers.value.find((row) => row.id === id)?.name || id;
+const enrolled = computed(() => {
+  const value = signups.value.enrolment;
+  return value?.enrolled_at ? `Enrolled by ${value.token || "a deleted token"} on ${new Date(value.enrolled_at).toLocaleDateString()}` : "";
+});
 const expiry = (token) => token.Expires === "Never" ? "no expiry" : "until " + new Date(token.Expires).toLocaleDateString();
 
 async function refresh() {
   const current = ++ticket;
-  busy.value = true; error.value = ""; tokenError.value = "";
+  busy.value = true; error.value = ""; tokenError.value = ""; signupError.value = "";
   try {
     const [row, containerRows, siteRows] = await Promise.all([adminApi.site(props.id), adminApi.containers(), adminApi.sites()]);
     if (current !== ticket) return;
@@ -34,6 +39,12 @@ async function refresh() {
     if (current === ticket) tokens.value = result;
   } catch (exception) {
     if (current === ticket) tokenError.value = exception.message;
+  }
+  try {
+    const result = await adminApi.siteSignups(props.id);
+    if (current === ticket) signups.value = { enrolment: result.enrolment, rows: (result.signups || []).map(signupRow) };
+  } catch (exception) {
+    if (current === ticket) signupError.value = exception.message;
   }
 }
 
@@ -68,7 +79,7 @@ defineExpose({ refresh });
     <template v-if="site">
       <div class="admin-heading">
         <span class="admin-big-icon" aria-hidden="true"><FeatherIcon name="globe" :size="20" /></span>
-        <div><h2>{{ site.name || site.id }}</h2><p>{{ site.origin }} · <Badge :label="siteStatus(site).label" :theme="siteStatus(site).theme" /></p></div>
+        <div><h2>{{ site.name || site.id }}</h2><p>{{ site.origin }} · <Badge :label="siteStatus(site).label" :theme="siteStatus(site).theme" /><template v-if="enrolled"> · {{ enrolled }}</template></p></div>
         <div class="admin-actions"><Button label="Edit site" icon-left="pencil" @click="editing = 'site'" /></div>
       </div>
 
@@ -113,6 +124,20 @@ defineExpose({ refresh });
           <p v-if="tokens.more" class="admin-hint">More keys exist. Open Auth keys to see all.</p>
         </div>
       </div>
+
+      <div class="admin-section"><h3>WhatsApp signups</h3><span>Numbers this site added by itself. The last 20 attempts.</span></div>
+      <ErrorMessage :message="signupError" />
+      <div v-if="signups.rows.length" class="admin-table admin-spaced">
+        <div class="admin-head cols-signups" aria-hidden="true"><span>Started</span><span>Flow</span><span>State</span><span>Step</span><span>Error</span></div>
+        <div v-for="row in signups.rows" :key="row.id" class="admin-row cols-signups">
+          <span class="entity-primary">{{ row.started }}</span>
+          <span class="hide-m">{{ row.flow }}</span>
+          <span class="admin-stat"><Badge :label="row.state" :theme="row.theme" /></span>
+          <span class="hide-m">{{ row.step || "—" }}</span>
+          <span class="wide-m admin-muted">{{ row.error }}</span>
+        </div>
+      </div>
+      <p v-else-if="!signupError" class="entity-prompt admin-spaced">No WhatsApp signups for this site.</p>
 
       <SiteDialog :model-value="!!editing" :site="site" :only="editing === 'site' ? '' : editing" @update:model-value="editing = $event ? editing : ''" @saved="refresh" />
       <SiteAccountPicker v-model="picking" :site="site" :containers="containers" :sites="sites" @saved="refresh" />
