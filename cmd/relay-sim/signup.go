@@ -282,7 +282,7 @@ func (s *signupState) wabaRoute(r *http.Request, waba *esWABA, edge string, body
 		if problem := templateButtonProblem(row["components"]); problem != "" {
 			return 400, templateRejection(problem)
 		}
-		row["id"], row["status"] = fmt.Sprintf("sim-tpl-%s-%d", waba.ID, len(waba.Templates)+1), "PENDING"
+		row["id"], row["status"] = fmt.Sprintf("%s%04d", waba.ID, len(waba.Templates)+1), "PENDING"
 		waba.Templates = append(waba.Templates, row)
 		return 200, map[string]any{"id": row["id"], "status": "PENDING", "category": row["category"]}
 	}

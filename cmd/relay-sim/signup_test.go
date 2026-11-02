@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -237,7 +238,8 @@ func TestSignupAssetsAndPermissions(t *testing.T) {
 	}
 
 	templates := h.graph("GET", "/v25.0/"+waba+"/message_templates?name=hello_world", token, "", 200)["data"].([]any)
-	if len(templates) != 1 || templates[0].(map[string]any)["status"] != "APPROVED" {
+	// Meta template IDs are digits; Core refuses any other ID.
+	if len(templates) != 1 || templates[0].(map[string]any)["status"] != "APPROVED" || !regexp.MustCompile(`^[0-9]+$`).MatchString(templates[0].(map[string]any)["id"].(string)) {
 		t.Fatal(templates)
 	}
 	send := `{"messaging_product":"whatsapp","to":"919800000001","type":"template","template":{"name":"hello_world","language":{"code":"en_US"}}}`
@@ -424,6 +426,9 @@ func TestSignupBrowserFiles(t *testing.T) {
 		h.signup.browser().ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != 200 || !strings.Contains(w.Body.String(), want) || w.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal(path, w.Code)
+		}
+		if path == "/sdk.js" && w.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatal("SDK without CORS cannot load in a crossorigin script tag")
 		}
 		if path == "/es/dialog" && !strings.Contains(w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 			t.Fatal("dialog CSP missing")

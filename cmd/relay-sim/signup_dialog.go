@@ -47,6 +47,10 @@ func (s *signupState) browser() http.Handler {
 			w.Header().Set("Content-Type", kind)
 			w.Header().Set("Cache-Control", "no-store")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
+			if name == "sdk.js" {
+				// Meta serves the SDK with CORS; the Hub page loads it with crossorigin=anonymous.
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
 			if strings.HasPrefix(kind, "text/html") {
 				w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
 			}
@@ -233,7 +237,7 @@ func (s *signupState) otherProviderNumbers() []string {
 }
 
 func helloWorld(waba string) map[string]any {
-	return map[string]any{"id": "sim-tpl-" + waba + "-1", "name": "hello_world", "language": "en_US", "category": "UTILITY", "status": "APPROVED",
+	return map[string]any{"id": waba + "0001", "name": "hello_world", "language": "en_US", "category": "UTILITY", "status": "APPROVED",
 		"parameter_format": "POSITIONAL", "quality_score": map[string]any{"score": "UNKNOWN"}, "components": []any{
 			map[string]any{"type": "HEADER", "format": "TEXT", "text": "Hello World"},
 			map[string]any{"type": "BODY", "text": "Welcome and congratulations!! This message demonstrates your ability to send a WhatsApp message notification from the Cloud API, hosted by Meta. Thank you for taking the time to test with us."},
