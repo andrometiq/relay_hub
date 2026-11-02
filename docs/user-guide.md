@@ -267,6 +267,24 @@ You can create a site with no Core values and add them later. If you type one Co
 
 **Access tokens** card lists your own auth keys for this site and their state. **New token** opens the Auth keys page.
 
+A site that enrolled by itself shows **Enrolled by <token> on <date>** under its name. **WhatsApp signups** lists the last 20 times the site added a number by itself: start time, flow, state, the step that is not done, and the error. See [recipe 5.12](#512-let-sites-add-their-own-whatsapp-numbers).
+
+#### Enrolment tokens
+
+**Enrolment** on the Sites list opens the enrolment tokens. A token lets a Core site connect to the Hub by itself. The list shows the name, the kind, the origin pattern, the sites used, the expiry and the status. **Revoke** stops a token at once. Sites that already enrolled keep working.
+
+**New token** asks for:
+
+| Field | What to type | Notes |
+| --- | --- | --- |
+| Name | A name for you, for example `Acme bench`. | |
+| Kind | **Bench token** for all sites of one bench, or **Setup code** for one site. | |
+| Origin pattern | For example `https://*.example.com` or `https://shop.example.com`. | Needed for a bench token. `*.` matches one or more labels. |
+| Max sites | A number, or blank. | Blank is no limit for a bench token and 1 for a setup code. |
+| Expiry days | A number, or blank. | Blank is no expiry for a bench token and 7 days for a setup code (at most 90). |
+
+The Hub shows the new token one time. Click **Copy** before you close the dialog. For a setup code, **Copy** copies a short message that you can send to the site owner.
+
 ### 4.5 Connections
 
 ![Connections list](images/guide/12-connections.png)
@@ -484,6 +502,26 @@ The Hub has no billing page. Billing is in Core: Relay → **WhatsApp** → **Bi
 | Auth keys: "revoke an existing token first" | You have 20 active keys. | Revoke a key that is not used. |
 | Users: "cannot disable the last administrator" | The Hub must keep one active administrator. | Make another administrator first. |
 | The sign-in page comes back after you sign in | You use an HTTP address or the proxy changes the host. | Use the HTTPS address of the Hub. |
+
+### 5.12 Let sites add their own WhatsApp numbers
+
+Do this one time per Hub. After it, a Core site connects to the Hub and adds its WhatsApp number from Relay with no work in the Hub.
+
+1. In Meta, use one app with the WhatsApp use case, Business Verification and Tech Provider access. Make a Facebook Login for Business configuration of the type "WhatsApp Embedded Signup". Add the Hub domain to the allowed domains. Copy the configuration ID.
+2. In the Hub, open the container of that app ([recipe 5.2](#52-add-a-whatsapp-number) step 1 if it does not exist). Click **Edit** on **Meta app and webhook**. Tick **Use for self-service WhatsApp signup** and paste the **Embedded Signup configuration ID**. Click **Save**. Only one container can have this.
+3. In Meta, subscribe the app webhook to `messages`, `message_template_status_update`, `account_update`, `history`, `smb_app_state_sync`, `smb_message_echoes`, `phone_number_name_update`, `phone_number_quality_update` and `business_capability_update`.
+4. In the Hub, open **Sites** → **Enrolment** → **New token**. For a bench, make a **Bench token** with the origin pattern of its sites, for example `https://*.example.com`. Copy the token.
+5. On the bench, put `relay_hub_origin` (the Hub address) and `relay_enrolment_token` (the token) in `common_site_config.json`. For one site only, use that site's `site_config.json`, or send a **Setup code** to the site owner instead.
+6. On a Core site, open Relay. Relay connects the site to the Hub and opens the WhatsApp setup. The owner clicks **Continue with Facebook** and follows Meta.
+
+The Hub makes the site, its service user and its auth key. It proves that the caller serves the site origin before it saves anything. The new number goes into the signup container with the key `wa-<phone number ID>` and is linked to the site. Open the site page to see each signup and its error. If the business removes the Hub app in Meta, the Hub disables the numbers of that WhatsApp Business account.
+
+| Signup error | Meaning | Fix |
+| --- | --- | --- |
+| `number_in_use` | The number is linked to another site. | Remove it from the other site first. |
+| `register_rate_limited` | Meta allows few registrations of one number in 72 hours. | Wait, then click **Try again** in Relay. |
+| `sync_window_passed` | The chat history import of an app number must start within 24 hours. | The number works. Old chats are not imported. |
+| `partner_removed` | The business removed the Hub app in Meta. | The owner signs up again from Relay. |
 
 ## 6. Status labels
 

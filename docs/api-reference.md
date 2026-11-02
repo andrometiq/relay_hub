@@ -288,12 +288,15 @@ The administration routes are browser-session APIs, not a second public messagin
 
 | Route | Purpose |
 | --- | --- |
-| `GET`, `POST /api/containers`; `GET`, `PUT /api/containers/{container}` | List, create, read and edit containers and their WhatsApp app. Create takes only a name and returns `{id, webhook_path, csrf}` with status 201. |
+| `GET`, `POST /api/containers`; `GET`, `PUT /api/containers/{container}` | List, create, read and edit containers and their WhatsApp app. Create takes only a name and returns `{id, webhook_path, csrf}` with status 201. `signup: true` makes the container host self-service numbers; an update without `signup` keeps the saved value. A second signup container gives 409. |
 | `GET /api/containers/{container}/whatsapp/webhook` | Callback path and verify token to paste in Meta |
 | `POST /api/containers/{container}/channels`; `PUT /api/containers/{container}/channels/{channel}/{key}` | Add and edit a number, bot or mailbox |
 | `GET`, `POST /api/channels/{channel}/{key}/connection` | Read or run a connection check (`test`, or `repair` for a Telegram webhook) |
 | `GET`, `POST /api/sites`; `GET`, `PUT /api/sites/{site}` | List, create, read and edit sites and their Core credentials |
 | `PUT /api/sites/{site}/channels` | Set the full channel list of a site; 409 when a channel is on another site or has unfinished sends |
+| `GET`, `POST /api/enrolment-tokens`; `POST /api/enrolment-tokens/{id}/revoke` | List enrolment tokens; create a token `{name, kind, origin_pattern, max_sites, expiry_days}` (201, returns `secret` one time, and `message` for a `setup_code`); revoke a token (204). `kind` is `bench` or `setup_code` |
+| `GET /api/sites/{site}/signups` | `{enrolment: {token, enrolled_at}, signups}`: how the site enrolled and its last 20 WhatsApp signup sessions, without secrets |
+| `POST /api/enrol` | Site enrolment by Relay Core with `Authorization: Bearer <enrolment token or setup code>`. Not a browser-session route |
 | `GET /api/unassigned-events`; `POST /api/unassigned-events/replay` | List events of channels without a site; replay `{channel, ids}` to the channel's site now |
 | `GET /api/channels/{channel}/{key}/held`; `POST /api/channels/{channel}/{key}/held/replay` | Count the held events of one account (`{count}`); give all of them to its linked site (`{replayed}`). The replay returns 409 when the account has no site. Linking an account to a site replays its held events by itself |
 | `GET`, `POST /api/forwards/{provider}/{key}`; `DELETE /api/forwards/{provider}/{key}/{id}` | List the forward targets, the newest 50 results (`?before={id}` for older) and counts; add a target `{url}` (201); remove a target and its results (204). `provider` is `whatsapp` with the container ID, or `telegram`/`email` with the channel key. See [webhook forwarding](configuration.md#webhook-forwarding). |

@@ -37,6 +37,15 @@ sudo loginctl enable-linger <user>
 
 For scripts, set the values in the environment before setup, for example `DATABASE_URL`, `RELAY_PUBLIC_ORIGIN` and `RELAY_ADDR`. Setup saves them to `.env` and does not ask. `RELAY_SERVICE_NAME` changes the unit name (default `relay-hub`).
 
+Self-service WhatsApp signup works without more settings. Two optional values change where the signup window loads Meta from. Use them only for a test Hub with a fake Meta, such as the Relay simulator:
+
+| Variable | Default | Use |
+| --- | --- | --- |
+| `RELAY_FACEBOOK_SDK_URL` | `https://connect.facebook.net/en_US/sdk.js` | The Facebook JS SDK that the signup window loads. It must be HTTPS, or HTTP on a loopback host. |
+| `RELAY_FACEBOOK_DIALOG_ORIGIN` | Any `https://*.facebook.com` origin | The one exact origin, for example `http://127.0.0.1:18100`, that may send Embedded Signup messages to the window. It must be HTTPS, or HTTP on a loopback host. |
+
+The Hub serves the signup window and the site enrolment route from `RELAY_PUBLIC_ORIGIN`. In Meta, add the Hub domain to the allowed domains of Facebook Login for Business.
+
 ## Daily commands
 
 | Command | Result |

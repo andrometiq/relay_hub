@@ -120,8 +120,9 @@ Full template header/button/media authoring, direct media upload/download,
 interactive/catalog/location/contact payload UIs, group photo uploads, outgoing
 conversation-history projection, persistent per-agent unread/assignment state,
 concurrent-agent call ownership, TURN/SIP interoperability, server recording,
-automated hourly account/template reconciliation and full Hub account onboarding
-UI remain unfinished. Telegram/email adapters, AI/flow services and other preview
+automated hourly account/template reconciliation remain unfinished. Hub account
+onboarding is done: sites enrol with an enrolment token and add WhatsApp numbers
+through Embedded Signup (see the [user guide](user-guide.md#512-let-sites-add-their-own-whatsapp-numbers)). Telegram/email adapters, AI/flow services and other preview
 screens are outside this WhatsApp checkpoint and are not being claimed complete.
 
 ## Provider references
