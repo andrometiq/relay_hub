@@ -9,6 +9,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
+	"github.com/andrometiq/relay_hub/internal/onboarding"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -97,15 +98,29 @@ func NewAuthenticated(check func(context.Context) error, wa *whatsapp.Service, v
 	return newServer("", check, wa, verify)
 }
 func NewAuthenticatedChannels(check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier, registry *channels.Registry, mediaStores ...channels.Store) (http.Handler, error) {
+	var store channels.Store
+	if len(mediaStores) > 0 {
+		store = mediaStores[0]
+	}
+	return NewAuthenticatedChannelsWithOptions(check, wa, verify, registry, store, Options{})
+}
+
+// Options adds optional tool groups to the authenticated server.
+type Options struct {
+	// Signup adds the whatsapp.signup tools for self-service onboarding.
+	Signup *onboarding.Service
+}
+
+func NewAuthenticatedChannelsWithOptions(check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier, registry *channels.Registry, store channels.Store, opts Options) (http.Handler, error) {
 	if verify == nil {
 		return nil, errors.New("token verifier required")
 	}
-	return newServerChannels("", check, wa, verify, registry, mediaStores...)
+	return newServerChannels("", check, wa, verify, registry, opts, store)
 }
 func newServer(token string, check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier) (http.Handler, error) {
-	return newServerChannels(token, check, wa, verify, nil)
+	return newServerChannels(token, check, wa, verify, nil, Options{})
 }
-func newServerChannels(token string, check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier, registry *channels.Registry, mediaStores ...channels.Store) (http.Handler, error) {
+func newServerChannels(token string, check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier, registry *channels.Registry, opts Options, mediaStores ...channels.Store) (http.Handler, error) {
 	var mediaStore channels.Store
 	if len(mediaStores) > 0 {
 		mediaStore = mediaStores[0]
@@ -151,6 +166,12 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 				return nil, nil, errors.New("channels unavailable")
 			}
 			return nil, map[string]any{"channels": list}, nil
+		})
+	}
+	if verify != nil && opts.Signup != nil {
+		opts.Signup.AddTools(server, func(ctx context.Context) (string, bool) {
+			principal, ok := ctx.Value(principalKey{}).(auth.Principal)
+			return principal.Site, ok && principal.Site != ""
 		})
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "health.get", Description: "Check Relay Hub database readiness"}, func(ctx context.Context, r *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, Health, error) {
