@@ -203,6 +203,11 @@ func newTransport(meta, core *url.URL, records *recorder) *simTransport {
 	}
 	return &simTransport{base: base, meta: meta, core: core, records: records}
 }
+
+// maxForwardBytes bounds one Hub callback the transport forwards to Core;
+// coexistence history chunks are up to 4 MiB.
+const maxForwardBytes = 16 << 20
+
 func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	clone := r.Clone(r.Context())
 	u := *r.URL
@@ -234,12 +239,16 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	var body []byte
 	var err error
 	if r.Body != nil {
-		body, err = io.ReadAll(io.LimitReader(r.Body, 2<<20))
+		body, err = io.ReadAll(io.LimitReader(r.Body, maxForwardBytes+1))
 		r.Body.Close()
 		if err != nil {
 			return nil, err
 		}
+		if len(body) > maxForwardBytes {
+			return nil, errors.New("simulation refused a request body over 16 MiB")
+		}
 		clone.Body = io.NopCloser(bytes.NewReader(body))
+		clone.ContentLength = int64(len(body))
 	}
 	fault := t.records.fault(kind)
 	var res *http.Response

@@ -38,6 +38,29 @@ func TestTransportRoutesLocalhostSitesToCore(t *testing.T) {
 	}
 }
 
+func TestTransportForwardsLargeCallbacksWhole(t *testing.T) {
+	received := make(chan int, 1)
+	core := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received <- len(body)
+		w.Write([]byte(`{"message":{"accepted":1}}`))
+	}))
+	defer core.Close()
+	cu, _ := url.Parse(core.URL)
+	tr := newTransport(cu, cu, newRecorder())
+	defer tr.base.CloseIdleConnections()
+	client := &http.Client{Transport: tr, CheckRedirect: denyRedirect}
+	payload := strings.Repeat("x", 3<<20)
+	res, err := client.Post("http://relay-onboard.localhost:"+cu.Port()+"/api/method/relay_core.inbound.receive", "application/json", strings.NewReader(payload))
+	if err != nil {
+		t.Fatal("a 3 MiB history callback must reach Core", err)
+	}
+	res.Body.Close()
+	if got := <-received; got != len(payload) {
+		t.Fatal("callback body cut", got)
+	}
+}
+
 func TestRecorderRedactsSignupSecrets(t *testing.T) {
 	records := newRecorder()
 	r := httptest.NewRequest("GET", "/v25.0/oauth/access_token?client_id=sim-app&client_secret=secret-one&code=secret-two&input_token=secret-three&fields=id", nil)
