@@ -23,6 +23,9 @@ var channels = map[string]bool{"WhatsApp": true, "Telegram": true, "Email": true
 // ErrConflict means the request names a record owned by another container or site.
 var ErrConflict = errors.New("record belongs to another container or site")
 
+// ErrSignupTaken means another container already hosts self-service signup.
+var ErrSignupTaken = errors.New("another container is already used for self-service WhatsApp signup")
+
 type Store struct {
 	DB  *pgxpool.Pool
 	Key []byte

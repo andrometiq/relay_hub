@@ -220,7 +220,7 @@ func (s *Store) writeChannel(ctx context.Context, tx pgx.Tx, c Channel, public m
 
 // featuresChanged reports a change of the WhatsApp features that Core reads in its channel list.
 func featuresChanged(stored, public map[string]any) bool {
-	for _, key := range []string{"templates", "groups", "calls"} {
+	for _, key := range []string{"templates", "groups", "calls", "coexistence"} {
 		before, _ := stored[key].(bool)
 		after, _ := public[key].(bool)
 		if before != after {

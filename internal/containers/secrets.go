@@ -11,14 +11,15 @@ import (
 var sensitiveKeys = []string{"app_secret", "verify_token", "core_token", "core_api_key", "core_api_secret", "callback_secret", "imap_password"}
 
 // Container provider settings are shared by every number of one Meta app.
-var providerPublicKeys = map[string]bool{"app_id": true, "graph_version": true}
+var providerPublicKeys = map[string]bool{"app_id": true, "graph_version": true, "es_config_id": true}
 var providerPrivateKeys = []string{"app_secret", "verify_token"}
 
 // Site credentials sign and authorize every callback to one Frappe site.
 var siteSecretKeys = []string{"core_api_key", "core_api_secret", "callback_secret"}
 
 var channelPublicKeys = map[string]map[string]bool{
-	"WhatsApp": {"phone_id": true, "waba_id": true, "display_number": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true},
+	"WhatsApp": {"phone_id": true, "waba_id": true, "display_number": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true,
+		"business_id": true, "onboarding": true, "coexistence": true, "partner_status": true, "register_attempts": true},
 	"Telegram": {"username": true, "webhook_status": true, "checked_at": true},
 	"Email":    {"connection_status": true, "checked_at": true, "host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
 }
@@ -28,7 +29,8 @@ var channelPublicKeys = map[string]map[string]bool{
 var statusKeys = []string{"connection_status", "verified_at", "webhook_status", "checked_at"}
 
 // A WhatsApp number may override the container's app_secret and verify_token.
-var channelPrivateKeys = map[string][]string{"WhatsApp": {"core_token", "app_secret", "verify_token"}, "Email": {"imap_password"}}
+// pin is the two-step verification PIN that self-service signup registers.
+var channelPrivateKeys = map[string][]string{"WhatsApp": {"core_token", "app_secret", "verify_token", "pin"}, "Email": {"imap_password"}}
 
 func sensitive(key string) bool { return contains(sensitiveKeys, key) }
 

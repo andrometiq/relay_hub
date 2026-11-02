@@ -17,6 +17,8 @@ type Container struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Enabled bool   `json:"enabled"`
+	// Signup marks the one container that hosts self-service WhatsApp numbers.
+	Signup bool `json:"signup"`
 	// WebhookPath is the random public WhatsApp callback path of the container.
 	WebhookPath string    `json:"webhook_path"`
 	WhatsApp    Provider  `json:"whatsapp"`
@@ -70,7 +72,7 @@ func (s *Store) ListContainers(ctx context.Context, query, after string, limit i
 func (s *Store) GetContainer(ctx context.Context, id string) (Container, error) {
 	c := Container{ID: id, WhatsApp: Provider{Config: map[string]any{}, ConfiguredSecrets: []string{}}}
 	var public string
-	if err := s.DB.QueryRow(ctx, `SELECT name,enabled,public_id FROM relay_containers WHERE container_id=$1`, id).Scan(&c.Name, &c.Enabled, &public); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT name,enabled,signup,public_id FROM relay_containers WHERE container_id=$1`, id).Scan(&c.Name, &c.Enabled, &c.Signup, &public); err != nil {
 		return c, err
 	}
 	c.WebhookPath = "/webhooks/whatsapp/" + public
@@ -128,8 +130,11 @@ func upsertContainer(ctx context.Context, tx pgx.Tx, c Container, create bool) e
 	if name == "" {
 		name = c.ID
 	}
-	result, err := tx.Exec(ctx, `INSERT INTO relay_containers(container_id,name,enabled) VALUES($1,$2,$3)
- ON CONFLICT(container_id) DO UPDATE SET name=excluded.name,enabled=excluded.enabled,updated_at=now() WHERE NOT $4`, c.ID, name, c.Enabled, create)
+	result, err := tx.Exec(ctx, `INSERT INTO relay_containers(container_id,name,enabled,signup) VALUES($1,$2,$3,$5)
+ ON CONFLICT(container_id) DO UPDATE SET name=excluded.name,enabled=excluded.enabled,signup=excluded.signup,updated_at=now() WHERE NOT $4`, c.ID, name, c.Enabled, create, c.Signup)
+	if isUniqueViolation(err, "relay_containers_signup") {
+		return ErrSignupTaken
+	}
 	if err != nil {
 		return err
 	}
