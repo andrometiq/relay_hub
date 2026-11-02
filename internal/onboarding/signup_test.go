@@ -175,6 +175,11 @@ func TestStartReturnsTheRunningSignupAndSupersedesOldOnes(t *testing.T) {
 	if first.id == second.id || h.session(first.id).State != "superseded" {
 		t.Fatal("unused signup was not superseded")
 	}
+	var hints int
+	h.pool.QueryRow(h.ctx, `SELECT count(*) FROM relay_whatsapp_events WHERE site_id=$1 AND payload->>'object'='relay_signup' AND payload->>'session_id'=$2 AND payload->>'state'='superseded'`, site, first.id).Scan(&hints)
+	if hints != 1 {
+		t.Fatal("Core got no hint that the old signup was superseded", hints)
+	}
 	h.meta.fault("subscribe_503", 1)
 	working := second.finish("FINISH", "230", "120", "code-230")
 	if working.State != "working" || working.Error == nil || !working.Error.Retryable {

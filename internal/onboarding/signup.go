@@ -72,13 +72,24 @@ func (s *Service) Start(ctx context.Context, site, flow string, prefill map[stri
 
 func (s *Service) insertSession(ctx context.Context, tx pgx.Tx, site, container, flow string, prefill []byte, actor, secret string) (string, error) {
 	now := s.now()
-	if _, err := tx.Exec(ctx, `UPDATE relay_signup_sessions SET state='superseded',updated_at=$2 WHERE site_id=$1
- AND (state IN ('created','waiting_for_meta','cancelled') OR (state='failed' AND channel_key IS NULL AND token_ciphertext IS NULL))`, site, now); err != nil {
+	rows, err := tx.Query(ctx, `UPDATE relay_signup_sessions SET state='superseded',updated_at=$2 WHERE site_id=$1
+ AND (state IN ('created','waiting_for_meta','cancelled') OR (state='failed' AND channel_key IS NULL AND token_ciphertext IS NULL)) RETURNING session_id`, site, now)
+	if err != nil {
 		return "", err
+	}
+	superseded, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return "", err
+	}
+	// Core keeps a copy of each session; the hint lets it close the old ones too.
+	for _, old := range superseded {
+		if err = journal(ctx, tx, site, old, "superseded", ""); err != nil {
+			return "", err
+		}
 	}
 	id := "sus_" + auth.Secret()[:32]
 	steps, _ := json.Marshal(freshSteps())
-	_, err := tx.Exec(ctx, `INSERT INTO relay_signup_sessions(session_id,site_id,container_id,flow,steps,launch_hash,prefill,actor,created_at,updated_at,expires_at)
+	_, err = tx.Exec(ctx, `INSERT INTO relay_signup_sessions(session_id,site_id,container_id,flow,steps,launch_hash,prefill,actor,created_at,updated_at,expires_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10)`, id, site, container, flow, steps, auth.Hash(secret), prefill, actor, now, now.Add(waitForMeta))
 	return id, err
 }
