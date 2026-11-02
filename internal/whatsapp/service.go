@@ -56,12 +56,16 @@ type Service struct {
 	Events       EventStore
 	// Forward queues a verified webhook for the container's forward targets.
 	// It must not wait for a target.
-	Forward  func(ctx context.Context, container string, header http.Header, body []byte)
-	Outbox   *Outbox
-	slots    chan struct{}
-	Accounts []Account
-	client   *http.Client
-	base     string
+	Forward func(ctx context.Context, container string, header http.Header, body []byte)
+	// AccountUpdate receives each account_update webhook after it is journaled,
+	// for example PARTNER_REMOVED for a self-service WABA.
+	AccountUpdate func(ctx context.Context, waba, event string) error
+	Outbox        *Outbox
+	apps          []App
+	slots         chan struct{}
+	Accounts      []Account
+	client        *http.Client
+	base          string
 }
 
 func (s *Service) AccountsSnapshot() []Account {
@@ -78,6 +82,25 @@ func (s *Service) AccountByKey(key string) (Account, bool) {
 		}
 	}
 	return Account{}, false
+}
+
+// App is the webhook identity of one container's Meta app. It lets a container
+// verify and receive webhooks before it has any number.
+type App struct {
+	ContainerID, WebhookID, AppSecret, VerifyToken string
+}
+
+// ReplaceApps publishes the container apps used for webhooks without a known number.
+func (s *Service) ReplaceApps(apps []App) {
+	s.accountsMu.Lock()
+	s.apps = append([]App(nil), apps...)
+	s.accountsMu.Unlock()
+}
+
+func (s *Service) appsSnapshot() []App {
+	s.accountsMu.RLock()
+	defer s.accountsMu.RUnlock()
+	return append([]App(nil), s.apps...)
 }
 
 func (s *Service) ReplaceAccounts(accounts []Account) error {
@@ -491,7 +514,7 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 	case "account.business":
 		method = "GET"
 		path = a.WABAID
-		query.Set("fields", businessProfileFields)
+		query.Set("fields", businessQueryFields)
 	case "templates.delete":
 		if !a.Templates || !templateName.MatchString(in.Name) {
 			return nil, errors.New("enabled templates and template name required")

@@ -195,16 +195,16 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 	if id == "" {
 		id = r.PathValue("account")
 	}
-	accounts := s.AccountsSnapshot()
+	accounts, apps := s.AccountsSnapshot(), s.appsSnapshot()
 	if id != "" {
-		accounts = webhookAccounts(accounts, id)
-		if len(accounts) == 0 {
+		accounts, apps = webhookAccounts(accounts, id), webhookApps(apps, id)
+		if len(accounts) == 0 && len(apps) == 0 {
 			http.NotFound(w, r)
 			return
 		}
 	}
 	if r.Method == "GET" {
-		s.verifyWebhook(w, r, accounts)
+		s.verifyWebhook(w, r, accounts, apps)
 		return
 	}
 	if r.Method != "POST" {
@@ -218,7 +218,7 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "webhook capacity reached; retry", http.StatusServiceUnavailable)
 		return
 	}
-	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxWebhookBytes))
 	if e != nil {
 		http.Error(w, "invalid body", 413)
 		return
@@ -228,8 +228,15 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid event", 400)
 		return
 	}
-	authenticated := signedBy(accounts, raw, r.Header.Get("X-Hub-Signature-256"))
-	if len(authenticated) == 0 {
+	signature := r.Header.Get("X-Hub-Signature-256")
+	authenticated := signedBy(accounts, raw, signature)
+	container := ""
+	if len(authenticated) > 0 {
+		container = authenticated[0].ContainerID
+	} else if app, ok := signedApp(apps, raw, signature); ok {
+		container = app.ContainerID
+		authenticated = containerAccounts(accounts, container)
+	} else {
 		http.Error(w, "invalid signature", 403)
 		return
 	}
@@ -254,13 +261,14 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(unrouted.Entry) > 0 {
-		if e = s.saveRouted(r.Context(), Route{Container: authenticated[0].ContainerID}, unrouted, raw); e != nil {
+		if e = s.saveRouted(r.Context(), Route{Container: container}, unrouted, raw); e != nil {
 			http.Error(w, "event persistence failed", 503)
 			return
 		}
 	}
 	if s.Forward != nil {
-		forwarded := map[string]bool{}
+		forwarded := map[string]bool{container: true}
+		s.Forward(r.Context(), container, r.Header, raw)
 		for _, a := range authenticated {
 			if !forwarded[a.ContainerID] {
 				forwarded[a.ContainerID] = true
@@ -275,8 +283,65 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 		if accountChange(entry) {
 			_ = s.Metadata.RefreshAccounts(r.Context(), entry.ID)
 		}
+		if s.AccountUpdate != nil {
+			for _, update := range accountUpdates(entry) {
+				_ = s.AccountUpdate(r.Context(), update[0], update[1])
+			}
+		}
 	}
 	w.WriteHeader(200)
+}
+
+// MaxWebhookBytes bounds one Meta webhook body. Coexistence history chunks are large.
+const MaxWebhookBytes = 4 << 20
+
+// webhookApps lists the container apps behind a public webhook path.
+func webhookApps(apps []App, path string) []App {
+	result := []App{}
+	for _, app := range apps {
+		if app.WebhookID == path || (app.WebhookID == "" && app.ContainerID == path) {
+			result = append(result, app)
+		}
+	}
+	return result
+}
+
+// signedApp returns the container app whose app secret signed the raw body.
+func signedApp(apps []App, raw []byte, signature string) (App, bool) {
+	for _, app := range apps {
+		if app.AppSecret == "" {
+			continue
+		}
+		mac := hmac.New(sha256.New, []byte(app.AppSecret))
+		mac.Write(raw)
+		if hmac.Equal([]byte("sha256="+hex.EncodeToString(mac.Sum(nil))), []byte(signature)) {
+			return app, true
+		}
+	}
+	return App{}, false
+}
+
+// accountUpdates returns the WABA id and event of each account_update change.
+func accountUpdates(entry webhookEntry) [][2]string {
+	result := [][2]string{}
+	for _, change := range entry.Changes {
+		if change.Field != "account_update" {
+			continue
+		}
+		var event string
+		var info struct {
+			WABAID string `json:"waba_id"`
+		}
+		if json.Unmarshal(change.Value["event"], &event) != nil || event == "" {
+			continue
+		}
+		_ = json.Unmarshal(change.Value["waba_info"], &info)
+		if info.WABAID == "" {
+			info.WABAID = entry.ID
+		}
+		result = append(result, [2]string{info.WABAID, event})
+	}
+	return result
 }
 
 // webhookAccounts lists the numbers of the container behind a public webhook path.
@@ -342,10 +407,17 @@ func signedBy(accounts []Account, raw []byte, signature string) []Account {
 	return result
 }
 
-func (s *Service) verifyWebhook(w http.ResponseWriter, r *http.Request, accounts []Account) {
+func (s *Service) verifyWebhook(w http.ResponseWriter, r *http.Request, accounts []Account, apps []App) {
 	token := r.URL.Query().Get("hub.verify_token")
+	tokens := []string{}
 	for _, a := range accounts {
-		if a.VerifyToken != "" && r.URL.Query().Get("hub.mode") == "subscribe" && subtle.ConstantTimeCompare([]byte(token), []byte(a.VerifyToken)) == 1 {
+		tokens = append(tokens, a.VerifyToken)
+	}
+	for _, app := range apps {
+		tokens = append(tokens, app.VerifyToken)
+	}
+	for _, expected := range tokens {
+		if expected != "" && r.URL.Query().Get("hub.mode") == "subscribe" && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
 			w.Header().Set("Content-Type", "text/plain")
 			w.Write([]byte(r.URL.Query().Get("hub.challenge")))
 			return

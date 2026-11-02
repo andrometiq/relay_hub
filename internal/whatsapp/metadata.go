@@ -18,6 +18,8 @@ import (
 const (
 	phoneProfileFields    = "id,display_phone_number,verified_name,quality_rating,whatsapp_business_manager_messaging_limit,throughput,status,name_status"
 	businessProfileFields = "id,name,account_review_status,business_verification_status,whatsapp_business_manager_messaging_limit"
+	// primary_funding_id is read only to tell whether a payment method exists; the id is never stored.
+	businessQueryFields = businessProfileFields + ",primary_funding_id"
 	// Meta's default template fields plus quality and rejection reason, which it leaves out by default.
 	templateListFields = "id,name,status,language,category,previous_category,sub_category,components,parameter_format,message_send_ttl_seconds,is_primary_device_delivery_only,disable_ios_autofill,quality_score,rejected_reason"
 )
@@ -104,8 +106,13 @@ func (m *MetadataSync) Sync(ctx context.Context, a Account) error {
 		return fail()
 	}
 	// Number health stays useful when the token cannot read the WABA, so its values are optional.
-	business, _ := m.Service.Execute(ctx, a, Input{Operation: "account.business"})
+	business, businessErr := m.Service.Execute(ctx, a, Input{Operation: "account.business"})
 	safeProfile := safeStrings(profile, strings.Split(phoneProfileFields, ","))
+	safeProfile["payment_method_ready"] = nil
+	if businessErr == nil {
+		funding, _ := business["primary_funding_id"].(string)
+		safeProfile["payment_method_ready"] = funding != ""
+	}
 	if throughput, ok := profile["throughput"].(map[string]any); ok {
 		if level, ok := throughput["level"].(string); ok && len(level) <= 100 {
 			safeProfile["throughput_level"] = level

@@ -79,10 +79,10 @@ func TestMetadataDatabaseRefresh(t *testing.T) {
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/222") {
-			if r.URL.Query().Get("fields") != businessProfileFields {
+			if r.URL.Query().Get("fields") != businessQueryFields {
 				t.Error("business fields not requested")
 			}
-			fmt.Fprint(w, `{"id":"222","name":"Fixture WABA","account_review_status":"APPROVED","business_verification_status":"verified","whatsapp_business_manager_messaging_limit":"TIER_2K"}`)
+			fmt.Fprint(w, `{"id":"222","name":"Fixture WABA","account_review_status":"APPROVED","business_verification_status":"verified","whatsapp_business_manager_messaging_limit":"TIER_2K","primary_funding_id":"funding-secret"}`)
 			return
 		}
 		if r.URL.Query().Get("fields") != templateListFields {
@@ -113,13 +113,16 @@ func TestMetadataDatabaseRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(value)
-	if strings.Contains(string(raw), "provider-secret") || value["status"] != "ready" || len(value["templates"].([]any)) != 2 {
+	if strings.Contains(string(raw), "provider-secret") || strings.Contains(string(raw), "funding-secret") || value["status"] != "ready" || len(value["templates"].([]any)) != 2 {
 		t.Fatalf("invalid cache: %s", raw)
 	}
 	profile := value["profile"].(map[string]any)
 	business := profile["business"].(map[string]any)
 	if profile["quality_rating"] != "YELLOW" || profile["status"] != "FLAGGED" || profile["throughput_level"] != "STANDARD" || profile["whatsapp_business_manager_messaging_limit"] != "TIER_2K" || profile["throughput"] != nil {
 		t.Fatalf("number health not cached: %s", raw)
+	}
+	if profile["payment_method_ready"] != true {
+		t.Fatalf("payment method presence not cached: %s", raw)
 	}
 	if business["account_review_status"] != "APPROVED" || business["business_verification_status"] != "verified" || business["name"] != "Fixture WABA" {
 		t.Fatalf("account health not cached: %s", raw)
