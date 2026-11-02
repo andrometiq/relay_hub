@@ -2,7 +2,9 @@ package containers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -187,3 +189,37 @@ func (s *Store) Seal(secret string) ([]byte, []byte, error) { return s.box(secre
 
 // Open decrypts a value sealed with Seal.
 func (s *Store) Open(ciphertext, nonce []byte) (string, error) { return s.unbox(ciphertext, nonce) }
+
+// RecordRegisterAttempt counts one Meta register call for a number. It
+// refuses the call when limit calls happened within window, because Meta
+// blocks the number for 72 hours after too many tries.
+func (s *Store) RecordRegisterAttempt(ctx context.Context, key string, now time.Time, window time.Duration, limit int) (bool, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var raw []byte
+	if err = tx.QueryRow(ctx, `SELECT coalesce(config->'register_attempts','[]'::jsonb) FROM relay_channel_credentials WHERE channel='WhatsApp' AND channel_key=$1 FOR UPDATE`, key).Scan(&raw); err != nil {
+		return false, err
+	}
+	var stored []time.Time
+	if json.Unmarshal(raw, &stored) != nil {
+		stored = nil
+	}
+	recent := []time.Time{}
+	for _, at := range stored {
+		if now.Sub(at) < window {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) >= limit {
+		return false, nil
+	}
+	recent = append(recent, now.UTC())
+	encoded, _ := json.Marshal(recent)
+	if _, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET config=config||jsonb_build_object('register_attempts',$2::jsonb),updated_at=now() WHERE channel='WhatsApp' AND channel_key=$1`, key, encoded); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}

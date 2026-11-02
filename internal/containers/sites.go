@@ -137,6 +137,15 @@ func (s *Store) CreateSite(ctx context.Context, site Site, secrets map[string]an
 	return s.commitSite(ctx, site, secrets, true, adminID)
 }
 
+// SaveSiteTx creates or updates a site inside the caller's transaction, for
+// site enrolment. Blank secrets keep stored values.
+func (s *Store) SaveSiteTx(ctx context.Context, tx pgx.Tx, site Site, secrets map[string]any) error {
+	if err := validate(site.ID, site.Origin); err != nil {
+		return err
+	}
+	return s.saveSite(ctx, tx, site, secrets, false)
+}
+
 func (s *Store) commitSite(ctx context.Context, site Site, secrets map[string]any, create bool, adminID int64) error {
 	if err := validate(site.ID, site.Origin); err != nil {
 		return err

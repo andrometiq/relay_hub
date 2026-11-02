@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Connect WhatsApp</title>
+<link rel="stylesheet" href="../assets/page.css">
+<script src="../assets/page.js" defer></script>
+</head>
+<body>
+<main class="card" aria-live="polite">
+  <header class="brand"><span class="logo" aria-hidden="true">R</span><span>Relay</span></header>
+  <h1 id="title">Connect WhatsApp</h1>
+  <p id="flow" class="muted"></p>
+  <section id="intro" hidden>
+    <p>Facebook opens in a new window. Sign in, choose your business and add your number. Relay does the rest.</p>
+    <button id="start" class="button primary" type="button" disabled>Continue with Facebook</button>
+  </section>
+  <ol id="steps" class="steps" hidden></ol>
+  <div id="message" class="message" hidden></div>
+  <div id="actions" class="actions" hidden>
+    <button id="retry" class="button primary" type="button" hidden>Try again</button>
+    <a id="return" class="button" hidden>Return to Relay</a>
+    <button id="close" class="button" type="button" hidden>Close</button>
+  </div>
+</main>
+</body>
+</html>
