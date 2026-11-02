@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"testing"
 )
 
@@ -23,16 +24,16 @@ func TestWhatsAppSavedConfigurationMatchesValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 		candidate := whatsappCandidate(containers.Account{ID: "a"}, containers.AccountChannel{Config: config}, "", stored)
-		rows, err := runtimeWhatsApp(context.Background(), fixtureRuntime{rows: []containers.RuntimeCredential{{Key: "a", Channel: "WhatsApp", Config: config}}})
+		rows, err := relayruntime.WhatsAppAccounts(context.Background(), fixtureRuntime{rows: []containers.RuntimeCredential{{Key: "a", Channel: "WhatsApp", Config: config}}})
 		if err != nil || len(rows) != 1 || candidate.MessagesPerSecond != rows[0].MessagesPerSecond {
 			t.Fatal("pacing mismatch", err)
 		}
 	}
 	for _, value := range []any{-1, 1001, 1.5, true, "bad", "15"} {
-		if _, err := whatsappRate(value); err == nil {
+		if _, err := relayruntime.Rate(value); err == nil {
 			t.Fatal("accepted invalid rate", value)
 		}
-		if _, err := runtimeWhatsApp(t.Context(), fixtureRuntime{rows: []containers.RuntimeCredential{{Channel: "WhatsApp", Config: map[string]any{"messages_per_second": value}}}}); err == nil {
+		if _, err := relayruntime.WhatsAppAccounts(t.Context(), fixtureRuntime{rows: []containers.RuntimeCredential{{Channel: "WhatsApp", Config: map[string]any{"messages_per_second": value}}}}); err == nil {
 			t.Fatal("invalid stored rate loaded")
 		}
 	}

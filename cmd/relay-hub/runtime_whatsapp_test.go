@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
+	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 )
 
@@ -16,6 +17,10 @@ type fixtureRuntime struct {
 
 func (s fixtureRuntime) Runtime(context.Context) ([]containers.RuntimeCredential, error) {
 	return s.rows, s.err
+}
+
+func (s fixtureRuntime) WhatsAppApps(context.Context) ([]containers.WhatsAppApp, error) {
+	return nil, s.err
 }
 func TestAuthoritativeEmptyWhatsAppConfiguration(t *testing.T) {
 	legacy := whatsapp.Account{ID: "legacy", Site: "https://fixture.invalid", PhoneID: "111", WABAID: "222", Version: "v25.0", AccessToken: "fixture"}
@@ -39,7 +44,7 @@ func TestAuthoritativeEmptyWhatsAppConfiguration(t *testing.T) {
 }
 
 func TestWhatsAppRuntimeDisablesStoredGroupAndCallCapabilities(t *testing.T) {
-	rows, err := runtimeWhatsApp(context.Background(), fixtureRuntime{rows: []containers.RuntimeCredential{{
+	rows, err := relayruntime.WhatsAppAccounts(context.Background(), fixtureRuntime{rows: []containers.RuntimeCredential{{
 		Key: "fixture", Channel: "WhatsApp", Site: "https://fixture.invalid", Secret: "fixture", Enabled: true,
 		Config: map[string]any{"phone_id": "111", "waba_id": "222", "graph_version": "v25.0", "templates": true, "groups": true, "calls": true},
 	}}})

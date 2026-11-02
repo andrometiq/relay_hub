@@ -11,6 +11,7 @@ import (
 
 	"github.com/andrometiq/relay_hub/internal/channels"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -122,22 +123,6 @@ func validateEmailSettings(config map[string]any, password string) error {
 	return nil
 }
 
-func whatsappRate(value any) (int, error) {
-	if value == nil {
-		return 0, nil
-	}
-	switch value.(type) {
-	case int, float64:
-	default:
-		return 0, errors.New("messages_per_second must be an integer from 0 to 1000")
-	}
-	rate, err := strconv.Atoi(fmt.Sprint(value))
-	if err != nil || rate < 0 || rate > 1000 {
-		return 0, errors.New("messages_per_second must be an integer from 0 to 1000")
-	}
-	return rate, nil
-}
-
 func validateWhatsAppConfig(config map[string]any) error {
 	for _, key := range []string{"phone_id", "waba_id", "app_id"} {
 		value, ok := config[key].(string)
@@ -145,6 +130,6 @@ func validateWhatsAppConfig(config map[string]any) error {
 			return errors.New(key + " is required")
 		}
 	}
-	_, err := whatsappRate(config["messages_per_second"])
+	_, err := relayruntime.Rate(config["messages_per_second"])
 	return err
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -98,7 +99,7 @@ func storeFailure(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(err, containers.ErrConflict), errors.Is(err, containers.ErrPendingSends), errors.Is(err, containers.ErrNotLinked):
+	case errors.Is(err, containers.ErrConflict), errors.Is(err, containers.ErrPendingSends), errors.Is(err, containers.ErrNotLinked), errors.Is(err, containers.ErrSignupTaken):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.As(err, &pgErr), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
@@ -361,7 +362,7 @@ func (a directoryAdmin) checkChannel(ctx context.Context, ch *containers.Channel
 		if err := validateWhatsAppConfig(candidate.Config); err != nil {
 			return err
 		}
-		account, err := whatsappAccount(candidate)
+		account, err := relayruntime.WhatsAppAccount(candidate)
 		if err != nil {
 			return err
 		}

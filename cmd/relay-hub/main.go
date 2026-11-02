@@ -17,6 +17,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/andrometiq/relay_hub/internal/live"
+	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -88,63 +89,12 @@ func check(ctx context.Context, ready bool) error {
 }
 
 type runtimeAccountSource interface {
-	Runtime(context.Context) ([]accountstore.RuntimeCredential, error)
+	relayruntime.Source
+	relayruntime.AppSource
 }
 
 func activateWhatsApp(ctx context.Context, wa *whatsapp.Service, store runtimeAccountSource) error {
-	configured, err := runtimeWhatsApp(ctx, store)
-	if err != nil {
-		return err
-	}
-	return wa.ReplaceAccounts(configured)
-}
-
-func runtimeWhatsApp(ctx context.Context, store runtimeAccountSource) ([]whatsapp.Account, error) {
-	rows, err := store.Runtime(ctx)
-	if err != nil {
-		return nil, err
-	}
-	accounts := make([]whatsapp.Account, 0)
-	for _, row := range rows {
-		if row.Channel != "WhatsApp" {
-			continue
-		}
-		account, err := whatsappAccount(row)
-		if err != nil {
-			return nil, err
-		}
-		accounts = append(accounts, account)
-	}
-	return accounts, nil
-}
-
-// whatsappAccount joins one number with its container app and its site.
-// A number of a disabled site is kept so its webhooks are still journaled.
-func whatsappAccount(row accountstore.RuntimeCredential) (whatsapp.Account, error) {
-	get := func(key string) string { value, _ := row.Config[key].(string); return value }
-	rate, err := whatsappRate(row.Config["messages_per_second"])
-	if err != nil {
-		return whatsapp.Account{}, err
-	}
-	account := whatsapp.Account{MessagesPerSecond: rate, ID: row.Key, ContainerID: row.Container, Label: row.Label,
-		WebhookID:   row.WebhookID,
-		AccessToken: row.Secret, DisplayNumber: get("display_number"),
-		AppID: get("app_id"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
-		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), CoreToken: get("core_token"),
-		SyncMetadata: boolValue(row.Config["sync_metadata"]), Templates: boolValue(row.Config["templates"]),
-	}
-	if row.Site != "" {
-		account.SiteID, account.Site = row.Site, row.Origin
-		if row.SiteEnabled {
-			account.CoreAPIKey, account.CoreAPISecret, account.CallbackSecret = row.Core.APIKey, row.Core.APISecret, row.Core.CallbackSecret
-		}
-	}
-	return account, nil
-}
-
-func boolValue(value any) bool {
-	v, ok := value.(bool)
-	return ok && v
+	return relayruntime.ActivateWhatsApp(ctx, wa, store)
 }
 
 // whatsappCandidate is the number an account save would create, for a Meta check
@@ -162,11 +112,11 @@ func whatsappCandidate(account accountstore.Account, channel accountstore.Accoun
 	if secret == "" {
 		secret = stored.Secret
 	}
-	rate, err := whatsappRate(config["messages_per_second"])
+	rate, err := relayruntime.Rate(config["messages_per_second"])
 	if err != nil {
 		rate = -1
 	}
-	candidate, _ := whatsappAccount(accountstore.RuntimeCredential{Key: account.ID, Channel: "WhatsApp", Container: account.ID, Config: config, Secret: secret})
+	candidate, _ := relayruntime.WhatsAppAccount(accountstore.RuntimeCredential{Key: account.ID, Channel: "WhatsApp", Container: account.ID, Config: config, Secret: secret})
 	candidate.MessagesPerSecond, candidate.SiteID, candidate.Site = rate, account.ID, account.Site
 	return candidate
 }
@@ -364,7 +314,11 @@ func run() error {
 		// and admin handlers share the stable registry object, so a reload or a
 		// revocation also reaches handlers built before it.
 		reloadRuntime := func(ctx context.Context) error {
-			configured, e := runtimeWhatsApp(ctx, accountStore)
+			configured, e := relayruntime.WhatsAppAccounts(ctx, accountStore)
+			var apps []whatsapp.App
+			if e == nil {
+				apps, e = relayruntime.WhatsAppApps(ctx, accountStore)
+			}
 			var nextChannels *channels.Registry
 			var channelRows []accountstore.RuntimeCredential
 			if e == nil {
@@ -379,6 +333,9 @@ func run() error {
 			}
 			if e == nil {
 				e = wa.ReplaceAccounts(configured)
+			}
+			if e == nil {
+				wa.ReplaceApps(apps)
 			}
 			if e == nil {
 				e = channelRegistry.Replace(nextChannels)
