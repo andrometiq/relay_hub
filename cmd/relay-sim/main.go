@@ -125,6 +125,10 @@ func (s *simulation) control(w http.ResponseWriter, r *http.Request) {
 		s.signupControl(w, r)
 		return
 	}
+	if r.Method == "POST" && r.URL.Path == "/_sim/signup-container" {
+		s.signupContainer(w, r)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/_sim/telegram/") || strings.HasPrefix(r.URL.Path, "/_sim/email/") || r.URL.Path == "/_sim/providers" {
 		s.providerControl(w, r)
 		return
