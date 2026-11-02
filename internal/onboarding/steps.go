@@ -28,10 +28,14 @@ const syncWindow = 24 * time.Hour
 // run executes steps of a claimed session until it completes, fails, waits
 // for a retry or the deadline passes. The caller holds the lease.
 func (s *Service) run(ctx context.Context, r *record, deadline time.Time) error {
+	// Saves outlive a closed request, so a lease is never left behind.
+	store := context.WithoutCancel(ctx)
 	for r.State == "working" {
 		name := r.nextStep()
 		if name == "" {
-			s.finish(ctx, r)
+			finishCtx, cancel := context.WithTimeout(store, 10*time.Second)
+			s.finish(finishCtx, r)
+			cancel()
 			break
 		}
 		if time.Now().After(deadline) {
@@ -40,10 +44,12 @@ func (s *Service) run(ctx context.Context, r *record, deadline time.Time) error 
 			break
 		}
 		r.mark(name, "running", s.now())
-		if err := s.save(ctx, r, true); err != nil {
+		if err := s.save(store, r, true); err != nil {
 			return err
 		}
-		status, err := s.runStep(ctx, r, name)
+		stepCtx, cancel := context.WithDeadline(ctx, deadline.Add(3*time.Second))
+		status, err := s.runStep(stepCtx, r, name)
+		cancel()
 		if err != nil {
 			if s.stepFailed(r, name, err) {
 				continue
@@ -60,7 +66,7 @@ func (s *Service) run(ctx context.Context, r *record, deadline time.Time) error 
 		now := s.now()
 		r.nextAttemptAt = &now
 	}
-	if err := s.save(ctx, r, false); err != nil {
+	if err := s.save(store, r, false); err != nil {
 		return err
 	}
 	if r.State == "working" {
