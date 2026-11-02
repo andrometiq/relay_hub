@@ -102,7 +102,7 @@ func (s *Store) Bootstrap(ctx context.Context, name, pass string) error {
 		return e
 	}
 	var count int
-	if e = tx.QueryRow(ctx, "SELECT count(*) FROM relay_users").Scan(&count); e != nil {
+	if e = tx.QueryRow(ctx, "SELECT count(*) FROM relay_users WHERE kind='person'").Scan(&count); e != nil {
 		return e
 	}
 	if count != 0 {
@@ -153,7 +153,7 @@ func admin(ctx context.Context, tx pgx.Tx, id int64) error {
 func (s *Store) Login(ctx context.Context, name, pass, agent string) (string, error) {
 	var u User
 	var salt, h string
-	e := s.DB.QueryRow(ctx, "SELECT id,username,role,enabled,auth_version,password_salt,password_hash FROM relay_users WHERE username=$1", name).Scan(&u.ID, &u.Username, &u.Role, &u.Enabled, &u.Version, &salt, &h)
+	e := s.DB.QueryRow(ctx, "SELECT id,username,role,enabled,auth_version,password_salt,password_hash FROM relay_users WHERE username=$1 AND kind='person'", name).Scan(&u.ID, &u.Username, &u.Role, &u.Enabled, &u.Version, &salt, &h)
 	if e != nil {
 		salt = strings.Repeat("0", 32)
 		h = strings.Repeat("0", 64)
