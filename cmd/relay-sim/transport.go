@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ type capture struct {
 	StartedNS  int64           `json:"started_ns"`
 	FinishedNS int64           `json:"finished_ns"`
 	Fault      string          `json:"fault,omitempty"`
+	Query      string          `json:"query,omitempty"`
 }
 
 type recorder struct {
@@ -71,6 +73,66 @@ func (s *recorder) fault(kind string) string {
 	}
 	return ""
 }
+
+// take uses one named fault of a kind, wherever it is in the queue.
+func (s *recorder) take(kind, name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i := slices.Index(s.faults[kind], name); i >= 0 {
+		s.faults[kind] = slices.Delete(slices.Clone(s.faults[kind]), i, i+1)
+		return true
+	}
+	return false
+}
+
+// secretFields are the signup values captures never keep.
+var secretFields = []string{"pin", "access_token", "client_secret", "input_token", "code"}
+
+// redactQuery hides signup secrets in a captured query string.
+func redactQuery(raw string) string {
+	query, err := url.ParseQuery(raw)
+	if err != nil {
+		return "[unparsable]"
+	}
+	for _, key := range secretFields {
+		if query.Has(key) {
+			query.Set(key, "[redacted]")
+		}
+	}
+	return query.Encode()
+}
+
+// redactJSON hides signup secret string fields in a captured JSON body.
+func redactJSON(b []byte) []byte {
+	if !bytes.Contains(b, []byte(`"pin"`)) && !bytes.Contains(b, []byte(`"access_token"`)) && !bytes.Contains(b, []byte(`"client_secret"`)) && !bytes.Contains(b, []byte(`"input_token"`)) {
+		return b
+	}
+	var value any
+	if json.Unmarshal(b, &value) != nil {
+		return b
+	}
+	var walk func(any)
+	walk = func(v any) {
+		switch node := v.(type) {
+		case map[string]any:
+			for key, child := range node {
+				if _, text := child.(string); text && slices.Contains(secretFields[:4], key) {
+					node[key] = "[redacted]"
+				} else {
+					walk(child)
+				}
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	out, _ := json.Marshal(value)
+	return out
+}
+
 func safeJSON(b []byte) json.RawMessage {
 	if len(b) == 0 {
 		return json.RawMessage(`null`)
@@ -95,7 +157,11 @@ func (s *recorder) record(r *http.Request, kind string, body []byte, status int,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.rows = append(s.rows, capture{len(s.rows) + 1, kind, r.Method, redactProviderPath(r.URL.Path), headers, safeJSON(body), status, safeJSON(reply), started.Sub(s.start).Nanoseconds(), time.Since(s.start).Nanoseconds(), fault})
+	query := ""
+	if r.URL.RawQuery != "" {
+		query = redactQuery(r.URL.RawQuery)
+	}
+	s.rows = append(s.rows, capture{len(s.rows) + 1, kind, r.Method, redactProviderPath(r.URL.Path), headers, safeJSON(redactJSON(body)), status, safeJSON(redactJSON(reply)), started.Sub(s.start).Nanoseconds(), time.Since(s.start).Nanoseconds(), fault, query})
 }
 
 type simTransport struct {
@@ -114,6 +180,12 @@ func (t *simTransport) allowSites(origins ...string) {
 	for _, origin := range origins {
 		t.sites[origin] = true
 	}
+}
+
+// isLocalSite reports whether a URL is a Frappe *.localhost site on the Core
+// port; these sites enrol before the Hub knows their origin.
+func (t *simTransport) isLocalSite(u *url.URL) bool {
+	return u.Scheme == "http" && strings.HasSuffix(u.Hostname(), ".localhost") && u.Port() == t.core.Port()
 }
 
 func newTransport(meta, core *url.URL, records *recorder) *simTransport {
@@ -137,7 +209,7 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	clone.URL = &u
 	t.mu.RLock()
 	origin := u.Scheme + "://" + u.Host
-	site := t.sites[origin]
+	site := t.sites[origin] || t.isLocalSite(&u)
 	t.mu.RUnlock()
 	graph := origin == "https://graph.facebook.com" || origin == "https://api.telegram.org"
 	if graph {
