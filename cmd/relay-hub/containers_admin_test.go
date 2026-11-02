@@ -310,3 +310,19 @@ func TestDirectoryAdminReplaysHeldMessages(t *testing.T) {
 		t.Fatalf("held after replay: %s", body)
 	}
 }
+
+func TestDirectoryAdminKeepsOneSignupContainer(t *testing.T) {
+	c := newDirectoryClient(t)
+	c.expect(201, "POST", "/api/containers", map[string]any{"id": "first", "name": "First", "enabled": true, "signup": true,
+		"whatsapp": map[string]any{"config": map[string]any{"es_config_id": "es-1"}}})
+	c.expect(201, "POST", "/api/containers", map[string]any{"id": "second", "name": "Second", "enabled": true})
+	c.expect(409, "PUT", "/api/containers/second", map[string]any{"name": "Second", "enabled": true, "signup": true})
+	c.expect(204, "PUT", "/api/containers/first", map[string]any{"name": "Renamed", "enabled": true})
+	var got containers.Container
+	json.Unmarshal(c.expect(200, "GET", "/api/containers/first", nil).Body.Bytes(), &got)
+	if !got.Signup || got.WhatsApp.Config["es_config_id"] != "es-1" {
+		t.Fatalf("rename changed the signup container: %+v", got)
+	}
+	c.expect(204, "PUT", "/api/containers/first", map[string]any{"name": "Renamed", "enabled": true, "signup": false})
+	c.expect(204, "PUT", "/api/containers/second", map[string]any{"name": "Second", "enabled": true, "signup": true})
+}

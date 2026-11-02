@@ -149,6 +149,8 @@ func (a directoryAdmin) getContainer(w http.ResponseWriter, r *http.Request) {
 type containerInput struct {
 	containers.Container
 	WhatsApp *containers.ProviderInput `json:"whatsapp"`
+	// Signup keeps the stored value when a client leaves it out.
+	Signup *bool `json:"signup"`
 }
 
 func (a directoryAdmin) createContainer(w http.ResponseWriter, r *http.Request) {
@@ -170,10 +172,15 @@ func (a directoryAdmin) updateContainer(w http.ResponseWriter, r *http.Request) 
 
 func (a directoryAdmin) saveContainer(w http.ResponseWriter, r *http.Request, in containerInput, create bool) {
 	if !create {
-		if _, err := a.store.GetContainer(r.Context(), in.ID); err != nil {
+		stored, err := a.store.GetContainer(r.Context(), in.ID)
+		if err != nil {
 			storeFailure(w, err)
 			return
 		}
+		in.Container.Signup = stored.Signup
+	}
+	if in.Signup != nil {
+		in.Container.Signup = *in.Signup
 	}
 	if create && in.ID == "" {
 		in.ID = containers.NewContainerID()
