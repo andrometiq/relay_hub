@@ -8,6 +8,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
@@ -94,7 +95,8 @@ func (s *simulation) provisionSites(ctx context.Context, bindings []coreBinding)
 }
 
 // activateSites loads the stored channels as the Hub does, with the fake
-// Telegram and email clients in place of the real ones.
+// Telegram and email clients in place of the real ones. It is also the
+// onboarding Reload.
 func (s *simulation) activateSites(ctx context.Context, store *containers.Store) error {
 	rows, err := store.Runtime(ctx)
 	if err != nil {
@@ -104,17 +106,29 @@ func (s *simulation) activateSites(ctx context.Context, store *containers.Store)
 	if err != nil {
 		return err
 	}
-	numbers, callbacks, origins := []whatsapp.Account{}, []channels.RuntimeCallback{}, []string{}
+	numbers, err := runtime.WhatsAppAccounts(ctx, store)
+	if err != nil {
+		return err
+	}
+	apps, err := runtime.WhatsAppApps(ctx, store)
+	if err != nil {
+		return err
+	}
+	sites, err := store.CallbackSites(ctx)
+	if err != nil {
+		return err
+	}
+	notices, origins := []whatsapp.Account{}, []string{}
+	for _, site := range sites {
+		origins = append(origins, site.Origin)
+		notices = append(notices, whatsapp.Account{SiteID: site.ID, Site: site.Origin, CoreAPIKey: site.Core.APIKey, CoreAPISecret: site.Core.APISecret, CallbackSecret: site.Core.CallbackSecret})
+	}
+	callbacks := []channels.RuntimeCallback{}
 	for _, row := range rows {
-		if !row.Enabled || row.Site == "" {
+		if !row.Enabled || row.Site == "" || row.Channel == "WhatsApp" {
 			continue
 		}
-		origins = append(origins, row.Origin)
 		switch row.Channel {
-		case "WhatsApp":
-			numbers = append(numbers, simulationNumber(row))
-			s.webhookPath.Store(&row.WebhookID)
-			continue
 		case "Telegram":
 			next.Telegram[row.Key], err = telegram.NewWithHTTPClient(telegram.Config{AccountID: row.Key, BotToken: row.Secret, Enabled: true}, s.channelHTTP())
 		case "Email":
@@ -128,21 +142,24 @@ func (s *simulation) activateSites(ctx context.Context, store *containers.Store)
 			To: map[string]string{row.Channel: channels.DisplayAddress(row)}, APIKey: row.Core.APIKey, APISecret: row.Core.APISecret,
 			CallbackSecret: row.Core.CallbackSecret, HTTPClient: s.channelHTTP()})
 	}
+	for _, app := range apps {
+		if app.ContainerID == "sim-app" {
+			s.webhookPath.Store(&app.WebhookID)
+		}
+	}
 	s.transport.allowSites(origins...)
 	if err = s.registry.Replace(next); err != nil {
 		return err
 	}
 	s.callbacks.Update(callbacks)
-	return s.wa.ReplaceAccounts(numbers)
-}
-
-// simulationNumber is one stored number with its container app and site.
-func simulationNumber(row containers.RuntimeCredential) whatsapp.Account {
-	get := func(key string) string { value, _ := row.Config[key].(string); return value }
-	return whatsapp.Account{ID: row.Key, ContainerID: row.Container, WebhookID: row.WebhookID, AccessToken: row.Secret,
-		DisplayNumber: get("display_number"), PhoneID: get("phone_id"), WABAID: get("waba_id"), Version: get("graph_version"),
-		AppSecret: get("app_secret"), VerifyToken: get("verify_token"), Templates: true,
-		SiteID: row.Site, Site: row.Origin, CoreAPIKey: row.Core.APIKey, CoreAPISecret: row.Core.APISecret, CallbackSecret: row.Core.CallbackSecret}
+	if s.notices != nil {
+		s.notices.SetSites(notices)
+	}
+	if err = s.wa.ReplaceAccounts(numbers); err != nil {
+		return err
+	}
+	s.wa.ReplaceApps(apps)
+	return nil
 }
 
 // siteToken replaces the simulation admin's MCP token for one site.

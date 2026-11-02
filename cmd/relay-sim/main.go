@@ -73,6 +73,7 @@ type simulation struct {
 	channelWake   chan struct{}
 	telegram      *fakeTelegram
 	email         *fakeEmail
+	notices       *whatsapp.CallbackDispatcher
 	// webhookPath is the public WhatsApp path of the sites container; unset
 	// in the single-account mode, which uses sim-v1.
 	webhookPath atomic.Pointer[string]
@@ -478,7 +479,8 @@ func runSimulation(validateDatabase func(string) error) error {
 		return err
 	}
 	fake := &fakeMeta{records: records, pageSize: 1, bulk: newBulkReceipts(), signup: signup}
-	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, channelWake: channelWake, callbacks: &channels.CallbackDispatcher{URL: dsn, Wake: channelWake}}
+	sim := &simulation{db: pool, wa: wa, transport: transport, meta: fake, hub: hub, token: os.Getenv("RELAY_SIM_CONTROL_TOKEN"), credentialKey: os.Getenv("RELAY_CREDENTIAL_KEY"), registry: registry, telegram: fakeTelegram, email: fakeEmail, channelWake: channelWake, callbacks: &channels.CallbackDispatcher{URL: dsn, Wake: channelWake},
+		notices: &whatsapp.CallbackDispatcher{URL: dsn, Service: wa}}
 	sim.callbacks.Run(ctx, nil)
 	fake.bulk.post = func(ctx context.Context, payload []byte) (int, error) {
 		_, res, _, err := sim.webhook(ctx, payload, false)
@@ -541,7 +543,8 @@ func runSimulation(validateDatabase func(string) error) error {
 	if err != nil {
 		return err
 	}
-	(&whatsapp.CallbackDispatcher{URL: dsn, Service: wa, BulkWindow: bulkWindow}).Run(ctx)
+	sim.notices.BulkWindow = bulkWindow
+	sim.notices.Run(ctx)
 	fmt.Println("relay-sim ready (loopback only)")
 	select {
 	case <-ctx.Done():
