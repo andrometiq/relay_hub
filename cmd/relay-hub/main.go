@@ -306,10 +306,6 @@ func run() error {
 			return errors.New("valid RELAY_PUBLIC_ORIGIN (HTTPS or loopback HTTP) and optional /hub RELAY_PUBLIC_PREFIX required")
 		}
 
-		handler, err := hubmcp.NewAuthenticatedChannels(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents)
-		if err != nil {
-			return err
-		}
 		// reloadRuntime publishes validated credentials atomically. MCP, webhook
 		// and admin handlers share the stable registry object, so a reload or a
 		// revocation also reaches handlers built before it.
@@ -347,7 +343,19 @@ func run() error {
 			callbacks.SetSites(nextSites)
 			return nil
 		}
+		wa.Metadata = &whatsapp.MetadataSync{DB: authPool, Service: wa}
+		signup, err := newSignup(authStore, accountStore, reloadRuntime, wa.Metadata)
+		if err != nil {
+			return err
+		}
+		defer signup.close()
+		wa.AccountUpdate = signup.service.AccountUpdate
+		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service})
+		if err != nil {
+			return err
+		}
 		mux := http.NewServeMux()
+		signup.service.Register(mux)
 		mux.Handle("GET /auth/", browserAuth.UI(ui))
 		mux.Handle("POST /auth/", browserAuth.Headers(browserAuth))
 		mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir(filepath.Join(ui, "assets")))))
@@ -403,6 +411,7 @@ func run() error {
 			return errors.New("unsupported channel")
 		}}.register(mux, browserAuth.Protect, directory.admin)
 		forwardsAdmin{store: forwards}.register(mux, browserAuth.Protect, directory.admin)
+		enrolmentAdmin{backend: signup.service, session: browserAuth.Session}.register(mux, browserAuth.Protect, directory.admin)
 		mux.Handle("GET /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("POST /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("GET /api/accounts/{account}/{channel}/connection", browserAuth.Protect(connections))
@@ -749,8 +758,8 @@ func run() error {
 		shutdown, runtimeWorkers := lifecycle.WithWorkers(shutdown)
 		server.BaseContext = func(net.Listener) context.Context { return shutdown }
 		lifecycle.Go(shutdown, func() { liveUpdates.Run(shutdown, authPool.Config().ConnConfig) })
-		wa.Metadata = &whatsapp.MetadataSync{DB: authPool, Service: wa}
 		wa.Metadata.Run(shutdown)
+		signup.service.Run(shutdown)
 		wa.Outbox.Run(shutdown)
 		channels.Outbox{DB: authPool, Registry: channelRegistry}.Run(shutdown)
 		channels.MailboxPoller{DB: mailboxPool, Registry: channelRegistry, Wake: channelWake}.Run(shutdown)
