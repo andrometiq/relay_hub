@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Facebook simulation</title>
+  <link rel="stylesheet" href="/es/dialog.css">
+  <script src="/es/dialog.js" defer></script>
+</head>
+<body>
+  <header>
+    <strong>facebook</strong> <span class="tag">simulation</span>
+  </header>
+  <main>
+    <h1>Connect your WhatsApp number</h1>
+    <p class="muted">Loopback fake of Meta Embedded Signup. Nothing goes to Meta.</p>
+    <p id="status" role="alert" hidden></p>
+
+    <fieldset id="scenarios" disabled>
+      <legend>How do you want to connect?</legend>
+      <label><input type="radio" name="scenario" value="new"> New number</label>
+      <label><input type="radio" name="scenario" value="coexistence"> WhatsApp Business app</label>
+      <label><input type="radio" name="scenario" value="migrate"> Number on another provider</label>
+      <label><input type="radio" name="scenario" value="cancel"> Cancel at step</label>
+      <label><input type="radio" name="scenario" value="error"> Error</label>
+    </fieldset>
+
+    <section data-scenario="new" hidden>
+      <label for="new-number">Phone number</label>
+      <input id="new-number" inputmode="numeric" placeholder="919876500001" autocomplete="off">
+      <button type="button" id="send-code">Send code</button>
+      <div id="otp-step" hidden>
+        <label for="new-otp">Verification code</label>
+        <input id="new-otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+        <p class="muted">The simulation accepts 123456.</p>
+      </div>
+      <label for="new-display-name">Display name</label>
+      <input id="new-display-name" maxlength="100">
+      <button type="button" class="primary" id="finish-new" disabled>Finish</button>
+    </section>
+
+    <section data-scenario="coexistence" hidden>
+      <label for="coexistence-number">WhatsApp Business app number</label>
+      <input id="coexistence-number" inputmode="numeric" placeholder="919876500002" autocomplete="off">
+      <div class="qr" aria-label="QR code"><svg id="qr" viewBox="0 0 21 21" width="168" height="168"></svg></div>
+      <button type="button" id="simulate-scan">Simulate scan</button>
+      <label class="check"><input type="checkbox" id="coexistence-history" checked> Share chat history</label>
+      <button type="button" class="primary" id="finish-coexistence" disabled>Finish</button>
+    </section>
+
+    <section data-scenario="migrate" hidden>
+      <label for="migrate-number">Number</label>
+      <select id="migrate-number"></select>
+      <label for="migrate-display-name">Display name</label>
+      <input id="migrate-display-name" maxlength="100">
+      <button type="button" class="primary" id="finish-migrate">Finish</button>
+    </section>
+
+    <section data-scenario="cancel" hidden>
+      <label for="cancel-step">Close Facebook at</label>
+      <select id="cancel-step">
+        <option value="BUSINESS_PORTFOLIO_SELECTION">Business portfolio</option>
+        <option value="WABA_SELECTION">WhatsApp Business account</option>
+        <option value="PHONE_NUMBER_SETUP">Phone number</option>
+        <option value="PHONE_NUMBER_VERIFICATION">Verification code</option>
+        <option value="WHATSAPP_BUSINESS_APP_QR">Business app QR code</option>
+      </select>
+      <button type="button" class="primary" id="finish-cancel">Cancel setup</button>
+    </section>
+
+    <section data-scenario="error" hidden>
+      <label for="error-message">Meta error text</label>
+      <input id="error-message" value="An unexpected error occurred. Please try again later.">
+      <button type="button" class="primary" id="finish-error">Send error</button>
+    </section>
+  </main>
+</body>
+</html>

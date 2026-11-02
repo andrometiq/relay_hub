@@ -44,6 +44,7 @@ type fakeMeta struct {
 	media     int
 	pageSize  int
 	bulk      *bulkReceipts
+	signup    *signupState
 }
 
 func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +74,8 @@ func (m *fakeMeta) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status, _ = strconv.Atoi(fault)
 		result = map[string]any{"error": map[string]any{"code": status, "is_transient": true, "message": "Simulation failure"}}
 		w.Header().Set("Retry-After", "1")
+	case m.signup != nil && m.signup.owns(r, node):
+		status, result = m.signup.graph(r, node, edge, body)
 	case r.Header.Get("Authorization") != "Bearer sim-provider-token":
 		status = 401
 		result = map[string]any{"error": "invalid fake provider token"}
