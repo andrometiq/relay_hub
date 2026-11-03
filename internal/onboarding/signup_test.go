@@ -100,7 +100,7 @@ func TestNewNumberSignupThroughTheHubWindow(t *testing.T) {
 		t.Fatalf("config %d %s", rec.Code, rec.Body)
 	}
 	extras := config["extras"].(map[string]any)
-	if config["app_id"] != "333" || config["config_id"] != "es-1" || config["state"] != "waiting_for_meta" || config["site_origin"] != h.core.server.URL || extras["version"] != "v5" || extras["features"] == nil {
+	if config["app_id"] != "333" || config["config_id"] != "es-1" || config["state"] != "waiting_for_meta" || config["site_origin"] != h.core.server.URL || extras["featureType"] != "" || extras["sessionInfoVersion"] != "3" || extras["version"] != nil || extras["features"] != nil {
 		t.Fatalf("config %s", rec.Body)
 	}
 	if business := extras["setup"].(map[string]any)["business"].(map[string]any); business["address"].(map[string]any)["country"] != "IN" {

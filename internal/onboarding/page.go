@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -189,52 +190,56 @@ func writeJSON(w http.ResponseWriter, value any) {
 	json.NewEncoder(w).Encode(value)
 }
 
-// extras is the Embedded Signup extras for a flow, built only on the Hub.
+// extras is the Embedded Signup extras for a flow, built only on the Hub, in Meta's documented
+// shape: setup, featureType ("" or coexistence) and sessionInfoVersion "3" for the FINISH message.
 func extras(flow string, prefill map[string]any) map[string]any {
-	result := map[string]any{"version": "v5", "setup": setup(prefill)}
+	featureType := ""
 	if flow == "coexistence" {
-		result["featureType"] = "whatsapp_business_app_onboarding"
-	} else {
-		result["features"] = []map[string]any{{"name": "whatsapp_business_app_onboarding", "enabled": false}}
+		featureType = "whatsapp_business_app_onboarding"
 	}
-	return result
+	return map[string]any{"setup": setup(prefill), "featureType": featureType, "sessionInfoVersion": "3"}
 }
 
 // setup maps Core's prefill to Meta's setup object. Only short strings pass.
 func setup(prefill map[string]any) map[string]any {
 	business, _ := prefill["business"].(map[string]any)
 	phone, _ := prefill["phone"].(map[string]any)
-	value := func(source map[string]any, key string) string {
-		text, _ := source[key].(string)
-		if len(text) > 300 {
-			return ""
-		}
-		return strings.TrimSpace(text)
-	}
 	out := map[string]any{}
-	metaBusiness := map[string]any{}
-	for _, key := range []string{"name", "email", "website", "timezone"} {
-		if v := value(business, key); v != "" {
-			metaBusiness[key] = v
-		}
+	metaBusiness := pick(business, map[string]string{"name": "name", "email": "email", "website": "website", "timezone": "timezone"})
+	address := pick(business, map[string]string{"street_address1": "streetAddress1", "street_address2": "streetAddress2",
+		"city": "city", "state": "state", "zip_postal": "zipPostal", "country": "country"})
+	if len(address) > 0 {
+		metaBusiness["address"] = address
 	}
-	if country := value(business, "country"); country != "" {
-		metaBusiness["address"] = map[string]any{"country": country}
-	}
-	if number, _ := business["phone"].(map[string]any); number != nil && value(number, "number") != "" {
-		metaBusiness["phone"] = map[string]any{"code": value(number, "code"), "number": value(number, "number")}
+	number, _ := business["phone"].(map[string]any)
+	if code, err := strconv.Atoi(strings.TrimPrefix(prefillText(number, "code"), "+")); err == nil && code > 0 && prefillText(number, "number") != "" {
+		metaBusiness["phone"] = map[string]any{"code": code, "number": prefillText(number, "number")}
 	}
 	if len(metaBusiness) > 0 {
 		out["business"] = metaBusiness
 	}
-	metaPhone := map[string]any{}
-	for source, target := range map[string]string{"display_name": "displayName", "category": "category", "description": "description"} {
-		if v := value(phone, source); v != "" {
-			metaPhone[target] = v
-		}
-	}
-	if len(metaPhone) > 0 {
+	if metaPhone := pick(phone, map[string]string{"display_name": "displayName", "category": "category", "description": "description"}); len(metaPhone) > 0 {
 		out["phone"] = metaPhone
 	}
 	return out
+}
+
+// pick copies the non-empty prefill strings under Meta's key names.
+func pick(source map[string]any, keys map[string]string) map[string]any {
+	out := map[string]any{}
+	for key, target := range keys {
+		if text := prefillText(source, key); text != "" {
+			out[target] = text
+		}
+	}
+	return out
+}
+
+// prefillText is a trimmed prefill string; Meta's longest field, the phone description, has 512 characters.
+func prefillText(source map[string]any, key string) string {
+	text, _ := source[key].(string)
+	if len([]rune(text)) > 512 {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
