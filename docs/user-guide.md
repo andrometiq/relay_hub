@@ -220,7 +220,7 @@ The Hub reads each mailbox with IMAP. If your mail provider can forward mail to 
 
 After **Test and add**, the Hub tests SMTP and IMAP. The test sends no mail and reads no messages. When you edit a saved mailbox, the dialog also shows the **Inbound webhook URL** with **Copy**, **Account enabled** and a **Forward copies to** card.
 
-> Relay Core shows only WhatsApp today. You can add Telegram bots and mailboxes in the Hub, but the Core inbox does not offer them yet.
+> When you link a bot or a mailbox to a site, Relay Core adds it to its channel list and shows Telegram or Email in its Chats.
 
 ### 4.4 Sites
 
