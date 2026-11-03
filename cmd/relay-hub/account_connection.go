@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -81,12 +82,17 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 			result = mail
 			recordStatus(ctx, record, "Email", account, "connection_status", emailStatus(mail, err))
 			if err == nil && emailStatus(mail, nil) == "failed" {
-				err = &connectionFailure{Status: 422, Message: emailFailure(mail)}
+				err = &connectionFailure{Status: 422, Message: emailFailure(mail), Detail: map[string]string{"smtp": mail.SMTP, "imap": mail.IMAP}}
 			}
 		}
 		var failure *connectionFailure
 		if errors.As(err, &failure) {
-			http.Error(w, failure.Message, failure.Status)
+			body := map[string]string{"message": failure.Message}
+			maps.Copy(body, failure.Detail)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(failure.Status)
+			json.NewEncoder(w).Encode(body)
 			return
 		}
 		if err != nil {
@@ -99,10 +105,12 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 	})
 }
 
-// connectionFailure is a check that ran and failed for a reason the admin can fix; its message is safe to show.
+// connectionFailure is a check that ran and failed for a reason the admin can fix; its message and the
+// provider states in Detail are safe to show.
 type connectionFailure struct {
 	Status  int
 	Message string
+	Detail  map[string]string
 }
 
 func (f *connectionFailure) Error() string { return f.Message }

@@ -122,7 +122,7 @@ func TestConnectionDiagnosticsSurviveStalledProviders(t *testing.T) {
 					t.Fatal("IMAP provider was never checked")
 				}
 			}
-			if response.StatusCode != 200 || result.SMTP != "failed" || result.IMAP != wantIMAP {
+			if response.StatusCode != 422 || result.SMTP != "failed" || result.IMAP != wantIMAP {
 				t.Fatalf("missing diagnostic result: %d %+v", response.StatusCode, result)
 			}
 			if elapsed := time.Since(started); elapsed >= httpWriteTimeout || elapsed < accountConnectionTimeout-time.Second {

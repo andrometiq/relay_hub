@@ -182,7 +182,7 @@ func TestDirectoryAdminKeepsCheckStatusAndClearsNumberApp(t *testing.T) {
 	if err := c.store.SetStatus(ctx, containers.ChannelRef{Channel: "Telegram", Key: "bot"}, map[string]any{"webhook_status": "registered"}); err != nil {
 		t.Fatal(err)
 	}
-	if c.store.SetStatus(ctx, containers.ChannelRef{Channel: "Telegram", Key: "bot"}, map[string]any{"username": "x"}) == nil {
+	if c.store.SetStatus(ctx, containers.ChannelRef{Channel: "Telegram", Key: "bot"}, map[string]any{"label": "x"}) == nil {
 		t.Fatal("status write changed a setting")
 	}
 	c.expect(204, "PUT", "/api/containers/acme/channels/Telegram/bot", map[string]any{"label": "Bot", "enabled": true, "config": map[string]any{"username": "bot", "webhook_status": "forged"}})
