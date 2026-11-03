@@ -197,6 +197,8 @@ type fakeMeta struct {
 	onApp  map[string]bool
 	funded map[string]bool
 	smb    map[string]int
+	// onExchange runs when the code exchange reaches Meta, for example to close the Hub window.
+	onExchange func()
 }
 
 func newFakeMeta(t *testing.T) *fakeMeta {
@@ -255,6 +257,9 @@ func (m *fakeMeta) serve(w http.ResponseWriter, r *http.Request) {
 	m.calls[name]++
 	switch {
 	case parts[0] == "oauth":
+		if m.onExchange != nil {
+			m.onExchange()
+		}
 		code := r.URL.Query().Get("code")
 		if code == "bad" || r.URL.Query().Get("client_secret") != "app-secret" {
 			metaFailure(w, 400, 100, 36007, "Invalid verification code format.")

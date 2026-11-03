@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -415,5 +416,64 @@ func TestPartnerRemovedDisablesTheNumber(t *testing.T) {
 	h.pool.QueryRow(h.ctx, `SELECT count(*) FROM relay_whatsapp_events WHERE site_id=$1 AND payload->>'object'='relay_channels'`, site).Scan(&notices)
 	if notices < 2 {
 		t.Fatalf("site not told about the removal: %d", notices)
+	}
+}
+
+func TestAClosedWindowDuringTheExchangeStillSavesTheResult(t *testing.T) {
+	h := newHarness(t)
+	h.signupContainer()
+	site, _ := h.enrolledSite()
+	w := h.startSignup(site, "new")
+	closed, cancel := context.WithCancel(h.ctx)
+	h.meta.onExchange = cancel
+	if _, err := h.service.SubmitCode(closed, w.id, "bad", nil); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.session(w.id); r.State != "failed" || r.Error == nil || r.Error.Code != "code_invalid" {
+		t.Fatalf("failed exchange after a closed window: %s %+v", r.State, r.Error)
+	}
+	retry := h.startSignup(site, "new")
+	closed, cancel = context.WithCancel(h.ctx)
+	h.meta.onExchange = cancel
+	h.service.SubmitCode(closed, retry.id, "code-230", nil)
+	h.meta.onExchange = nil
+	if r := h.session(retry.id); r.State != "completed" {
+		t.Fatalf("a closed window stopped the steps: %s %+v", r.State, r.Steps)
+	}
+}
+
+func TestACodeRequestThatNeverSavedIsFailedByTheWorker(t *testing.T) {
+	h := newHarness(t)
+	h.signupContainer()
+	site, _ := h.enrolledSite()
+	w := h.startSignup(site, "new")
+	// The Hub stops after it accepted the code and before the exchange result is saved.
+	if _, err := h.service.update(h.ctx, w.id, func(r *record) error { return h.service.acceptCode(r, "lost-code", nil) }); err != nil {
+		t.Fatal(err)
+	}
+	h.service.Tick(h.ctx)
+	if h.session(w.id).State != "working" {
+		t.Fatal("worker took the session while the code request held it")
+	}
+	h.clock.add(leaseTime)
+	h.newService().Tick(h.ctx)
+	r := h.session(w.id)
+	if r.State != "failed" || r.Error == nil || r.Error.Code != "code_invalid" {
+		t.Fatalf("lost exchange: %s %+v", r.State, r.Error)
+	}
+	if again := h.startSignup(site, "new"); again.id == w.id || h.session(w.id).State != "superseded" {
+		t.Fatal("a new signup could not replace the failed one")
+	}
+}
+
+func TestACodeForAReplacedSignupSaysSo(t *testing.T) {
+	h := newHarness(t)
+	h.signupContainer()
+	site, _ := h.enrolledSite()
+	old := h.startSignup(site, "new")
+	h.startSignup(site, "new")
+	rec := old.call("POST", "/code", old.secret, map[string]any{"code": "code-230"})
+	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "session_superseded") {
+		t.Fatalf("code for a superseded signup: %d %s", rec.Code, rec.Body)
 	}
 }

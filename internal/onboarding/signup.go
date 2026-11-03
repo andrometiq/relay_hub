@@ -262,35 +262,25 @@ func (s *Service) SubmitCode(ctx context.Context, id, code string, hint map[stri
 		if r.codeHash != nil && *r.codeHash == hash {
 			return errUnchanged
 		}
-		if !r.acceptsCode() {
-			return fail(409, "code_conflict", "This signup already has a Facebook code. Start again to connect another number.")
-		}
-		now := s.now()
-		lease, expires := now.Add(2*time.Minute), now.Add(codeLifetime)
-		r.codeHash, r.State, r.codeReceivedAt, r.ExpiresAt, r.lease = &hash, "working", &now, expires, &lease
-		r.Steps, r.Error, r.attempts, r.nextAttemptAt = freshSteps(), nil, 0, nil
-		if event, _ := hint["event"].(string); event != "" && r.metaEvent == nil {
-			data, _ := hint["data"].(map[string]any)
-			r.metaEvent, r.metaChanged = map[string]any{"event": event, "data": data, "at": now}, true
-			s.followEvent(r, event)
-		}
 		accepted = true
-		return nil
+		return s.acceptCode(r, hash, hint)
 	})
 	if err != nil || !accepted {
 		return r.Session, asFailureOr(err)
 	}
 	deadline := time.Now().Add(codeBudget)
-	app, err := s.cfg.Store.SignupApp(ctx)
+	// The code is spent once Meta sees it, so a closed window must not stop the exchange, the steps or their saves.
+	store := context.WithoutCancel(ctx)
+	app, err := s.cfg.Store.SignupApp(store)
 	var token string
 	if err == nil {
-		token, err = s.exchange(ctx, s.graph(app), code)
+		token, err = s.exchange(store, s.graph(app), code)
 	}
 	if err != nil {
 		r.mark("exchange", "failed", s.now())
 		r.State = "failed"
 		r.Error = &SessionError{Code: "code_invalid", Message: "The Facebook step timed out. Start again."}
-		if saveErr := s.save(ctx, &r, false); saveErr != nil {
+		if saveErr := s.save(store, &r, false); saveErr != nil {
 			return r.Session, unavailable()
 		}
 		return r.Session, nil
@@ -299,10 +289,39 @@ func (s *Service) SubmitCode(ctx context.Context, id, code string, hint map[stri
 		return r.Session, unavailable()
 	}
 	r.mark("exchange", "done", s.now())
-	if err = s.run(ctx, &r, deadline); err != nil {
+	if err = s.run(store, &r, deadline); err != nil {
 		return r.Session, unavailable()
 	}
 	return r.Session, nil
+}
+
+// acceptCode starts the steps for a new code. If the request never saves its
+// result (a Hub restart), the worker takes the session when the lease ends.
+func (s *Service) acceptCode(r *record, hash string, hint map[string]any) error {
+	if !r.acceptsCode() {
+		return codeConflict(r.State)
+	}
+	now := s.now()
+	lease, expires := now.Add(leaseTime), now.Add(codeLifetime)
+	r.codeHash, r.State, r.codeReceivedAt, r.ExpiresAt, r.lease = &hash, "working", &now, expires, &lease
+	r.Steps, r.Error, r.attempts, r.nextAttemptAt = freshSteps(), nil, 0, &lease
+	if event, _ := hint["event"].(string); event != "" && r.metaEvent == nil {
+		data, _ := hint["data"].(map[string]any)
+		r.metaEvent, r.metaChanged = map[string]any{"event": event, "data": data, "at": now}, true
+		s.followEvent(r, event)
+	}
+	return nil
+}
+
+// codeConflict says why a session takes no new code: the window belongs to a replaced or finished signup.
+func codeConflict(state string) *Failure {
+	switch state {
+	case "superseded":
+		return fail(409, "session_superseded", "A newer WhatsApp setup was started for this site. Close this window and use the newest one.")
+	case "expired":
+		return fail(409, "session_expired", "This WhatsApp setup timed out. Close this window and start again in Relay.")
+	}
+	return fail(409, "code_conflict", "This signup already has a Facebook code. Start again to connect another number.")
 }
 
 // exchange is G1 with one retry when Meta cannot be reached; the code lives 30 seconds.
