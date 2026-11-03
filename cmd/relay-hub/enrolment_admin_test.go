@@ -62,7 +62,11 @@ func TestEnrolmentAdminIsAdminOnlyAndShowsSecretsOnce(t *testing.T) {
 		t.Fatalf("create %d %s", w.Code, w.Body)
 	}
 	w = call("POST", "/api/enrolment-tokens", map[string]any{"name": "Shop code", "kind": "setup_code"}, token)
-	if w.Code != 201 || !strings.Contains(w.Body.String(), "enter this setup code") {
+	var setup struct {
+		Secret, Link, Message string
+	}
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &setup) != nil || setup.Link != "https://hub.test/enrol?code="+setup.Secret ||
+		!strings.HasSuffix(setup.Message, "paste this setup link: "+setup.Link) {
 		t.Fatalf("setup code %d %s", w.Code, w.Body)
 	}
 	w = call("GET", "/api/enrolment-tokens", nil, "")

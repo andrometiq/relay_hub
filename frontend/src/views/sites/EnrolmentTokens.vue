@@ -87,7 +87,7 @@ watch(() => props.modelValue, (open) => {
       </form>
       <template v-else>
         <p class="admin-hint">Copy this {{ created.token.kind === "setup_code" ? "setup code" : "token" }} now. The Hub does not show it again.</p>
-        <div class="admin-secret"><span class="admin-label">{{ created.token.name }}</span><span class="admin-value admin-mono">{{ created.secret }}</span><Button label="Copy" icon-left="copy" @click="copySecret" /></div>
+        <div class="admin-secret"><span class="admin-label">{{ created.link ? "Setup link" : created.token.name }}</span><span class="admin-value admin-mono">{{ created.link || created.secret }}</span><Button label="Copy" icon-left="copy" @click="copySecret" /></div>
         <p v-if="created.message" class="admin-hint">{{ created.message }}</p>
         <p v-if="notice" role="status" class="admin-hint">{{ notice }}</p>
       </template>

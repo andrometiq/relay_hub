@@ -132,6 +132,7 @@ func loopbackHost(host string) bool {
 // Register mounts the enrolment API and the signup window.
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/enrol", s.enrol)
+	mux.HandleFunc("GET /enrol", setupLinkPage)
 	mux.HandleFunc("GET /onboard/whatsapp/{session}", s.page)
 	mux.HandleFunc("GET /onboard/assets/{file}", s.asset)
 	mux.HandleFunc("GET /onboard/whatsapp/{session}/config", s.windowConfig)

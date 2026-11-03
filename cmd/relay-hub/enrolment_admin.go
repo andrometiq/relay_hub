@@ -16,6 +16,7 @@ type enrolmentBackend interface {
 	RevokeToken(context.Context, auth.User, int64) error
 	SiteSignups(context.Context, string) ([]onboarding.Session, error)
 	SiteEnrolment(context.Context, string) (map[string]any, error)
+	SetupLink(string) string
 }
 
 // enrolmentAdmin serves enrolment tokens and site signups to Hub admins.
@@ -40,7 +41,7 @@ func (a enrolmentAdmin) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"tokens": tokens, "csrf": csrf(r)})
 }
 
-// create returns the secret once. A setup code comes with the text to send.
+// create returns the secret once. A setup code comes with its setup link and the text to send.
 func (a enrolmentAdmin) create(w http.ResponseWriter, r *http.Request) {
 	var in onboarding.TokenInput
 	if !decodeBody(w, r, &in) {
@@ -58,7 +59,9 @@ func (a enrolmentAdmin) create(w http.ResponseWriter, r *http.Request) {
 	}
 	result := map[string]any{"token": token, "secret": secret, "csrf": csrf(r)}
 	if token.Kind == "setup_code" {
-		result["message"] = "Open Relay on your site, choose Get started and enter this setup code: " + secret
+		link := a.backend.SetupLink(secret)
+		result["link"] = link
+		result["message"] = "Open Relay on your site, choose Get started and paste this setup link: " + link
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

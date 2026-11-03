@@ -283,7 +283,7 @@ A site that enrolled by itself shows **Enrolled by <token> on <date>** under its
 | Max sites | A number, or blank. | Blank is no limit for a bench token and 1 for a setup code. |
 | Expiry days | A number, or blank. | Blank is no expiry for a bench token and 7 days for a setup code (at most 90). |
 
-The Hub shows the new token one time. Click **Copy** before you close the dialog. For a setup code, **Copy** copies a short message that you can send to the site owner.
+The Hub shows the new token one time. Click **Copy** before you close the dialog. For a setup code, the Hub shows a setup link (`<hub address>/enrol?code=<code>`) that holds the code and the Hub address, and **Copy** copies a short message with that link for the site owner. The owner pastes the whole link in **Get started**. A bare code works only on a site that has `relay_hub_origin` in its config.
 
 ### 4.5 Connections
 

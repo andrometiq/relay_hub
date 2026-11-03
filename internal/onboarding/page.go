@@ -30,6 +30,18 @@ func (s *Service) page(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
+// setupLinkPage answers a setup link that was opened in a browser: the link is pasted in Relay, not opened.
+func setupLinkPage(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Relay setup link</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:560px;margin:48px auto;padding:0 16px;line-height:1.5"><h1>Relay setup link</h1>
+<p>Do not open this link. Copy it, open Relay on your site, choose <strong>Get started</strong> and paste the whole link in <strong>Setup code</strong>.</p></body></html>`)
+}
+
 func (s *Service) asset(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
 	contentType, ok := assetTypes[name]

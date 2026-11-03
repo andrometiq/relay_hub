@@ -183,3 +183,9 @@ func (s *Service) scanToken(row pgx.Row) (EnrolmentToken, error) {
 	}
 	return t, nil
 }
+
+// SetupLink is what a site owner pastes in Get started: the code and this Hub's address in one link,
+// so a site without relay_hub_origin can find the Hub.
+func (s *Service) SetupLink(secret string) string {
+	return s.cfg.PublicOrigin + "/enrol?code=" + url.QueryEscape(secret)
+}

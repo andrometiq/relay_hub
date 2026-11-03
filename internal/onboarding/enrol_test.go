@@ -240,3 +240,14 @@ func TestEnrolmentAnswersWithTheSavedTokenWhenTheReloadFails(t *testing.T) {
 		t.Fatalf("returned token is not the saved one: %v", err)
 	}
 }
+
+func TestAnOpenedSetupLinkTellsTheOwnerToPasteIt(t *testing.T) {
+	mux := http.NewServeMux()
+	(&Service{}).Register(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/enrol?code=relay_setup_x", nil))
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Referrer-Policy") != "no-referrer" ||
+		!strings.Contains(w.Body.String(), "Get started") || strings.Contains(w.Body.String(), "relay_setup_x") {
+		t.Fatalf("setup link page %d %s", w.Code, w.Body)
+	}
+}
