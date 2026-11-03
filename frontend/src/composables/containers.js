@@ -33,9 +33,12 @@ export function channelStatus(channel) {
   if (!channel.enabled) return { label: "Disabled", theme: "gray" };
   if (!channel.site) return { label: "Idle", theme: "gray" };
   if (channel.channel === "Telegram") {
-    return config.webhook_status === "registered" ? { label: "Registered", theme: "green" } : { label: "Not checked", theme: "gray" };
+    if (config.webhook_status === "registered") return { label: "Registered", theme: "green" };
+    if (config.webhook_status === "failed") return { label: "Failed", theme: "red" };
+    return config.webhook_status === "not_registered" ? { label: "Webhook not set", theme: "orange" } : { label: "Not checked", theme: "gray" };
   }
-  if (config.connection_status === "connected") return { label: "Connected", theme: "green" };
+  // A self-service number was checked with Meta during signup; older signups have no stored status.
+  if (config.connection_status === "connected" || (!config.connection_status && config.onboarding && config.partner_status === "active")) return { label: "Connected", theme: "green" };
   if (config.connection_status === "failed") return { label: channel.channel === "Email" ? "Mail error" : "Failed", theme: "red" };
   return channel.channel === "WhatsApp" ? { label: "Setup needed", theme: "orange" } : { label: "Not checked", theme: "gray" };
 }

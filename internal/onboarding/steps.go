@@ -254,7 +254,9 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 	}
 	config := map[string]any{"phone_id": *r.phoneID, "waba_id": *r.WABAID, "display_number": text(r.Phone["display_phone_number"]),
 		"templates": true, "sync_metadata": true, "groups": false, "calls": false, "onboarding": *r.FlowActual,
-		"coexistence": r.coexistence(), "partner_status": "active", "pin": pin}
+		"coexistence": r.coexistence(), "partner_status": "active", "pin": pin,
+		// The verify step checked the token and the number with Meta, so the Hub shows the number as connected.
+		"connection_status": "connected", "verified_at": s.now().Format(time.RFC3339)}
 	if r.BusinessID != nil {
 		config["business_id"] = *r.BusinessID
 	}

@@ -477,3 +477,16 @@ func TestACodeForAReplacedSignupSaysSo(t *testing.T) {
 		t.Fatalf("code for a superseded signup: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestASignupNumberShowsAsConnected(t *testing.T) {
+	h := newHarness(t)
+	h.signupContainer()
+	site, _ := h.enrolledSite()
+	if done := h.startSignup(site, "new").finish("FINISH", "230", "120", "code-230"); done.State != "completed" {
+		t.Fatalf("signup %s", done.State)
+	}
+	channel, err := h.store.GetChannel(h.ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-120"})
+	if err != nil || channel.Config["connection_status"] != "connected" || channel.Config["verified_at"] == nil {
+		t.Fatalf("signup number status %v %v", channel.Config, err)
+	}
+}

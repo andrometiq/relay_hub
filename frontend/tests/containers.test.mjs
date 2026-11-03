@@ -22,6 +22,10 @@ test('channel status reflects enabled state, site link and provider checks', () 
   assert.equal(channelStatus(whatsapp({ config: { connection_status: 'connected' } })).theme, 'green');
   assert.equal(channelStatus({ channel: 'Telegram', enabled: true, site: 'distributor', config: {} }).label, 'Not checked');
   assert.equal(channelStatus({ channel: 'Telegram', enabled: true, site: 'distributor', config: { webhook_status: 'registered' } }).label, 'Registered');
+  assert.equal(channelStatus({ channel: 'Telegram', enabled: true, site: 'distributor', config: { webhook_status: 'failed' } }).theme, 'red');
+  assert.equal(channelStatus({ channel: 'Telegram', enabled: true, site: 'distributor', config: { webhook_status: 'not_registered' } }).theme, 'orange');
+  assert.equal(channelStatus(whatsapp({ config: { onboarding: 'new', partner_status: 'active' } })).label, 'Connected');
+  assert.equal(channelStatus(whatsapp({ config: { onboarding: 'new', partner_status: 'removed', connection_status: 'disabled' } })).label, 'Setup needed');
   assert.equal(channelStatus({ channel: 'Email', enabled: true, site: 'distributor', config: { connection_status: 'failed' } }).theme, 'red');
   assert.equal(siteStatus({ enabled: true, configured_secrets: ['core_api_key'] }).label, 'Setup needed');
   assert.equal(siteStatus({ enabled: true, configured_secrets: ['core_api_key', 'core_api_secret', 'callback_secret'] }).label, 'Enabled');
