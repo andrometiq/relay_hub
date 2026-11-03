@@ -173,7 +173,18 @@ func (g graph) tokenTargets(ctx context.Context, token string) ([]string, error)
 
 // waba is G3.
 func (g graph) waba(ctx context.Context, token, waba string) (map[string]any, error) {
-	return g.call(ctx, http.MethodGet, waba, url.Values{"fields": {"id,name,owner_business_info,primary_funding_id,currency"}}, token, nil)
+	return g.call(ctx, http.MethodGet, waba, url.Values{"fields": {"id,name,owner_business_info,currency"}}, token, nil)
+}
+
+// fundingReady tells whether the account has a payment method. Meta lets only
+// Solution Partners read primary_funding_id, so a Tech Provider gets nil.
+func (g graph) fundingReady(ctx context.Context, token, waba string) *bool {
+	account, err := g.call(ctx, http.MethodGet, waba, url.Values{"fields": {"primary_funding_id"}}, token, nil)
+	if err != nil {
+		return nil
+	}
+	ready := text(account["primary_funding_id"]) != ""
+	return &ready
 }
 
 // phones is G4, up to 100 numbers.

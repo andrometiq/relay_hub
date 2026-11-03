@@ -188,8 +188,7 @@ func (s *Service) verify(ctx context.Context, g graph, r *record) error {
 	if business == "" {
 		business = hint["business_id"]
 	}
-	ready := text(account["primary_funding_id"]) != ""
-	r.WABAID, r.phoneID, r.Phone, r.PaymentMethodReady = &waba, &id, phoneProfile(phone), &ready
+	r.WABAID, r.phoneID, r.Phone, r.PaymentMethodReady = &waba, &id, phoneProfile(phone), g.fundingReady(ctx, token, waba)
 	if business != "" {
 		r.BusinessID = &business
 	}
@@ -424,8 +423,7 @@ func (s *Service) finish(ctx context.Context, r *record) {
 	if err != nil {
 		return
 	}
-	if account, err := s.graph(app).waba(ctx, token, *r.WABAID); err == nil {
-		ready := text(account["primary_funding_id"]) != ""
-		r.PaymentMethodReady = &ready
+	if ready := s.graph(app).fundingReady(ctx, token, *r.WABAID); ready != nil {
+		r.PaymentMethodReady = ready
 	}
 }
