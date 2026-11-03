@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -126,7 +127,7 @@ func TestEnrolmentDenials(t *testing.T) {
 	}
 	insecure := request
 	insecure.Origin = "http://shop.example.com"
-	if _, err := h.service.Enrol(h.ctx, other, insecure, ""); failureCode(err) != "invalid_request" {
+	if _, err := h.service.Enrol(h.ctx, other, insecure, ""); failureCode(err) != "origin_not_https" {
 		t.Fatalf("plain HTTP origin: %v", err)
 	}
 }
@@ -221,5 +222,21 @@ func TestEnrolHTTP(t *testing.T) {
 	}
 	if w = post(token, h.enrolRequest()); w.Code != 429 || w.Header().Get("Retry-After") == "" {
 		t.Fatalf("rate limit %d", w.Code)
+	}
+}
+
+func TestEnrolmentAnswersWithTheSavedTokenWhenTheReloadFails(t *testing.T) {
+	h := newHarness(t)
+	service, err := New(Config{DB: h.pool, Store: h.store, Auth: h.auth, Client: &http.Client{}, PublicOrigin: "https://hub.example.test",
+		Now: h.clock.now, Reload: func(context.Context) error { return errors.New("a stored channel does not load") }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Enrol(h.ctx, h.token("bench", h.core.server.URL, nil), h.enrolRequest(), "127.0.0.1")
+	if err != nil {
+		t.Fatalf("enrolment saved but answered %v", err)
+	}
+	if principal, err := h.auth.Authenticate(h.ctx, result.HubToken); err != nil || principal.Site != result.SiteID {
+		t.Fatalf("returned token is not the saved one: %v", err)
 	}
 }

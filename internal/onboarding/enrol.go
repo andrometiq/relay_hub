@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -135,8 +136,10 @@ func (s *Service) Enrol(ctx context.Context, token string, in EnrolRequest, ip s
 	if err = tx.Commit(ctx); err != nil {
 		return EnrolResult{}, unavailable()
 	}
-	if err = s.cfg.Reload(ctx); err != nil {
-		return EnrolResult{}, unavailable()
+	// The new credentials are saved and the old token is revoked, so Core must get them even if the
+	// runtime reload fails; a failure here would leave Core and the Hub on different secrets.
+	if err = s.cfg.Reload(context.WithoutCancel(ctx)); err != nil {
+		log.Printf("enrol %s: runtime reload failed: %v", result.SiteID, err)
 	}
 	return result, nil
 }
@@ -153,7 +156,7 @@ func normalizeEnrolment(in *EnrolRequest) (string, error) {
 		return "", invalid
 	}
 	if u.Scheme != "https" && !(u.Scheme == "http" && loopbackHost(u.Hostname())) {
-		return "", invalid
+		return "", fail(422, "origin_not_https", "Relay Hub needs the site's public HTTPS address.")
 	}
 	in.SiteName, in.DisplayName = strings.TrimSpace(in.SiteName), strings.TrimSpace(in.DisplayName)
 	if in.SiteName == "" || len(in.SiteName) > 200 || len(in.DisplayName) > 200 || len(in.CoreVersion) > 50 || !hex64.MatchString(in.Nonce) || !hex64.MatchString(in.CallbackSecret) {
