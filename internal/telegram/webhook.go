@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"regexp"
 )
 
 // WebhookHealth deliberately excludes the provider URL and error description:
@@ -31,6 +32,23 @@ func (c *Client) WebhookHealth(ctx context.Context, expected string) (WebhookHea
 	}
 	return WebhookHealth{Registered: info.URL != "", Matches: info.URL == expected, Pending: info.Pending, LastErrorAt: info.LastErrorAt}, nil
 }
+
+// Username checks the bot token with getMe and returns the bot's username.
+func (c *Client) Username(ctx context.Context) (string, error) {
+	raw, err := c.call(ctx, "getMe", map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	var bot struct {
+		Username string `json:"username"`
+	}
+	if json.Unmarshal(raw, &bot) != nil || !botUsername.MatchString(bot.Username) {
+		return "", errors.New("invalid getMe response")
+	}
+	return bot.Username, nil
+}
+
+var botUsername = regexp.MustCompile(`^[A-Za-z0-9_]{5,64}$`)
 
 func (c *Client) RegisterWebhook(ctx context.Context, address, secret string) error {
 	u, err := url.Parse(address)

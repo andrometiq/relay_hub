@@ -48,12 +48,14 @@ async function replayHeld() {
   }
 }
 
+// The Hub checks a WhatsApp number when it saves it; a bot or mailbox is checked here, before it reaches a site.
 async function check(channel) {
+  if (channel.channel === "WhatsApp" || !channel.enabled) return {};
   try {
-    await adminApi.checkChannel(channel, channel.channel === "Telegram" ? "repair" : "test");
-    return "";
+    const result = await adminApi.checkChannel(channel, channel.channel === "Telegram" ? "repair" : "test");
+    return { username: result.username, warning: result.webhook_missing };
   } catch (exception) {
-    return exception.message;
+    return { problem: exception.message };
   }
 }
 
@@ -71,10 +73,16 @@ async function save() {
     form.value.key = payload.key;
     form.value.secret = "";
     stored.value = { ...(stored.value || {}), ...payload, site: stored.value?.site || "" };
+    const result = await check(payload);
+    if (result.problem) {
+      const unlinked = form.value.site !== stored.value.site ? " It was not linked to the site." : "";
+      notice.value = "Saved. The connection test failed: " + result.problem + unlinked;
+      return;
+    }
+    if (result.username) form.value.config.username = result.username;
     await moveChannel(payload, stored.value.site, form.value.site);
     stored.value.site = form.value.site;
-    const problem = payload.enabled ? await check(payload) : "";
-    if (problem) notice.value = "Saved. The connection test failed: " + problem;
+    if (result.warning) notice.value = "Saved. " + result.warning;
     else emit("update:modelValue", false);
   } catch (exception) {
     error.value = saved ? "Saved, but linking to the site failed: " + exception.message : exception.message;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 // These fields are write-only. Blank edits keep stored values; responses
@@ -27,6 +28,14 @@ var channelPublicKeys = map[string]map[string]bool{
 // statusKeys are written by the Hub after a check. A save keeps the stored
 // value unless the caller sets the key itself.
 var statusKeys = []string{"connection_status", "verified_at", "webhook_status", "checked_at"}
+
+// checkedKeys are the status keys of a channel; a Telegram check also reads the bot username.
+func checkedKeys(channel string) []string {
+	if channel == "Telegram" {
+		return append(slices.Clone(statusKeys), "username")
+	}
+	return statusKeys
+}
 
 // A WhatsApp number may override the container's app_secret and verify_token.
 // pin is the two-step verification PIN that self-service signup registers.

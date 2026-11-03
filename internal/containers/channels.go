@@ -165,7 +165,7 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 	if len(oldConfig) > 0 && json.Unmarshal(oldConfig, &stored) != nil {
 		return errors.New("invalid stored configuration")
 	}
-	for _, key := range statusKeys {
+	for _, key := range checkedKeys(c.Channel) {
 		if _, set := public[key]; !set && stored[key] != nil && channelPublicKeys[c.Channel][key] {
 			public[key] = stored[key]
 		}
@@ -271,7 +271,7 @@ func uniqueKey(ctx context.Context, tx pgx.Tx, c Channel) error {
 // SetStatus records the result of a connection check on a channel.
 func (s *Store) SetStatus(ctx context.Context, ref ChannelRef, values map[string]any) error {
 	for key := range values {
-		if !contains(statusKeys, key) {
+		if !contains(checkedKeys(ref.Channel), key) {
 			return errors.New("unsupported status field")
 		}
 	}

@@ -220,3 +220,29 @@ func TestTelegramBotAddressComesFromToken(t *testing.T) {
 		t.Fatal("bot token leaked")
 	}
 }
+
+func TestACheckedBotNameStaysAcrossSaves(t *testing.T) {
+	ctx, s := directoryStore(t)
+	if err := s.SaveContainer(ctx, Container{ID: "bots", Enabled: true}, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	bot := Channel{Key: "support-bot", Channel: "Telegram", Container: "bots", Enabled: true, Config: map[string]any{}}
+	if err := s.SaveChannel(ctx, bot, "424242:token-value-abcdefghijklmnopqrst", true); err != nil {
+		t.Fatal(err)
+	}
+	ref := ChannelRef{Channel: "Telegram", Key: "support-bot"}
+	if err := s.SetStatus(ctx, ref, map[string]any{"username": "support_bot", "webhook_status": "registered"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.SetStatus(ctx, ChannelRef{Channel: "Email", Key: "support-bot"}, map[string]any{"username": "x"}) == nil {
+		t.Fatal("a check changed a mailbox username")
+	}
+	bot.Label = "Support"
+	if err := s.SaveChannel(ctx, bot, "", false); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.GetChannel(ctx, ref)
+	if err != nil || saved.Config["username"] != "support_bot" || saved.Config["webhook_status"] != "registered" {
+		t.Fatalf("bot name after save: %#v %v", saved.Config, err)
+	}
+}

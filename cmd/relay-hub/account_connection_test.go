@@ -17,10 +17,20 @@ import (
 )
 
 type connectionFixture struct {
-	calls   int
-	repair  bool
-	fail    bool
-	address string
+	calls    int
+	repair   bool
+	fail     bool
+	badToken bool
+	mailOK   bool
+	address  string
+}
+
+func (f *connectionFixture) TelegramUsername(context.Context, string) (string, error) {
+	f.calls++
+	if f.badToken {
+		return "", errors.New("private-provider-secret")
+	}
+	return "relay_test_bot", nil
 }
 
 func (f *connectionFixture) TelegramConnection(_ context.Context, account, address, master string, repair bool) (telegram.WebhookHealth, error) {
@@ -36,6 +46,9 @@ func (f *connectionFixture) WebhookPath(_, key string) string { return "0f3a9c" 
 
 func (f *connectionFixture) TestEmailConnection(context.Context, string) (channels.EmailConnection, error) {
 	f.calls++
+	if f.mailOK {
+		return channels.EmailConnection{SMTP: "connected", IMAP: "connected"}, nil
+	}
 	return channels.EmailConnection{SMTP: "connected", IMAP: "failed"}, nil
 }
 
@@ -43,7 +56,7 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 	for _, tc := range []struct {
 		name, role, method, channel, body, origin, csrf string
 		status                                          int
-		fail                                            bool
+		fail, badToken, mailOK                          bool
 	}{
 		{name: "signed out", method: "GET", channel: "telegram", status: 401},
 		{name: "member", role: "member", method: "GET", channel: "telegram", status: 403},
@@ -54,11 +67,13 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 		{name: "csrf denied", role: "admin", method: "POST", channel: "email", body: `{"action":"test"}`, origin: "https://hub.invalid", csrf: "bad", status: 403},
 		{name: "target injection denied", role: "admin", method: "POST", channel: "telegram", body: `{"action":"repair","url":"https://evil.invalid"}`, origin: "https://hub.invalid", csrf: "valid", status: 400},
 		{name: "repair", role: "admin", method: "POST", channel: "telegram", body: `{"action":"repair"}`, origin: "https://hub.invalid", csrf: "valid", status: 200},
-		{name: "test email", role: "admin", method: "POST", channel: "email", body: `{"action":"test"}`, origin: "https://hub.invalid", csrf: "valid", status: 200},
+		{name: "test email", role: "admin", method: "POST", channel: "email", body: `{"action":"test"}`, origin: "https://hub.invalid", csrf: "valid", status: 200, mailOK: true},
+		{name: "failed mail login", role: "admin", method: "POST", channel: "email", body: `{"action":"test"}`, origin: "https://hub.invalid", csrf: "valid", status: 422},
+		{name: "wrong bot token", role: "admin", method: "POST", channel: "telegram", body: `{"action":"repair"}`, origin: "https://hub.invalid", csrf: "valid", status: 422, badToken: true},
 		{name: "provider failure redacted", role: "admin", method: "GET", channel: "telegram", status: 502, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := &connectionFixture{fail: tc.fail}
+			fixture := &connectionFixture{fail: tc.fail, badToken: tc.badToken, mailOK: tc.mailOK}
 			recorded := map[string]any{}
 			record := func(_ context.Context, channel, key string, values map[string]any) error {
 				recorded["target"] = channel + "/" + key
@@ -94,18 +109,20 @@ func TestAccountConnectionAuthorizationAndShape(t *testing.T) {
 				if json.Unmarshal(w.Body.Bytes(), &result) != nil || w.Header().Get("Cache-Control") != "no-store" {
 					t.Fatal("invalid response")
 				}
-				if tc.channel == "telegram" && (result["matches"] != true || fixture.address != "https://hub.invalid/hub/webhooks/telegram/0f3a9clocal" || fixture.repair != (tc.name == "repair")) {
+				if tc.channel == "telegram" && (result["matches"] != true || result["username"] != "relay_test_bot" || recorded["username"] != "relay_test_bot" || fixture.address != "https://hub.invalid/hub/webhooks/telegram/0f3a9clocal" || fixture.repair != (tc.name == "repair")) {
 					t.Fatal("invalid webhook result")
 				}
-				if tc.channel == "email" && (result["smtp"] != "connected" || result["imap"] != "failed" || recorded["connection_status"] != "failed" || recorded["target"] != "Email/local") {
+				if tc.channel == "email" && (result["smtp"] != "connected" || result["imap"] != "connected" || recorded["connection_status"] != "connected" || recorded["target"] != "Email/local") {
 					t.Fatalf("invalid email result: %v", recorded)
 				}
 				if tc.channel == "telegram" && (recorded["webhook_status"] != "registered" || recorded["checked_at"] == nil) {
 					t.Fatalf("telegram status not stored: %v", recorded)
 				}
-			} else if tc.status == 502 && recorded["webhook_status"] != "failed" {
+			} else if (tc.status == 502 || tc.badToken) && recorded["webhook_status"] != "failed" {
 				t.Fatalf("failed check not stored: %v", recorded)
-			} else if tc.status != 502 && fixture.calls != 0 {
+			} else if tc.status == 422 && tc.channel == "email" && (recorded["connection_status"] != "failed" || !strings.Contains(w.Body.String(), "IMAP")) {
+				t.Fatalf("failed mail login not reported: %v %s", recorded, w.Body)
+			} else if tc.status != 502 && tc.status != 422 && fixture.calls != 0 {
 				t.Fatal("denied request reached provider")
 			}
 		})
@@ -254,5 +271,30 @@ func TestEmailHostIPv6Validation(t *testing.T) {
 		if err := validateEmailSettings(config, "local-only"); (err == nil) != tc.valid {
 			t.Errorf("host %q valid=%v: %v", tc.host, tc.valid, err)
 		}
+	}
+}
+
+func TestTelegramCheckWithoutAPublicHTTPSURLStillReadsTheBot(t *testing.T) {
+	fixture := &connectionFixture{}
+	recorded := map[string]any{}
+	record := func(_ context.Context, _, _ string, values map[string]any) error {
+		for field, value := range values {
+			recorded[field] = value
+		}
+		return nil
+	}
+	h := accountConnection(fixture, func(*http.Request) (auth.User, error) { return auth.User{Role: "admin"}, nil },
+		"http://hub.localhost", "http://hub.localhost", "master-secret", record)
+	r := httptest.NewRequest("GET", "/api/accounts/local/telegram/connection", nil)
+	r.SetPathValue("account", "local")
+	r.SetPathValue("channel", "telegram")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	var result map[string]any
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || result["username"] != "relay_test_bot" || result["webhook_missing"] == "" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if fixture.address != "" || recorded["username"] != "relay_test_bot" || recorded["webhook_status"] != "not_registered" {
+		t.Fatalf("webhook called or status not stored: %q %v", fixture.address, recorded)
 	}
 }

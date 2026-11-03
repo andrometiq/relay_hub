@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -21,6 +22,7 @@ const accountConnectionTimeout = 20 * time.Second
 const httpWriteTimeout = 30 * time.Second
 
 type accountConnections interface {
+	TelegramUsername(context.Context, string) (string, error)
 	TelegramConnection(context.Context, string, string, string, bool) (telegram.WebhookHealth, error)
 	TestEmailConnection(context.Context, string) (channels.EmailConnection, error)
 	WebhookPath(provider, key string) string
@@ -72,21 +74,20 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 		defer cancel()
 		var result any
 		if channel == "telegram" {
-			address := strings.TrimRight(publicURL, "/") + "/webhooks/telegram/" + registry.WebhookPath("Telegram", account)
-			u, parseErr := url.Parse(address)
-			if parseErr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-				http.Error(w, "Configure the Hub public HTTPS URL before checking its webhook", 503)
-				return
-			}
-			var health telegram.WebhookHealth
-			health, err = registry.TelegramConnection(ctx, account, address, telegramMaster, repair)
-			result = health
-			recordStatus(ctx, record, "Telegram", account, "webhook_status", telegramStatus(health, err))
+			result, err = checkTelegram(ctx, registry, record, account, publicURL, telegramMaster, repair)
 		} else {
 			var mail channels.EmailConnection
 			mail, err = registry.TestEmailConnection(ctx, account)
 			result = mail
 			recordStatus(ctx, record, "Email", account, "connection_status", emailStatus(mail, err))
+			if err == nil && emailStatus(mail, nil) == "failed" {
+				err = &connectionFailure{Status: 422, Message: emailFailure(mail)}
+			}
+		}
+		var failure *connectionFailure
+		if errors.As(err, &failure) {
+			http.Error(w, failure.Message, failure.Status)
+			return
 		}
 		if err != nil {
 			http.Error(w, "Connection check failed. Check saved settings and runtime activation, then retry.", 502)
@@ -96,6 +97,51 @@ func accountConnection(registry accountConnections, session func(*http.Request) 
 		w.Header().Set("Cache-Control", "no-store")
 		json.NewEncoder(w).Encode(result)
 	})
+}
+
+// connectionFailure is a check that ran and failed for a reason the admin can fix; its message is safe to show.
+type connectionFailure struct {
+	Status  int
+	Message string
+}
+
+func (f *connectionFailure) Error() string { return f.Message }
+
+// telegramCheck is what a Telegram check shows: the bot name and the webhook state.
+type telegramCheck struct {
+	Username string `json:"username"`
+	telegram.WebhookHealth
+	// WebhookMissing says why the webhook was not checked, for a Hub without a public HTTPS URL.
+	WebhookMissing string `json:"webhook_missing,omitempty"`
+}
+
+// checkTelegram reads the bot name with getMe, which also checks the token, then checks or registers the
+// webhook. Telegram sends webhooks only to HTTPS, so a Hub without a public HTTPS URL stops after the token.
+func checkTelegram(ctx context.Context, registry accountConnections, record connectionStatus, account, publicURL, master string, repair bool) (telegramCheck, error) {
+	username, err := registry.TelegramUsername(ctx, account)
+	if err != nil {
+		recordStatus(ctx, record, "Telegram", account, "webhook_status", "failed")
+		return telegramCheck{}, &connectionFailure{Status: 422, Message: "Telegram did not accept the bot token. Copy the token from @BotFather again."}
+	}
+	result := telegramCheck{Username: username}
+	recordStatus(ctx, record, "Telegram", account, "username", username)
+	address := strings.TrimRight(publicURL, "/") + "/webhooks/telegram/" + registry.WebhookPath("Telegram", account)
+	u, parseErr := url.Parse(address)
+	if parseErr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		recordStatus(ctx, record, "Telegram", account, "webhook_status", "not_registered")
+		result.WebhookMissing = "The Hub has no public HTTPS URL, so Telegram cannot send messages to it yet."
+		return result, nil
+	}
+	result.WebhookHealth, err = registry.TelegramConnection(ctx, account, address, master, repair)
+	recordStatus(ctx, record, "Telegram", account, "webhook_status", telegramStatus(result.WebhookHealth, err))
+	return result, err
+}
+
+func emailFailure(mail channels.EmailConnection) string {
+	if mail.SMTP != "connected" {
+		return "The Hub could not sign in to the SMTP server. Check the host, port, username and password."
+	}
+	return "The Hub could not sign in to the IMAP server. Check the IMAP host, port, folder, username and password."
 }
 
 func telegramStatus(health telegram.WebhookHealth, err error) string {

@@ -24,6 +24,15 @@ func (r *Registry) TelegramConnection(ctx context.Context, account, address, mas
 	return client.WebhookHealth(ctx, address)
 }
 
+// TelegramUsername checks the stored bot token and returns the bot's username.
+func (r *Registry) TelegramUsername(ctx context.Context, account string) (string, error) {
+	client := r.snapshot().telegram[account]
+	if client == nil {
+		return "", errors.New("Telegram account is not active")
+	}
+	return client.Username(ctx)
+}
+
 type EmailConnection struct {
 	SMTP string `json:"smtp"`
 	IMAP string `json:"imap"`

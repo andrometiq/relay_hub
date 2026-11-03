@@ -42,3 +42,29 @@ func TestWebhookRepairPreservesUpdatesAndRedactsProviderFields(t *testing.T) {
 		t.Fatal("unsafe webhook accepted")
 	}
 }
+
+func TestUsernameChecksTheTokenWithGetMe(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{200, `{"ok":true,"result":{"id":123456,"is_bot":true,"username":"relay_test_bot"}}`, "relay_test_bot"},
+		{401, `{"ok":false,"error_code":401,"description":"Unauthorized"}`, ""},
+		{200, `{"ok":true,"result":{"id":123456,"username":"<script>"}}`, ""},
+	} {
+		client, err := NewWithHTTPClient(Config{AccountID: "local", BotToken: "123456:abcdefghijklmnopqrstuv", Enabled: true}, &http.Client{Transport: webhookTransport(func(r *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(r.URL.Path, "/getMe") {
+				t.Fatalf("unexpected method %s", r.URL.Path)
+			}
+			return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		name, err := client.Username(context.Background())
+		if name != tc.want || (tc.want == "") != (err != nil) {
+			t.Fatalf("%d %s: %q %v", tc.status, tc.body, name, err)
+		}
+	}
+}
