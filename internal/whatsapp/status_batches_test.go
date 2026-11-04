@@ -90,3 +90,25 @@ func TestGroupStatusBatchPreservesParticipants(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusBatchCarriesFailureReason(t *testing.T) {
+	payload := `{"entry":[{"changes":[{"value":{"statuses":[
+{"id":"wamid.a","recipient_id":"919000000055","status":"failed","timestamp":"100","errors":[{"code":131026,"title":"Message undeliverable","message":"Message undeliverable","error_data":{"details":"Message Undeliverable."}}]},
+{"id":"wamid.b","recipient_id":"919000000055","status":"failed","timestamp":"101","errors":[{"code":131049,"title":"This message was not delivered to maintain healthy ecosystem engagement.","message":"This message was not delivered to maintain healthy ecosystem engagement."}]},
+{"id":"wamid.c","recipient_id":"919000000055","status":"failed","timestamp":"102","errors":[{"code":"bad"}]},
+{"id":"wamid.d","recipient_id":"919000000055","status":"sent","timestamp":"103","errors":[{"code":1,"title":"ignored"}]}]}}]}]}`
+	rows, _, err := buildStatusBatch([]Event{{ID: 1, Payload: json.RawMessage(payload)}}, StatusCursor{}, statusBatchBytes)
+	if err != nil || len(rows) != 4 {
+		t.Fatalf("rows %d err %v", len(rows), err)
+	}
+	want := []string{
+		`{"code":131026,"message":"Message Undeliverable.","title":"Message undeliverable"}`,
+		`{"code":131049,"message":"This message was not delivered to maintain healthy ecosystem engagement.","title":"This message was not delivered to maintain healthy ecosystem engagement."}`,
+		"", "",
+	}
+	for i, row := range rows {
+		if string(row.Error) != want[i] {
+			t.Fatalf("row %d error %s", i, row.Error)
+		}
+	}
+}

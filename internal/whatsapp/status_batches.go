@@ -20,16 +20,17 @@ type StatusCursor struct {
 }
 
 type CompactStatus struct {
-	EventID       int64  `json:"event_id"`
-	Position      int    `json:"position"`
-	MessageID     string `json:"message_id"`
-	Recipient     string `json:"recipient"`
-	Participant   string `json:"participant,omitempty"`
-	RecipientType string `json:"recipient_type,omitempty"`
-	Status        string `json:"status"`
-	Timestamp     int64  `json:"timestamp"`
-	ChannelKey    string `json:"channel_key,omitempty"`
-	To            string `json:"to,omitempty"`
+	EventID       int64           `json:"event_id"`
+	Position      int             `json:"position"`
+	MessageID     string          `json:"message_id"`
+	Recipient     string          `json:"recipient"`
+	Participant   string          `json:"participant,omitempty"`
+	RecipientType string          `json:"recipient_type,omitempty"`
+	Status        string          `json:"status"`
+	Timestamp     int64           `json:"timestamp"`
+	ChannelKey    string          `json:"channel_key,omitempty"`
+	To            string          `json:"to,omitempty"`
+	Error         json.RawMessage `json:"error,omitempty"`
 }
 
 // buildStatusBatch works only on immutable, ascending status-lane events.
@@ -86,12 +87,13 @@ func buildStatusBatchLimit(events []Event, start StatusCursor, byteLimit, limit 
 		}
 		for i := offset; i < len(statuses); i++ {
 			var raw struct {
-				ID            string `json:"id"`
-				Recipient     string `json:"recipient_id"`
-				Participant   string `json:"recipient_participant_id"`
-				RecipientType string `json:"recipient_type"`
-				Status        string `json:"status"`
-				Timestamp     string `json:"timestamp"`
+				ID            string          `json:"id"`
+				Recipient     string          `json:"recipient_id"`
+				Participant   string          `json:"recipient_participant_id"`
+				RecipientType string          `json:"recipient_type"`
+				Status        string          `json:"status"`
+				Timestamp     string          `json:"timestamp"`
+				Errors        json.RawMessage `json:"errors"`
 			}
 			if err := json.Unmarshal(statuses[i], &raw); err != nil {
 				return nil, start, &receiptError{Position: i}
@@ -107,6 +109,9 @@ func buildStatusBatchLimit(events []Event, start StatusCursor, byteLimit, limit 
 				return nil, start, &receiptError{Position: i}
 			}
 			row := CompactStatus{EventID: event.ID, Position: i, MessageID: raw.ID, Recipient: raw.Recipient, Participant: raw.Participant, RecipientType: raw.RecipientType, Status: raw.Status, Timestamp: stamp, ChannelKey: event.ChannelKey, To: event.To}
+			if raw.Status == "failed" {
+				row.Error = failureReason(raw.Errors)
+			}
 			encoded, err := json.Marshal(row)
 			if err != nil {
 				return nil, start, err
@@ -128,4 +133,13 @@ func buildStatusBatchLimit(events []Event, start StatusCursor, byteLimit, limit 
 		cursor = StatusCursor{EventID: event.ID}
 	}
 	return out, cursor, nil
+}
+
+// failureReason never blocks the receipt stream: an unreadable reason is dropped and the failure still projects.
+func failureReason(raw json.RawMessage) json.RawMessage {
+	var list []providerReceiptError
+	if json.Unmarshal(raw, &list) != nil {
+		return nil
+	}
+	return statusError(list)
 }
