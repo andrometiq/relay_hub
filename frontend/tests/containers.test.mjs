@@ -18,6 +18,8 @@ test('routes open detail pages and send old account links to sites', () => {
 test('channel status reflects enabled state, site link and provider checks', () => {
   assert.equal(channelStatus(whatsapp({ enabled: false })).label, 'Disabled');
   assert.equal(channelStatus(whatsapp({ site: '' })).label, 'Idle');
+  assert.equal(channelStatus({ channel: 'Email', enabled: true, site: '', config: { connection_status: 'failed' } }).label, 'Mail error');
+  assert.equal(channelStatus({ channel: 'Telegram', enabled: true, site: '', config: { webhook_status: 'failed' } }).label, 'Failed');
   assert.equal(channelStatus(whatsapp()).label, 'Setup needed');
   assert.equal(channelStatus(whatsapp({ config: { connection_status: 'connected' } })).theme, 'green');
   assert.equal(channelStatus({ channel: 'Telegram', enabled: true, site: 'distributor', config: {} }).label, 'Not checked');

@@ -530,9 +530,9 @@ The Hub makes the site, its service user and its auth key. It proves that the ca
 | Container | Enabled / Disabled | Disabled stops all its accounts. |
 | Container WhatsApp card | Webhook ready / Setup needed | App secret and verify token saved, or not. |
 | Account | Disabled | The account is off. |
-| Account | Idle | The account is on but has no site. Its messages stay in the Hub. |
+| Account | Idle | The account is on but has no site. Its messages stay in the Hub. A failed test shows instead of Idle. |
 | WhatsApp account | Connected / Failed / Setup needed | Meta check passed, failed, or not done. |
-| Telegram account | Registered / Not checked | The webhook is registered at Telegram, or not checked yet. |
+| Telegram account | Registered / Failed / Not checked | The webhook is registered at Telegram, the check failed, or not checked yet. |
 | Email account | Connected / Mail error / Not checked | SMTP and IMAP test result. |
 | Site | Enabled / Setup needed / Disabled | All three Core values saved, one missing, or the site is off. |
 | Auth key | Active / Expired / Revoked | The key works, passed its expiry date, or was stopped. |
