@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -140,5 +141,36 @@ func TestSharedWABAPricingIsSplitBySite(t *testing.T) {
 	points, _ := result["data_points"].([]any)
 	if len(points) != 1 || points[0].(map[string]any)["cost"] != 1.0 || points[0].(map[string]any)["channel_key"] != "site-a" {
 		t.Fatalf("site pricing rows: %v", points)
+	}
+}
+
+func TestSharedWABARefusesTemplateAndFlowChanges(t *testing.T) {
+	shared := true
+	s := fakeGraph(t, func(r *http.Request) string {
+		if shared && r.Method != http.MethodGet {
+			t.Errorf("shared WABA change reached Meta: %s %s", r.Method, r.URL.Path)
+		}
+		return `{"data":[]}`
+	})
+	own, other := testAccount(), testAccount()
+	own.SiteID, own.Templates = "site-one", true
+	other.ID, other.SiteID, other.PhoneID, other.CoreToken = "site-b", "site-two", "333", strings.Repeat("b", 64)
+	if err := s.ReplaceAccounts([]Account{own, other}); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []string{"templates.create", "templates.update", "templates.delete", "flows.create", "flows.publish", "flows.delete"} {
+		if _, err := s.Execute(context.Background(), own, Input{Operation: op, ID: "77", Name: "order_update"}); !errors.Is(err, ErrSharedWABA) {
+			t.Fatalf("%s on a shared WABA: %v", op, err)
+		}
+	}
+	if _, err := s.Execute(context.Background(), own, Input{Operation: "templates.list"}); err != nil {
+		t.Fatalf("a read stays allowed on a shared WABA: %v", err)
+	}
+	shared = false
+	if err := s.ReplaceAccounts([]Account{own}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Execute(context.Background(), own, Input{Operation: "templates.delete", Name: "order_update"}); errors.Is(err, ErrSharedWABA) {
+		t.Fatal("a WABA of one site was refused")
 	}
 }
