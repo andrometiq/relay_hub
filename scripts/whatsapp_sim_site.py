@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from simulation_fixtures import (available_run, confine_writes, fixture_channel,
+from simulation_fixtures import (BENCH, SITE, available_run, confine_writes, fixture_channel,
                                  fixture_endpoint, fixture_user)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,8 +89,8 @@ def fixture_contact(frappe, insert, channel, run):
 
 
 def validate_site(site, sites):
-    if site != 'acme.localhost' or Path(sites).resolve() != Path('$RELAY_SIM_BENCH/sites').resolve():
-        raise ValueError('Only acme.localhost in the local development bench is allowed')
+    if site != SITE or Path(sites).resolve() != (BENCH / 'sites').resolve():
+        raise ValueError(f'Only {SITE} in the local development bench is allowed')
 
 
 def main():

@@ -1,5 +1,5 @@
 """Shared local-only HTTP, fixture process and Socket.IO simulation transports."""
-from simulation_fixtures import run_number
+from simulation_fixtures import BENCH, SITE, run_number
 import fcntl
 import ipaddress
 import json
@@ -16,7 +16,6 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-BENCH = Path('$RELAY_SIM_BENCH')
 
 
 def loopback_origin(value):

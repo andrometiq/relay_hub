@@ -47,7 +47,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_business_event_fixture_supplies_site_tax_currency_and_price_list(self):
         from whatsapp_sim_acceptance import Acceptance
-        f = Mock(conf=SimpleNamespace(developer_mode=1), local=SimpleNamespace(site='acme.localhost'))
+        f = Mock(conf=SimpleNamespace(developer_mode=1), local=SimpleNamespace(site=sim.SITE))
         f.get_all.return_value = []
         f.db.get_single_value.return_value = 'Configured company'
         f.db.get_value.side_effect = lambda dt, *args: {'Relay WhatsApp Template': 'template',
@@ -225,8 +225,8 @@ class RunnerTests(unittest.TestCase):
 
     def test_fixture_targets_are_confined(self):
         from whatsapp_sim_site import validate_site
-        validate_site('acme.localhost', sim.BENCH / 'sites')
-        for site, sites in [('erp.example.com', sim.BENCH / 'sites'), ('acme.localhost', '/tmp/sites')]:
+        validate_site(sim.SITE, sim.BENCH / 'sites')
+        for site, sites in [('erp.example.com', sim.BENCH / 'sites'), (sim.SITE, '/tmp/sites')]:
             with self.assertRaises(ValueError):
                 validate_site(site, sites)
         for args in (['--site', 'erp.example.com'], ['--sites', '/tmp/sites']):
@@ -615,7 +615,7 @@ class AcceptanceIsolationTests(unittest.TestCase):
                 result.insert = insert
                 return result
             conf = SimpleNamespace(developer_mode=True)
-            fake = SimpleNamespace(conf=conf, local=SimpleNamespace(site='acme.localhost'),
+            fake = SimpleNamespace(conf=conf, local=SimpleNamespace(site=sim.SITE),
                 db=SimpleNamespace(has_column=lambda *args: True), get_doc=lambda *args: sample, copy_doc=copy_doc)
             installed = SimpleNamespace(install_samples=lambda: None, LEDGER_TOOL='ledger', TARGET='Explain the supplier ledger')
             acceptance = Acceptance(fake, {'channel': 'local-fixture'}, None)

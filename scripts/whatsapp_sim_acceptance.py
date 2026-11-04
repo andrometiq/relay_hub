@@ -6,7 +6,7 @@ Sales Orders use the normal insert/submit lifecycle.
 """
 import json
 import time
-from simulation_fixtures import fixture_endpoint
+from simulation_fixtures import SITE, fixture_endpoint
 
 
 def fixture_origin(value):
@@ -42,7 +42,7 @@ class Acceptance:
 
     def preflight(self):
         assert self.f.conf.get('relay_automation_enabled'), (
-            'Step 13 requires relay_automation_enabled=1 on acme.localhost; '
+            'Step 13 requires relay_automation_enabled=1 on the simulation site; '
             'site configuration activation needs separate approval. '
             'See docs/simulation-validation.md.')
 
@@ -50,7 +50,7 @@ class Acceptance:
         self.preflight()
         f, fixture = self.f, self.fixture
         origin = fixture_origin(origin)
-        assert f.conf.developer_mode and f.local.site == 'acme.localhost'
+        assert f.conf.developer_mode and f.local.site == SITE
         assert f.db.has_column('Relay AI Skill', 'sample_key'), 'Reload Relay AI Skill before the connected run'
         from relay_core.ai.samples import install_samples, LEDGER_TOOL, TARGET
         install_samples()
@@ -203,7 +203,7 @@ class Acceptance:
 
     def seed_event(self, run, template_id=None, medium="WhatsApp"):
         f, fixture = self.f, self.fixture
-        assert f.conf.developer_mode and f.local.site == 'acme.localhost'
+        assert f.conf.developer_mode and f.local.site == SITE
         template = None
         if medium == 'WhatsApp':
             template = f.db.get_value('Relay WhatsApp Template', {'account': 'sim-v1', 'template_id': template_id, 'status': 'APPROVED'}, 'name')

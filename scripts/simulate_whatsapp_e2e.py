@@ -18,7 +18,7 @@ import urllib.request
 
 from simulation_fixtures import run_label
 from whatsapp_bulk_campaign import BulkCampaign
-from simulation_common import (ROOT, BENCH, loopback_origin, address, NoRedirect, request,
+from simulation_common import (ROOT, BENCH, SITE, loopback_origin, address, NoRedirect, request,
                                percentile, read_env, Site, Realtime, SimulationRunner)
 STEPS = {'7': 'Signed ingress', '8': 'Journal, Core projection and deduplication',
          '9': 'Core send idempotency', '10': '1,251 receipt batch check',
@@ -551,7 +551,7 @@ class Runner(SimulationRunner):
 
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--site', choices=['acme.localhost'], default='acme.localhost')
+    parser.add_argument('--site', choices=[SITE], default=SITE)
     parser.add_argument('--sites', type=Path, default=BENCH / 'sites')
     parser.add_argument('--frappe-python', type=Path, default=BENCH / 'env/bin/python')
     parser.add_argument('--core-origin', type=loopback_origin, default='http://127.0.0.1:8001')

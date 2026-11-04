@@ -1,8 +1,8 @@
-"""Fixture-only writes and read assertions for Telegram/email on acme.localhost."""
+"""Fixture-only writes and read assertions for Telegram/email on the simulation site."""
 import json
 import os
 import sys
-from simulation_fixtures import (available_run, confine_writes, fixture_channel,
+from simulation_fixtures import (SITE, available_run, confine_writes, fixture_channel,
                                  fixture_email, fixture_endpoint, fixture_user)
 
 
@@ -25,7 +25,7 @@ def snapshot(frappe, fixture):
 
 def main():
     site, sites = sys.argv[1:3]
-    assert site == 'acme.localhost', 'Only acme.localhost is approved for connected fixtures'
+    assert site == SITE, f'Only {SITE} is approved for connected fixtures'
     sys.addaudithook(confine_writes)
     os.environ['FRAPPE_STREAM_LOGGING'] = '1'
     import frappe

@@ -7,6 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUFFIXES = '0123456789abcdefghijklmnopqrstuvwxyz'
+BENCH = Path(os.environ.get('RELAY_SIM_BENCH', '~/frappe-bench')).expanduser().resolve()
+SITE = os.environ.get('RELAY_SIM_SITE', 'acme.localhost')
 
 
 def run_label(exists=lambda label: False, now=None):

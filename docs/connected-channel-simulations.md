@@ -14,7 +14,7 @@ Each latency result uses ten sequential text probes from `single_inbound_latency
 From a Hub checkout, with the development Core services already running:
 
 ```sh
-RELAY_SIM_PY=$RELAY_SIM_BENCH/env/bin/python
+RELAY_SIM_PY="$RELAY_SIM_BENCH/env/bin/python"
 "$RELAY_SIM_PY" -B scripts/simulate_telegram_e2e.py --report-dir .runtime/sim-report/telegram
 "$RELAY_SIM_PY" -B scripts/simulate_email_e2e.py --report-dir .runtime/sim-report/email
 ```

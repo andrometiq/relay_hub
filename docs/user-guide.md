@@ -34,12 +34,12 @@ When a person sends a reply in Core, Core gives it to the Hub, and the Hub sends
  +-------------------------------------------------+
  |                   RELAY HUB                     |
  |                                                 |
- |  Container "Acme Main"                        |
+ |  Container "Acme Main"                          |
  |    WhatsApp numbers   Telegram bots   Mailboxes |
  |          |                 |              |     |
  |          +------ linked to a site --------+     |
  |                        |                        |
- |  Site "distributor"  (one Relay Core install)           |
+ |  Site "distributor"  (one Relay Core install)   |
  +-------------------------------------------------+
                           |
                           v

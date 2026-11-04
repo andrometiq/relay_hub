@@ -38,7 +38,7 @@ class Bulk:
         return self.f.utils.now()
 
     def tick(self):
-        """The per-minute campaign recovery that the site scheduler runs; it is disabled on acme.localhost."""
+        """The per-minute campaign recovery that the site scheduler runs; it is disabled on the simulation site."""
         self.f.get_attr('relay_core.campaigns.recover')()
         self.f.db.commit()
         return True

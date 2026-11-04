@@ -16,7 +16,7 @@ Telegram and email values come from `single_inbound_latency_ms`: ten sequential 
 
 WhatsApp measures signed webhook send to an observed Core row, including a 20 ms test database observation interval. Telegram/email measure control emit to a Core snapshot after a real Socket.IO event. Snapshot time counts. IMAP observations include mailbox arrival. None of these figures measures browser rendering or a separate Core SQL commit timestamp.
 
-Read the [latency diagnosis](v15-hub-latency-validation.md#2026-10-24-lat2-follow-up-snapshot-scan-and-mime-decoding) for the snapshot-query and MIME-decoding findings. The current evidence files are read-only reports at `.runtime/sim-report/{full,telegram,email}/report.{json,md}`. The run IDs are `1792808042199589057`, `1792809143944478303` and `1792809165611001235` respectively. Runtime files can contain private fixture data and must not enter Git.
+Read the [latency diagnosis](v15-hub-latency-validation.md#2026-10-24-lat2-follow-up-snapshot-scan-and-mime-decoding) for the snapshot-query and MIME-decoding findings. The current evidence files are read-only reports at `.runtime/sim-report/{full,telegram,email}/report.{json,md}` in the Hub checkout. The run IDs are `1792808042199589057`, `1792809143944478303` and `1792809165611001235` respectively. Runtime files can contain private fixture data and must not enter Git.
 
 ## Proven behavior
 
@@ -31,14 +31,14 @@ This evidence does not cover bulk campaigns, live provider acceptance, installed
 
 ## Rerun
 
-Run the drivers sequentially from a Hub checkout. The examples use the local bench interpreter and the report directories above. They are commands for an operator; reading this evidence does not require a rerun.
+Run the drivers sequentially from a Hub checkout. The examples use the local bench interpreter and the report directories above. Set `RELAY_SIM_BENCH` to the development bench directory (default `~/frappe-bench`) and `RELAY_SIM_SITE` to the fixture site (default `acme.localhost`). The drivers accept only that site and that bench. They are commands for an operator; reading this evidence does not require a rerun.
 
 ```sh
-RELAY_SIM_PY=$RELAY_SIM_BENCH/env/bin/python
+RELAY_SIM_PY="$RELAY_SIM_BENCH/env/bin/python"
 
 "$RELAY_SIM_PY" -B scripts/simulate_whatsapp_e2e.py \
   --site acme.localhost \
-  --sites $RELAY_SIM_BENCH/sites \
+  --sites "$RELAY_SIM_BENCH/sites" \
   --core-origin http://127.0.0.1:8001 \
   --socketio-origin http://127.0.0.1:9001 \
   --storm-receipts 12000 \

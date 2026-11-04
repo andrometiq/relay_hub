@@ -8,7 +8,7 @@ import time
 import traceback
 import urllib.parse
 from simulation_fixtures import run_label
-from simulation_common import (ROOT, BENCH, Site, Realtime, SimulationRunner, address,
+from simulation_common import (ROOT, BENCH, SITE, Site, Realtime, SimulationRunner, address,
                                loopback_origin, percentile, validate_test_database)
 
 from channel_sim_acceptance import ChannelAcceptance
@@ -202,8 +202,8 @@ class ChannelRunner(SimulationRunner, ChannelAcceptance):
 
 
 def arguments(medium, argv=None):
-    p=argparse.ArgumentParser(description='Connected '+medium+' simulation; acme.localhost fixtures only')
-    p.add_argument('--site',choices=['acme.localhost'],default='acme.localhost')
+    p=argparse.ArgumentParser(description='Connected '+medium+' simulation; '+SITE+' fixtures only')
+    p.add_argument('--site',choices=[SITE],default=SITE)
     p.add_argument('--sites',type=Path,default=BENCH/'sites')
     p.add_argument('--frappe-python',type=Path,default=BENCH/'env/bin/python')
     p.add_argument('--core-origin',type=loopback_origin,default='http://127.0.0.1:8001')
