@@ -17,6 +17,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/hubmcp"
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/andrometiq/relay_hub/internal/live"
+	"github.com/andrometiq/relay_hub/internal/numbers"
 	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
@@ -350,7 +351,8 @@ func run() error {
 		}
 		defer signup.close()
 		wa.AccountUpdate = signup.service.AccountUpdate
-		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service})
+		siteNumbers := &numbers.Service{Store: accountStore, WhatsApp: wa, Reload: reloadRuntime}
+		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service, Numbers: siteNumbers})
 		if err != nil {
 			return err
 		}

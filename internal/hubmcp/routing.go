@@ -158,7 +158,8 @@ func siteChannels(ctx context.Context, db *pgxpool.Pool, site string) ([]map[str
 		result = append(result, map[string]any{"key": key, "provider": provider, "label": label, "address": address,
 			"display_number": text("display_number"), "waba_id": text("waba_id"), "container": container, "enabled": enabled,
 			"capabilities": map[string]bool{"templates": flag("templates"), "groups": flag("groups"), "calls": flag("calls")},
-			"coexistence":  flag("coexistence"), "onboarding": text("onboarding")})
+			"coexistence":  flag("coexistence"), "onboarding": text("onboarding"),
+			"connection_status": text("connection_status"), "partner_status": text("partner_status"), "verified_at": text("verified_at")})
 	}
 	return result, rows.Err()
 }

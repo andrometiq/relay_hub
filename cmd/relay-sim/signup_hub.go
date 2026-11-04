@@ -11,6 +11,7 @@ import (
 
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/numbers"
 	"github.com/andrometiq/relay_hub/internal/onboarding"
 )
 
@@ -94,6 +95,15 @@ func (s *simulation) saveSignupContainer(ctx context.Context, store *containers.
 // onboarding builds the Hub onboarding service against the fake Meta
 // address: the SDK and dialog come from there, and Graph calls go through
 // the simulation transport.
+// numbers serves the site number tools against the fake Meta.
+func (s *simulation) numbers() (*numbers.Service, error) {
+	store, err := containers.New(s.db, s.credentialKey)
+	if err != nil {
+		return nil, err
+	}
+	return &numbers.Service{Store: store, WhatsApp: s.wa, Reload: func(ctx context.Context) error { return s.activateSites(ctx, store) }}, nil
+}
+
 func (s *simulation) onboarding(authStore *auth.Store, client *http.Client, meta *url.URL) (*onboarding.Service, error) {
 	store, err := containers.New(s.db, s.credentialKey)
 	if err != nil {

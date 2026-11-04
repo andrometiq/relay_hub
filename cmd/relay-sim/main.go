@@ -503,7 +503,11 @@ func runSimulation(validateDatabase func(string) error) error {
 	}
 	signupService.Register(mux)
 	wa.AccountUpdate = signupService.AccountUpdate
-	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService})
+	siteNumbers, err := sim.numbers()
+	if err != nil {
+		return err
+	}
+	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService, Numbers: siteNumbers})
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,223 @@
+package hubmcp
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/andrometiq/relay_hub/internal/auth"
+	"github.com/andrometiq/relay_hub/internal/channels"
+	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/numbers"
+	"github.com/andrometiq/relay_hub/internal/whatsapp"
+)
+
+// numberFixture has site-a with two numbers and site-b with one, real site
+// tokens and a fake Graph API that records each call.
+type numberFixture struct {
+	t       *testing.T
+	ctx     context.Context
+	store   *containers.Store
+	auth    *auth.Store
+	handler http.Handler
+	tokens  map[string]string
+	mu      sync.Mutex
+	calls   []string
+	bodies  map[string]map[string]any
+	// reply answers one Graph call by "METHOD path"; nil is a plain success.
+	reply   func(call string) (int, string)
+	reloads int
+}
+
+const numberSecrets = "biz-token-a1"
+
+func newNumberFixture(t *testing.T) *numberFixture {
+	t.Helper()
+	ctx := context.Background()
+	db, _ := simulationDatabase(t, ctx)
+	f := &numberFixture{t: t, ctx: ctx, auth: &auth.Store{DB: db}, tokens: map[string]string{}, bodies: map[string]map[string]any{}}
+	f.store, _ = containers.New(db, "mcp-number-test-key")
+	app := &containers.ProviderInput{Config: map[string]any{"app_id": "333", "graph_version": "v25.0", "es_config_id": "es-1", "app_secret": "app-secret-value", "verify_token": "verify-value"}}
+	if err := f.store.SaveContainer(ctx, containers.Container{ID: "signup", Enabled: true, Signup: true}, app, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO relay_sites(site_id,origin,enabled) VALUES('site-a','https://a.example.com',true),('site-b','https://b.example.com',true)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []struct{ key, site, phone, waba, token string }{
+		{"wa-120", "site-a", "120", "230", numberSecrets}, {"wa-121", "site-a", "121", "231", "biz-token-a2"}, {"wa-130", "site-b", "130", "240", "biz-token-b"}} {
+		config := map[string]any{"phone_id": n.phone, "waba_id": n.waba, "display_number": "+91 99999 99" + n.phone, "templates": true, "sync_metadata": true,
+			"partner_status": "active", "connection_status": "connected", "pin": "123456"}
+		if err := f.store.SaveChannel(ctx, containers.Channel{Key: n.key, Channel: "WhatsApp", Container: "signup", Label: "Acme Textiles", Enabled: true, Config: config}, n.token, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.store.LinkChannel(ctx, n.site, containers.ChannelRef{Channel: "WhatsApp", Key: n.key}); err != nil {
+			t.Fatal(err)
+		}
+		f.tokens[n.site] = f.siteToken(n.site)
+	}
+	graph := httptest.NewServer(http.HandlerFunc(f.graph))
+	t.Cleanup(graph.Close)
+	endpoint, _ := url.Parse(graph.URL)
+	wa, err := whatsapp.NewWithHTTPClient(nil, &http.Client{Transport: simulationTransport(func(r *http.Request) (*http.Response, error) {
+		copy := r.Clone(r.Context())
+		copy.URL.Scheme, copy.URL.Host, copy.Host = endpoint.Scheme, endpoint.Host, endpoint.Host
+		return http.DefaultTransport.RoundTrip(copy)
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &numbers.Service{Store: f.store, WhatsApp: wa, Reload: func(context.Context) error { f.reloads++; return nil }}
+	f.handler, err = NewAuthenticatedChannelsWithOptions(db.Ping, wa, f.auth.Authenticate, &channels.Registry{}, channels.Store{DB: db}, Options{Numbers: service})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// siteToken issues the site's service token the way enrolment does.
+func (f *numberFixture) siteToken(site string) string {
+	tx, err := f.auth.DB.Begin(f.ctx)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer tx.Rollback(f.ctx)
+	user, err := auth.ServiceUser(f.ctx, tx, site)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	token, err := auth.RotateServiceToken(f.ctx, tx, user, site)
+	if err != nil || tx.Commit(f.ctx) != nil {
+		f.t.Fatal(err)
+	}
+	return token
+}
+
+func (f *numberFixture) graph(w http.ResponseWriter, r *http.Request) {
+	call := r.Method + " " + strings.TrimPrefix(r.URL.Path, "/v25.0/")
+	raw, _ := io.ReadAll(r.Body)
+	f.mu.Lock()
+	f.calls = append(f.calls, call)
+	var body map[string]any
+	if json.Unmarshal(raw, &body) == nil {
+		f.bodies[call] = body
+	}
+	reply := f.reply
+	f.mu.Unlock()
+	status, text := 200, `{"success":true}`
+	if reply != nil {
+		if code, answer := reply(call); answer != "" {
+			status, text = code, answer
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	io.WriteString(w, text)
+}
+
+func (f *numberFixture) graphCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+// call runs one tool with the site's token, or with a raw bearer value when token is set.
+func (f *numberFixture) call(site, name string, arguments map[string]any) (bool, map[string]any, string) {
+	return f.callWith(f.tokens[site], name, arguments)
+}
+
+func (f *numberFixture) callWith(token, name string, arguments map[string]any) (bool, map[string]any, string) {
+	raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": name, "arguments": arguments}})
+	request := httptest.NewRequest("POST", "http://localhost/mcp", strings.NewReader(string(raw)))
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("MCP-Protocol-Version", "2025-06-18")
+	response := httptest.NewRecorder()
+	f.handler.ServeHTTP(response, request)
+	if response.Code != 200 {
+		return false, nil, response.Body.String()
+	}
+	var envelope struct {
+		Result struct {
+			IsError    bool           `json:"isError"`
+			Structured map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}
+	ok := json.Unmarshal(response.Body.Bytes(), &envelope) == nil && !envelope.Result.IsError
+	return ok, envelope.Result.Structured, response.Body.String()
+}
+
+// noSecret fails when a tool response carries a stored credential.
+func (f *numberFixture) noSecret(body string) {
+	f.t.Helper()
+	for _, secret := range []string{numberSecrets, "biz-token-a2", "biz-token-b", "123456", "app-secret-value", "verify-value"} {
+		if strings.Contains(body, secret) {
+			f.t.Fatalf("response carries a credential: %s", body)
+		}
+	}
+}
+
+func errorCode(result map[string]any) string {
+	failure, _ := result["error"].(map[string]any)
+	code, _ := failure["code"].(string)
+	return code
+}
+
+func TestNumberHealthIsScopedToTheTokenSite(t *testing.T) {
+	f := newNumberFixture(t)
+	ok, result, body := f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-120"})
+	if !ok || result["channel"] != "wa-120" || result["connection_status"] != "connected" || result["partner_status"] != "active" || result["pin_kept"] != true {
+		t.Fatalf("own number health: %s", body)
+	}
+	if settings, _ := result["settings"].(map[string]any); settings["templates"] != true || result["delivery"] == nil {
+		t.Fatalf("health shape: %s", body)
+	}
+	f.noSecret(body)
+	if ok, result, body = f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-130"}); ok || errorCode(result) != "not_found" {
+		t.Fatalf("another site's number: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.health", map[string]any{}); ok || errorCode(result) != "channel_required" {
+		t.Fatalf("two numbers without a key: %s", body)
+	}
+	if ok, result, body = f.call("site-b", "whatsapp.number.health", map[string]any{}); !ok || result["channel"] != "wa-130" {
+		t.Fatalf("the only number: %s", body)
+	}
+	ok, result, body = f.call("site-a", "channels.list", map[string]any{})
+	first, _ := result["channels"].([]any)[0].(map[string]any)
+	if !ok || first["connection_status"] != "connected" || first["partner_status"] != "active" {
+		t.Fatalf("channel list status: %s", body)
+	}
+	f.noSecret(body)
+	if len(f.graphCalls()) != 0 {
+		t.Fatalf("health contacted Meta: %v", f.graphCalls())
+	}
+}
+
+func TestNumberToolsRefuseAMissingOrRevokedSiteLink(t *testing.T) {
+	f := newNumberFixture(t)
+	if ok, _, body := f.callWith("", "whatsapp.number.health", map[string]any{}); ok || !strings.Contains(body, "unauthorized") {
+		t.Fatalf("no site link: %s", body)
+	}
+	if ok, _, body := f.callWith("relay_"+strings.Repeat("0", 64), "whatsapp.number.health", map[string]any{}); ok || !strings.Contains(body, "unauthorized") {
+		t.Fatalf("unknown site link: %s", body)
+	}
+	revoked := f.tokens["site-b"]
+	if _, err := f.auth.DB.Exec(f.ctx, `UPDATE relay_api_tokens SET revoked_at=now() WHERE site_id='site-b'`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, body := f.callWith(revoked, "whatsapp.number.health", map[string]any{}); ok || !strings.Contains(body, "unauthorized") {
+		t.Fatalf("revoked site link: %s", body)
+	}
+	if ok, _, body := f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-120"}); !ok {
+		t.Fatalf("another site's revocation blocked site-a: %s", body)
+	}
+}
