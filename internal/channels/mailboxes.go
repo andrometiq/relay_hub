@@ -93,7 +93,7 @@ func (p MailboxPoller) poll(ctx context.Context, account string, client MailboxR
 		return nil
 	}
 	next, err := client.FetchMailbox(ctx, cursor, func(reset relayemail.MailboxCursor) error {
-		_, e := conn.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=0,reset_uid_next=$4 WHERE account=$1 AND mailbox=$2`, account, key, reset.Validity, reset.ResetUIDNext)
+		_, e := conn.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=$4,reset_uid_next=$5 WHERE account=$1 AND mailbox=$2`, account, key, reset.Validity, reset.UID, reset.ResetUIDNext)
 		if e == nil {
 			cursor = reset
 		}

@@ -246,3 +246,39 @@ func TestACheckedBotNameStaysAcrossSaves(t *testing.T) {
 		t.Fatalf("bot name after save: %#v %v", saved.Config, err)
 	}
 }
+
+func TestRelinkedMailboxStartsAtNewMail(t *testing.T) {
+	ctx, s := directoryStore(t)
+	if err := s.SaveContainer(ctx, Container{ID: "acme", Enabled: true}, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	mailbox := Channel{Key: "acme-mail", Channel: "Email", Container: "acme", Enabled: true, Config: map[string]any{"from": "support@acme.invalid", "host": "smtp.acme.invalid", "port": 587, "username": "support@acme.invalid", "imap_host": "imap.acme.invalid", "imap_folder": "INBOX"}}
+	if err := s.SaveChannel(ctx, mailbox, "smtp-secret", true); err != nil {
+		t.Fatal(err)
+	}
+	save := func(want int) {
+		t.Helper()
+		if err := s.SaveChannel(ctx, mailbox, "", false); err != nil {
+			t.Fatal(err)
+		}
+		var validity int
+		if err := s.DB.QueryRow(ctx, `SELECT uid_validity FROM relay_mailbox_cursor WHERE account='acme-mail'`).Scan(&validity); err != nil || validity != want {
+			t.Fatal("mailbox watermark", validity, want, err)
+		}
+		if _, err := s.DB.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=5`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_mailbox_cursor(account,mailbox,uid_validity,last_uid) VALUES('acme-mail','inbox',5,40)`); err != nil {
+		t.Fatal(err)
+	}
+	mailbox.Label = "Acme support"
+	mailbox.Config["imap_password"] = "rotated-secret"
+	save(5)
+	mailbox.Enabled = false
+	save(5)
+	mailbox.Enabled = true
+	save(0)
+	mailbox.Config["imap_folder"] = "Support"
+	save(0)
+}

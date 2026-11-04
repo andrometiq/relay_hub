@@ -85,15 +85,17 @@ mail from becoming fresh callbacks if UIDVALIDITY changes before the rescan
 finishes. The rescan fills raw hashes under the existing event identities.
 
 Every accepted body or explicit rejection commits with its UID checkpoint. A
-truncated network read leaves the UID pending. UIDVALIDITY changes checkpoint
-the new epoch and its initial UIDNEXT before fetching bodies, including for empty
-mailboxes. Historical matching applies only below that persisted boundary, across
-pages and reconnects. Later identical arrivals receive new events. Within the
-reset snapshot, exact-content occurrences map back to prior events, preserving
-distinct identical copies and distinguishing changed content even when Message-ID
-is reused. Attachments keep their original event identity. Raw-hash correlation
-assumes the server preserves message bytes when rebuilding a mailbox; legacy
-correlation uses the content retained in the event and attachment stores.
+truncated network read leaves the UID pending.
+
+A mailbox starts from new mail only. The first poll of a newly added mailbox
+records UIDVALIDITY and UIDNEXT and sets the UID checkpoint to UIDNEXT - 1, so
+mail that is already in the folder is not sent to Core. A UIDVALIDITY change
+does the same: the Hub checkpoints the new epoch at its current UIDNEXT and does
+not replay the rebuilt folder. Saving an Email channel that is re-enabled or
+points at another IMAP host, port, user or folder sets UIDVALIDITY to 0 on its
+cursors, so the next poll records a new watermark. A password or label change
+keeps the cursor. Cursors that were mid-rescan before this rule keep the
+historical matching below their persisted UIDNEXT boundary.
 
 ## Local validation
 

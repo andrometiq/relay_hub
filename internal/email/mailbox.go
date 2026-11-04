@@ -37,8 +37,10 @@ func (c *Client) FetchMailbox(ctx context.Context, cursor MailboxCursor, checkpo
 		return cursor, fail
 	}
 	if cursor.Validity != mailbox.UIDValidity {
-		cursor = MailboxCursor{Validity: mailbox.UIDValidity, ResetUIDNext: uint32(mailbox.UIDNext)}
-		// Persist the reset snapshot even when empty or the first fetch fails.
+		// A new link or a changed UIDVALIDITY starts at UIDNEXT, so existing mail
+		// is never sent as new. Persist it before any fetch can fail.
+		next := uint32(mailbox.UIDNext)
+		cursor = MailboxCursor{Validity: mailbox.UIDValidity, UID: next - 1, ResetUIDNext: next}
 		if err := checkpoint(cursor); err != nil {
 			return cursor, err
 		}

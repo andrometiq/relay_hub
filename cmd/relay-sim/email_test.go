@@ -17,6 +17,9 @@ import (
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 )
 
+// linked is the cursor of a mailbox linked before the fixture mail arrived.
+var linked = relayemail.MailboxCursor{Validity: 1}
+
 func freeAddress(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -67,7 +70,7 @@ func TestEmailTLSMailboxRoundTripAndRestart(t *testing.T) {
 	if _, err = fake.appendMail(raw, 7); err != nil {
 		t.Fatal(err)
 	}
-	cursor, err := client.FetchMailbox(context.Background(), relayemail.MailboxCursor{}, func(relayemail.MailboxCursor) error { return nil }, func(validity, uid uint32, received *relayemail.Received, reason string) error {
+	cursor, err := client.FetchMailbox(context.Background(), linked, func(relayemail.MailboxCursor) error { return nil }, func(validity, uid uint32, received *relayemail.Received, reason string) error {
 		if uid != 7 || validity != 1 || reason != "" || received == nil {
 			t.Fatalf("bad mailbox record %d %s", uid, reason)
 		}
@@ -206,7 +209,7 @@ func TestMailboxBacklogMalformedAndUIDGaps(t *testing.T) {
 		}
 		return nil
 	}
-	cursor, err := client.FetchMailbox(context.Background(), relayemail.MailboxCursor{}, func(relayemail.MailboxCursor) error { return nil }, consume)
+	cursor, err := client.FetchMailbox(context.Background(), linked, func(relayemail.MailboxCursor) error { return nil }, consume)
 	if err != nil || !cursor.Backlog || good != 19 || bad != 1 {
 		t.Fatalf("first page %+v %d %d %v", cursor, good, bad, err)
 	}
@@ -223,7 +226,7 @@ func TestMailboxOversizedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	rejected := false
-	cursor, err := client.FetchMailbox(context.Background(), relayemail.MailboxCursor{}, func(relayemail.MailboxCursor) error { return nil }, func(_, uid uint32, r *relayemail.Received, reason string) error {
+	cursor, err := client.FetchMailbox(context.Background(), linked, func(relayemail.MailboxCursor) error { return nil }, func(_, uid uint32, r *relayemail.Received, reason string) error {
 		rejected = uid == 1 && r == nil && reason != ""
 		return nil
 	})

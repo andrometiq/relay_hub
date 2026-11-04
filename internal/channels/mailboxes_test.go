@@ -41,7 +41,7 @@ func (m *pagedMailbox) FetchMailbox(ctx context.Context, cursor relayemail.Mailb
 		}
 	}
 	if cursor.Validity != m.epoch {
-		cursor = relayemail.MailboxCursor{Validity: m.epoch, ResetUIDNext: uint32(len(m.messages) + 1)}
+		cursor = relayemail.MailboxCursor{Validity: m.epoch, UID: uint32(len(m.messages)), ResetUIDNext: uint32(len(m.messages) + 1)}
 		if err := checkpoint(cursor); err != nil {
 			return cursor, err
 		}
@@ -71,6 +71,22 @@ func (m *pagedMailbox) FetchMailbox(ctx context.Context, cursor relayemail.Mailb
 	cursor.Backlog = int(cursor.UID) < len(m.messages)
 	return cursor, nil
 }
+
+// linkMailbox records a mailbox linked before its mail arrived.
+func linkMailbox(t *testing.T, pool *pgxpool.Pool, account string, m *pagedMailbox) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `INSERT INTO relay_mailbox_cursor(account,mailbox,uid_validity) VALUES($1,$2,$3)`, account, m.key, m.epoch); err != nil {
+		t.Fatal(err)
+	}
+}
+func mailboxEvents(t *testing.T, pool *pgxpool.Pool, account string) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM relay_channel_events WHERE account=$1`, account).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
 func mailboxMessages(count int) []string {
 	result := make([]string, count)
 	for i := range result {
@@ -82,6 +98,7 @@ func TestMailboxDurableReconnectEpochAndIsolation(t *testing.T) {
 	pool, _ := channelTestDB(t)
 	p := MailboxPoller{DB: pool}
 	m := &pagedMailbox{key: rand.Text(), epoch: 1, messages: mailboxMessages(27), failAfter: 7}
+	linkMailbox(t, pool, "alpha", m)
 	if err := p.Poll(t.Context(), "alpha", m); err == nil {
 		t.Fatal("disconnect ignored")
 	}
@@ -102,30 +119,68 @@ func TestMailboxDurableReconnectEpochAndIsolation(t *testing.T) {
 	if err := p.Poll(t.Context(), "alpha", m); err != nil {
 		t.Fatal(err)
 	}
-	// Reorder retained mail after UIDVALIDITY changes, then append a new message
-	// reusing a Message-ID with different content; none may disappear.
+	// Reorder retained mail after UIDVALIDITY changes; none of it is sent again.
 	m.epoch = 2
 	m.messages[0], m.messages[4] = m.messages[4], m.messages[0]
-	m.messages = append(m.messages, m.messages[0]+" changed")
 	for range 2 {
 		if err := p.Poll(t.Context(), "alpha", m); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// A new link of the same mailbox starts from new mail only.
 	if err := p.Poll(t.Context(), "beta", m); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Poll(t.Context(), "beta", m); err != nil {
-		t.Fatal(err)
+	if alpha, beta := mailboxEvents(t, pool, "alpha"), mailboxEvents(t, pool, "beta"); alpha != 28 || beta != 0 {
+		t.Fatal("existing mail replayed", alpha, beta)
 	}
+	// New mail that reuses a Message-ID with different content reaches both.
+	m.messages = append(m.messages, m.messages[0]+" changed")
 	for _, account := range []string{"alpha", "beta"} {
-		var count int
-		if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM relay_channel_events WHERE account=$1`, account).Scan(&count); err != nil || count != 29 {
-			t.Fatal(account, count, err)
+		if err := p.Poll(t.Context(), account, m); err != nil {
+			t.Fatal(err)
 		}
+	}
+	if alpha, beta := mailboxEvents(t, pool, "alpha"), mailboxEvents(t, pool, "beta"); alpha != 29 || beta != 1 {
+		t.Fatal("new mail lost", alpha, beta)
 	}
 	if err := pool.QueryRow(t.Context(), `SELECT last_uid,failures FROM relay_mailbox_cursor WHERE account='alpha'`).Scan(&uid, &failures); err != nil || uid != 29 || failures != 0 {
 		t.Fatal(uid, failures, err)
+	}
+}
+
+func TestMailboxNewLinkAndRelinkStartAtUIDNext(t *testing.T) {
+	pool, _ := channelTestDB(t)
+	p := MailboxPoller{DB: pool}
+	m := &pagedMailbox{key: rand.Text(), epoch: 7, messages: mailboxMessages(45)}
+	if err := p.Poll(t.Context(), "alpha", m); err != nil {
+		t.Fatal(err)
+	}
+	var validity, uid, boundary int
+	if err := pool.QueryRow(t.Context(), `SELECT uid_validity,last_uid,reset_uid_next FROM relay_mailbox_cursor WHERE account='alpha'`).Scan(&validity, &uid, &boundary); err != nil || validity != 7 || uid != 45 || boundary != 46 {
+		t.Fatal("watermark not recorded at link", validity, uid, boundary, err)
+	}
+	m.messages = append(m.messages, mailboxMessages(2)...)
+	if err := p.Poll(t.Context(), "alpha", m); err != nil {
+		t.Fatal(err)
+	}
+	if count := mailboxEvents(t, pool, "alpha"); count != 2 {
+		t.Fatal("new link sent existing mail", count)
+	}
+	// A channel save marks a re-link with UIDVALIDITY 0; mail received meanwhile is skipped.
+	m.messages = append(m.messages, mailboxMessages(3)...)
+	if _, err := pool.Exec(t.Context(), `UPDATE relay_mailbox_cursor SET uid_validity=0 WHERE account='alpha'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Poll(t.Context(), "alpha", m); err != nil {
+		t.Fatal(err)
+	}
+	m.messages = append(m.messages, mailboxMessages(1)...)
+	if err := p.Poll(t.Context(), "alpha", m); err != nil {
+		t.Fatal(err)
+	}
+	if count := mailboxEvents(t, pool, "alpha"); count != 3 {
+		t.Fatal("re-link replayed mail", count)
 	}
 }
 func TestMailboxSchedulerFairBacklogAndCompetingWorkers(t *testing.T) {
@@ -135,7 +190,10 @@ func TestMailboxSchedulerFairBacklogAndCompetingWorkers(t *testing.T) {
 	slow := &pagedMailbox{key: rand.Text(), epoch: 1, messages: mailboxMessages(1), block: blocked}
 	readers := map[string]MailboxReader{"slow": slow}
 	for i := range 12 {
-		readers[fmt.Sprintf("account-%02d", i)] = &pagedMailbox{key: rand.Text(), epoch: 1, messages: mailboxMessages(43)}
+		account := fmt.Sprintf("account-%02d", i)
+		reader := &pagedMailbox{key: rand.Text(), epoch: 1, messages: mailboxMessages(43)}
+		linkMailbox(t, pool, account, reader)
+		readers[account] = reader
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	var workers sync.WaitGroup
@@ -178,6 +236,7 @@ func TestMailboxResetSnapshotDoesNotSuppressNewCopies(t *testing.T) {
 			p := MailboxPoller{DB: pool}
 			messages := mailboxMessages(25)
 			m := &pagedMailbox{key: rand.Text(), epoch: 1, messages: messages}
+			linkMailbox(t, pool, "alpha", m)
 			for range 2 {
 				if err := p.Poll(t.Context(), "alpha", m); err != nil {
 					t.Fatal(err)
@@ -186,20 +245,16 @@ func TestMailboxResetSnapshotDoesNotSuppressNewCopies(t *testing.T) {
 			m.epoch = 2
 			if empty {
 				m.messages = nil
-			} else {
-				m.failAfter = 1
 			}
-			err := p.Poll(t.Context(), "alpha", m)
-			if (err != nil) != !empty {
+			if err := p.Poll(t.Context(), "alpha", m); err != nil {
 				t.Fatal("reset result", err)
 			}
 			var boundary uint32
 			if err := pool.QueryRow(t.Context(), `SELECT reset_uid_next FROM relay_mailbox_cursor WHERE account='alpha'`).Scan(&boundary); err != nil || boundary != uint32(len(m.messages)+1) {
 				t.Fatal(boundary, err)
 			}
-			m.failAfter = 0
 			// Recreate the poller after a checkpointed reset, then append an exact
-			// old copy outside its snapshot while catch-up may still be pending.
+			// old copy outside its snapshot.
 			p = MailboxPoller{DB: pool}
 			m.messages = append(append([]string{}, m.messages...), messages[0])
 			for range 2 {
@@ -409,6 +464,7 @@ func TestMailboxRejectsOversizedTrustedDSNAndContinues(t *testing.T) {
 	}
 	valid := strings.Replace(raw, recipient.String(), "valid", 1)
 	m := &pagedMailbox{key: rand.Text(), epoch: 1, parser: client, messages: []string{raw, valid, mailboxMessages(1)[0]}}
+	linkMailbox(t, pool, "alpha", m)
 	p := MailboxPoller{DB: pool}
 	for range 2 {
 		if err := p.Poll(t.Context(), "alpha", m); err != nil {

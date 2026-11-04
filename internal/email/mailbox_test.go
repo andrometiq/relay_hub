@@ -72,9 +72,16 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 		count++
 		return nil
 	}
+	// A new link starts at UIDNEXT; the 23 existing messages are never sent.
+	baseline, err := client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, consume)
+	if err != nil || baseline.UID != 23 || baseline.ResetUIDNext != 24 || baseline.Backlog || count != 0 || len(snapshots) != 1 || snapshots[0] != baseline {
+		t.Fatal("new link replayed existing mail", baseline, count, err)
+	}
+	// The remaining checks read the existing mail from a cursor linked before it arrived.
+	start := MailboxCursor{Validity: baseline.Validity}
 	oversized.Store(true)
 	rejected := false
-	large, err := client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, func(validity, uid uint32, message *Received, reason string) error {
+	large, err := client.FetchMailbox(t.Context(), start, checkpoint, func(validity, uid uint32, message *Received, reason string) error {
 		if message != nil || uid != 1 || reason == "" {
 			t.Fatal("oversized literal not rejected")
 		}
@@ -85,12 +92,12 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 		t.Fatal("oversized literal blocked checkpoint", large, err)
 	}
 	cut.Store(true)
-	interrupted, err := client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, consume)
+	interrupted, err := client.FetchMailbox(t.Context(), start, checkpoint, consume)
 	if err == nil || interrupted.UID != 0 || count != 0 {
 		t.Fatal("partial literal was consumed", interrupted, count, err)
 	}
-	cursor, err := client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, consume)
-	if err != nil || cursor.UID != 20 || cursor.ResetUIDNext != 24 || count != 20 || !cursor.Backlog {
+	cursor, err := client.FetchMailbox(t.Context(), start, checkpoint, consume)
+	if err != nil || cursor.UID != 20 || count != 20 || !cursor.Backlog {
 		t.Fatal("first bounded page", cursor, count, err)
 	}
 	cursor, err = client.FetchMailbox(t.Context(), cursor, checkpoint, consume)
@@ -112,10 +119,10 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 	}
 	appendMessage(100)
 	next, err := client.FetchMailbox(t.Context(), cursor, checkpoint, consume)
-	if err != nil || next.Validity == cursor.Validity || next.UID != 1 || next.ResetUIDNext != 2 || count != 24 {
-		t.Fatal("UIDVALIDITY reset failed", next, err)
+	if err != nil || next.Validity == cursor.Validity || next.UID != 1 || next.ResetUIDNext != 2 || count != 23 {
+		t.Fatal("UIDVALIDITY change replayed existing mail", next, count, err)
 	}
-	_, err = client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, func(uint32, uint32, *Received, string) error { return errors.New("synthetic database failure") })
+	_, err = client.FetchMailbox(t.Context(), MailboxCursor{Validity: next.Validity}, checkpoint, func(uint32, uint32, *Received, string) error { return errors.New("synthetic database failure") })
 	if err == nil {
 		t.Fatal("sink failure ignored")
 	}
@@ -130,11 +137,11 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 	client.dialContext = goodDial
 	appendMessage(101)
 	resumed, err := client.FetchMailbox(t.Context(), next, checkpoint, consume)
-	if err != nil || resumed.UID != 2 || count != 25 {
+	if err != nil || resumed.UID != 2 || count != 24 {
 		t.Fatal("reconnect lost message", resumed, count, err)
 	}
 	// A sink failure must not advance past an uncommitted body.
-	failed, err = client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, func(uint32, uint32, *Received, string) error { return errors.New("rollback") })
+	failed, err = client.FetchMailbox(t.Context(), MailboxCursor{Validity: next.Validity}, checkpoint, func(uint32, uint32, *Received, string) error { return errors.New("rollback") })
 	if err == nil || failed.UID != 0 {
 		t.Fatal("sink failure advanced cursor", failed, err)
 	}
@@ -205,16 +212,16 @@ func TestMailboxTLSReadOnlyPagingResumeAndEpoch(t *testing.T) {
 	}
 	appendMessage(101)
 	arrived, err := client.FetchMailbox(t.Context(), empty, checkpoint, consume)
-	if err != nil || arrived.UID != 1 || arrived.ResetUIDNext != 1 || count != 26 {
+	if err != nil || arrived.UID != 1 || arrived.ResetUIDNext != 1 || count != 25 {
 		t.Fatal(arrived, count, err)
 	}
 	// A failed reset checkpoint prevents bodies from reaching the consumer.
 	_, err = client.FetchMailbox(t.Context(), MailboxCursor{}, func(MailboxCursor) error { return errors.New("checkpoint failure") }, consume)
-	if err == nil || count != 26 {
+	if err == nil || count != 25 {
 		t.Fatal("failed checkpoint consumed mail", err)
 	}
 	client.tlsRoots = nil
-	if _, err = client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, consume); err == nil || count != 26 {
+	if _, err = client.FetchMailbox(t.Context(), MailboxCursor{}, checkpoint, consume); err == nil || count != 25 {
 		t.Fatal("untrusted TLS accepted")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -186,6 +187,12 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 	if err = s.writeChannel(ctx, tx, c, public, private, secret, nextAddress); err != nil {
 		return err
 	}
+	if c.Channel == "Email" && c.Enabled && (!enabled || mailboxChanged(stored, public)) {
+		// UIDVALIDITY 0 is never valid, so the next poll restarts at UIDNEXT.
+		if _, err = tx.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=0 WHERE account=$1`, c.Key); err != nil {
+			return err
+		}
+	}
 	if exists && site != "" && (label != c.Label || enabled != c.Enabled || address != nextAddress || featuresChanged(stored, public)) {
 		return notifyChannels(ctx, tx, site)
 	}
@@ -224,6 +231,16 @@ func featuresChanged(stored, public map[string]any) bool {
 		before, _ := stored[key].(bool)
 		after, _ := public[key].(bool)
 		if before != after {
+			return true
+		}
+	}
+	return false
+}
+
+// mailboxChanged reports a save that points an Email channel at another IMAP mailbox.
+func mailboxChanged(stored, public map[string]any) bool {
+	for _, key := range []string{"imap_host", "imap_port", "imap_username", "imap_folder", "username"} {
+		if fmt.Sprint(stored[key]) != fmt.Sprint(public[key]) {
 			return true
 		}
 	}
