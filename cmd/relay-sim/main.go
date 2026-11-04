@@ -454,6 +454,8 @@ func runSimulation(validateDatabase func(string) error) error {
 		return err
 	}
 	defer wa.Outbox.Close()
+	// Signup numbers sync their quality, limit and templates as on the Hub; sim-v1 keeps sync off.
+	wa.Metadata = &whatsapp.MetadataSync{DB: pool, Service: wa}
 	authStore := &auth.Store{DB: pool}
 	registry, err := channels.Load(nil)
 	if err != nil {
@@ -555,6 +557,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	channels.Outbox{DB: pool, Registry: registry}.Run(ctx)
 	channels.MailboxPoller{DB: mailboxPool, Registry: registry, Wake: channelWake}.Run(ctx)
 	wa.Outbox.Run(ctx)
+	wa.Metadata.Run(ctx)
 	bulkWindow, err := whatsapp.ParseBulkWindow(os.Getenv("RELAY_BULK_UPDATE_WINDOW"))
 	if err != nil {
 		return err
