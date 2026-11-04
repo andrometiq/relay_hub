@@ -3,6 +3,7 @@ package hubmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +36,8 @@ type numberFixture struct {
 	// reply answers one Graph call by "METHOD path"; nil is a plain success.
 	reply   func(call string) (int, string)
 	reloads int
+	// reloadErr makes the runtime reload fail.
+	reloadErr error
 }
 
 const numberSecrets = "biz-token-a1"
@@ -75,7 +78,7 @@ func newNumberFixture(t *testing.T) *numberFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reload := func(context.Context) error { f.reloads++; return nil }
+	reload := func(context.Context) error { f.reloads++; return f.reloadErr }
 	service := &numbers.Service{Store: f.store, WhatsApp: wa, Reload: reload}
 	signup, err := onboarding.New(onboarding.Config{DB: db, Store: f.store, Auth: f.auth, PublicOrigin: "https://hub.example.com", Reload: reload})
 	if err != nil {
@@ -405,6 +408,18 @@ func TestRemoveTakesTheNumberAwayAndDeregistersIt(t *testing.T) {
 	ok, result, body = f.call("site-a", "channels.list", map[string]any{})
 	if channels, _ := result["channels"].([]any); !ok || len(channels) != 1 {
 		t.Fatalf("site channels after removal: %s", body)
+	}
+}
+
+func TestRemoveStillDeregistersWhenTheRuntimeReloadFails(t *testing.T) {
+	f := newNumberFixture(t)
+	f.reloadErr = errors.New("runtime reload failed")
+	ok, result, body := f.call("site-a", "whatsapp.number.remove", map[string]any{"channel": "wa-121", "confirm": true})
+	if !ok || result["removed"] != true || result["deregistered"] != true {
+		t.Fatalf("remove with a failed reload: %s", body)
+	}
+	if calls := strings.Join(f.graphCalls(), ","); !strings.Contains(calls, "POST 121/deregister") {
+		t.Fatalf("Meta calls: %s", calls)
 	}
 }
 

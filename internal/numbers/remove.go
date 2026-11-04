@@ -3,6 +3,7 @@ package numbers
 import (
 	"context"
 	"errors"
+	"log"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
@@ -42,8 +43,9 @@ func (s *Service) Remove(ctx context.Context, site, key string, confirm bool) (R
 	if err != nil {
 		return Removal{}, errUnavailable
 	}
+	// The removal is committed; a failed reload must not skip the deregistration, which a retry can no longer do.
 	if err = s.Reload(ctx); err != nil {
-		return Removal{}, errUnavailable
+		log.Printf("remove %s from %s: runtime reload failed: %v", c.Key, site, err)
 	}
 	removal := Removal{Channel: c.Key, Removed: true}
 	if accountErr != nil {
