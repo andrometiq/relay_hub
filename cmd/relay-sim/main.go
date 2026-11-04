@@ -523,6 +523,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	esBrowser := signup.browser()
 	mm.Handle("GET /sdk.js", esBrowser)
 	mm.Handle("/es/", esBrowser)
+	mm.HandleFunc("GET /whatsapp_business/attachments/", signup.attachment)
 	mm.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/bot") || strings.HasPrefix(r.URL.Path, "/file/bot") {
 			fakeTelegram.ServeHTTP(w, r)

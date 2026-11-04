@@ -216,7 +216,7 @@ func (t *simTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	origin := u.Scheme + "://" + u.Host
 	site := t.sites[origin] || t.isLocalSite(&u)
 	t.mu.RUnlock()
-	graph := origin == "https://graph.facebook.com" || origin == "https://api.telegram.org"
+	graph := origin == "https://graph.facebook.com" || origin == "https://api.telegram.org" || origin == "https://lookaside.fbsbx.com"
 	if graph {
 		clone.URL.Scheme = t.meta.Scheme
 		clone.URL.Host = t.meta.Host
