@@ -165,7 +165,7 @@ func queueable(in Input, bulk bool) error {
 		return errors.New("bulk media requires media_id or media_url; upload attachments with messages.media_upload first")
 	}
 	switch in.Operation {
-	case "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin", "messages.send", "messages.react", "messages.media", "messages.location", "messages.contacts", "messages.flow":
+	case "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin", "messages.send", "messages.react", "messages.media", "messages.location", "messages.contacts", "messages.interactive", "messages.flow":
 		return nil
 	}
 	return errors.New("operation cannot be queued")

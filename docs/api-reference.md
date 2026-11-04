@@ -65,7 +65,7 @@ A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send
 | --- | --- |
 | Account | `capabilities`, `account.profile` (number quality, limit, status, throughput), `account.business` (WABA review, verification, limit), `account.metadata` (hourly cached copy of both and the templates), `billing.pricing` |
 | Read | `messages.history`, `events.list`, `events.latest` |
-| Send | `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send` |
+| Send | `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `messages.interactive`, `templates.send` |
 | Templates and flows | `templates.list` and template mutations; `flows.*` |
 
 A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
@@ -132,6 +132,10 @@ Clear a reaction by sending the same target with **`"emoji":""`**. A reaction is
 
 ```json
 {"operation":"messages.contacts","to":"15555550123","contacts":[{"name":{"formatted_name":"Demo Contact","first_name":"Demo","last_name":"Contact"},"phones":[{"phone":"+15555550124","type":"WORK"}],"emails":[{"email":"demo@example.com","type":"WORK"}]}]}
+```
+
+```json
+{"operation":"messages.interactive","to":"919999999999","interactive":{"type":"button","body":{"text":"Which colour?"},"action":{"buttons":[{"type":"reply","reply":{"id":"poll-1","title":"Red"}},{"type":"reply","reply":{"id":"poll-2","title":"Blue"}}]}}}
 ```
 
 Both coordinates are required, including explicit zero values. Contact fields are typed and validated; there are bounds on card count, repeated fields and the complete provider payload. See [rich-message validation](whatsapp-rich-message-simulation.md) for the exact limits.

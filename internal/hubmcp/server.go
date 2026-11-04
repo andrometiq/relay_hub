@@ -76,7 +76,7 @@ func telegramFailure(err error) (*mcp.CallToolResult, map[string]any, error) {
 // sendsMessage reports whether an operation delivers a message and so needs a request key.
 func sendsMessage(op string) bool {
 	switch op {
-	case "messages.flow", "messages.send", "messages.media", "messages.location", "messages.contacts", "messages.react", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
+	case "messages.flow", "messages.send", "messages.media", "messages.location", "messages.contacts", "messages.interactive", "messages.react", "templates.send", "groups.send", "groups.media", "groups.template", "groups.pin":
 		return true
 	}
 	return false

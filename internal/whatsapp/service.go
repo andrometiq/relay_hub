@@ -180,6 +180,7 @@ type Input struct {
 	RequestKey            string          `json:"request_key,omitempty"`
 	Location              *Location       `json:"location,omitempty"`
 	Contacts              []ContactCard   `json:"contacts,omitempty"`
+	Interactive           *Interactive    `json:"interactive,omitempty"`
 	tracking              string
 	beforeSubmit          func(context.Context) error
 	Before                string   `json:"before,omitempty"`
@@ -406,23 +407,30 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		return s.latestEvents(ctx, a)
 	case "capabilities":
 		return map[string]any{"account": a.ID, "site": a.Site, "templates": a.Templates, "flows": a.Templates, "groups": a.Groups, "calls": a.Calls, "recording": false}, nil
-	case "messages.location", "messages.contacts":
+	case "messages.location", "messages.contacts", "messages.interactive":
 		if !digits.MatchString(in.To) || len(in.To) < 7 || len(in.To) > 15 {
 			return nil, errors.New("valid recipient required")
 		}
 		payload := map[string]any{"messaging_product": "whatsapp", "recipient_type": "individual", "to": in.To}
-		if in.Operation == "messages.location" {
+		switch in.Operation {
+		case "messages.location":
 			if err := in.Location.validate(); err != nil {
 				return nil, err
 			}
 			payload["type"] = "location"
 			payload["location"] = in.Location
-		} else {
+		case "messages.contacts":
 			if err := validateContacts(in.Contacts); err != nil {
 				return nil, err
 			}
 			payload["type"] = "contacts"
 			payload["contacts"] = in.Contacts
+		default:
+			if err := in.Interactive.validate(); err != nil {
+				return nil, err
+			}
+			payload["type"] = "interactive"
+			payload["interactive"] = in.Interactive
 		}
 		if err := replyContext(payload, in.ReplyTo); err != nil {
 			return nil, err
