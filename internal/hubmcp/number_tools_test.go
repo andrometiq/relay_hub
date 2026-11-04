@@ -294,3 +294,41 @@ func TestNumberCheckAsksForReconnectWhenMetaRefusesTheToken(t *testing.T) {
 		t.Fatalf("Meta calls: %v", calls)
 	}
 }
+
+func TestNumberSettingsChangeOnlyTheSiteNumber(t *testing.T) {
+	f := newNumberFixture(t)
+	f.reply = func(call string) (int, string) {
+		if call == "GET 121" {
+			return 200, `{"id":"121","status":"CONNECTED"}`
+		}
+		return 0, ""
+	}
+	ok, result, body := f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-121", "enabled": false, "templates": false})
+	settings, _ := result["settings"].(map[string]any)
+	if !ok || result["enabled"] != false || result["connection_status"] != "disabled" || settings["templates"] != false || settings["sync_metadata"] != true {
+		t.Fatalf("turn off: %s", body)
+	}
+	if f.reloads != 1 {
+		t.Fatalf("runtime reloads: %d", f.reloads)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-121", "enabled": true}); !ok || result["enabled"] != true || result["connection_status"] != "connected" {
+		t.Fatalf("turn on checks the number again: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-130", "enabled": false}); ok || errorCode(result) != "not_found" {
+		t.Fatalf("settings of another site's number: %s", body)
+	}
+	other, _ := f.store.GetChannel(f.ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-130"})
+	if !other.Enabled {
+		t.Fatal("another site's number was turned off")
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-121"}); ok || errorCode(result) != "invalid_request" {
+		t.Fatalf("no change: %s", body)
+	}
+	if _, err := f.auth.DB.Exec(f.ctx, `UPDATE relay_channel_credentials SET enabled=false,config=config||'{"partner_status":"removed"}' WHERE channel_key='wa-120'`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-120", "enabled": true}); ok || errorCode(result) != "reconnect_required" {
+		t.Fatalf("turn on a number Meta removed: %s", body)
+	}
+	f.noSecret(body)
+}

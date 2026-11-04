@@ -30,6 +30,10 @@ func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in checkInput) (*mcp.CallToolResult, map[string]any, error) {
 			return run(ctx, siteOf, func(site string) (any, error) { return s.Check(ctx, site, in.Channel, in.Repair) })
 		})
+	mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.number.settings", Description: "Turn one WhatsApp number of this site on or off, and switch message templates and the hourly Meta sync. Omitted fields keep their values."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in SettingsInput) (*mcp.CallToolResult, map[string]any, error) {
+			return run(ctx, siteOf, func(site string) (any, error) { return s.SaveSettings(ctx, site, in) })
+		})
 }
 
 // run calls one tool for the caller's site and returns its result as an object or a coded failure.
