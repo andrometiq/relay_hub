@@ -58,6 +58,12 @@ A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send
 | `telegram.groups` | `operation`, `chat_id` and typed group fields |
 | `telegram.media` | `file_id` of a received sticker |
 | `email.send` | `to[]`, `subject`, `body`; optional `cc[]`, `bcc[]` |
+| `whatsapp.number.health` | Optional `channel` |
+| `whatsapp.number.check` | Optional `channel`, `repair` |
+| `whatsapp.number.settings` | Optional `channel`; at least one of `enabled`, `templates`, `sync_metadata` |
+| `whatsapp.number.pin_reset` | Optional `channel` |
+| `whatsapp.number.remove` | Optional `channel`; `confirm: true` |
+| `site.disconnect` | `confirm: true` |
 
 `whatsapp.execute` operations:
 
@@ -66,7 +72,23 @@ A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send
 | Account | `capabilities`, `account.profile` (number quality, limit, status, throughput), `account.business` (WABA review, verification, limit), `account.metadata` (hourly cached copy of both and the templates), `billing.pricing` |
 | Read | `messages.history`, `events.list`, `events.latest` |
 | Send | `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `templates.send` |
-| Templates and flows | `templates.list` and template mutations; `flows.*` |
+| Profile | `profile.get`, `profile.update` (`profile` with `about`, `address`, `description`, `email`, `websites`, `vertical`; optional photo as `content_base64` and `mime_type`) |
+| Templates and flows | `templates.list` and template mutations; `flows.*`. Mutations are refused when another site has a number in the same WABA. |
+
+## Site setup tools
+
+These tools let a Core site set up its own WhatsApp numbers. The Hub keeps every token, secret and PIN; no answer contains one. A site can reach only its own numbers.
+
+| Tool | What it does | Result |
+| --- | --- | --- |
+| `whatsapp.number.health` | Reads the saved state of the number. | `channel`, `label`, `display_number`, `enabled`, `connection_status` (`connected`, `unchecked`, `failed`, `reconnect_required`, `disabled`), `partner_status`, `verified_at`, `checked_at`, `check_error`, `webhook_subscribed`, `pin_kept`, `settings` (`templates`, `sync_metadata`) and `delivery` (last webhook, last Core confirmation, waiting callbacks). |
+| `whatsapp.number.check` | Asks Meta about the number and its webhook subscription. With `repair`, subscribes the app again. | The health fields, `reconnect_required` and a short `profile`. |
+| `whatsapp.number.settings` | Turns the number, templates or the hourly Meta sync on or off. Turning a number on checks it at once. | The health fields. |
+| `whatsapp.number.pin_reset` | Sets a new two-step PIN that only the Hub knows. Not for WhatsApp Business app numbers. | The health fields. |
+| `whatsapp.number.remove` | Takes the number off the site, wipes its token, deregisters it and unsubscribes the app when no other number uses the WABA. | `removed`, `deregistered`, `unsubscribed`. |
+| `site.disconnect` | Turns the site off, revokes its tokens and writes an audit row. A new setup code or bench enrolment turns it on again; a site that the admin turned off stays off. | `disconnected`. |
+
+A refusal is a tool error with structured content `{"error":{"code":"...","message":"..."}}`. Codes: `not_found`, `no_number`, `channel_required`, `invalid_request`, `confirm_required`, `number_disabled`, `reconnect_required`, `pending_sends`, `not_supported`, `meta_rejected`, `meta_unavailable`, `outcome_unknown` and `hub_unavailable`. A missing, revoked or disabled site token is refused before any tool runs.
 
 A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
 
