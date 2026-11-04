@@ -50,8 +50,8 @@ func TestSignupChannelIsLinkedOnceAndKeepsOtherChannels(t *testing.T) {
 	number := Channel{Key: "wa-120", Channel: "WhatsApp", Container: "signup", Enabled: true, Config: map[string]any{
 		"phone_id": "120", "waba_id": "230", "business_id": "330", "onboarding": "new", "coexistence": false, "pin": "123456"}}
 	for range 2 {
-		if err := s.SaveSignupChannel(ctx, "shop", number, "biz-token"); err != nil {
-			t.Fatal(err)
+		if key, err := s.SaveSignupChannel(ctx, "shop", number, "biz-token"); err != nil || key != "wa-120" {
+			t.Fatal(key, err)
 		}
 	}
 	site, err := s.GetSite(ctx, "shop")
@@ -62,13 +62,13 @@ func TestSignupChannelIsLinkedOnceAndKeepsOtherChannels(t *testing.T) {
 	if err != nil || credential.Secret != "biz-token" || credential.Config["pin"] != "123456" || credential.Config["onboarding"] != "new" {
 		t.Fatalf("signup credential %+v %v", credential.Config, err)
 	}
-	if err = s.SaveSignupChannel(ctx, "other", number, "biz-token"); !errors.Is(err, ErrNumberInUse) {
+	if _, err = s.SaveSignupChannel(ctx, "other", number, "biz-token"); !errors.Is(err, ErrNumberInUse) {
 		t.Fatalf("number of another site: %v", err)
 	}
 	reused := number
 	reused.Key, reused.Config = "wa-50", map[string]any{"phone_id": "50", "waba_id": "60"}
-	if err = s.SaveSignupChannel(ctx, "shop", reused, "biz-token"); !errors.Is(err, ErrNumberInUse) {
-		t.Fatalf("number of a manual channel: %v", err)
+	if _, err = s.SaveSignupChannel(ctx, "other", reused, "biz-token"); !errors.Is(err, ErrNumberInUse) {
+		t.Fatalf("manual number of another site: %v", err)
 	}
 	if err = s.LinkChannel(ctx, "other", ChannelRef{Channel: "WhatsApp", Key: "wa-120"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("link a foreign channel: %v", err)
@@ -85,5 +85,36 @@ func TestSignupChannelIsLinkedOnceAndKeepsOtherChannels(t *testing.T) {
 	}
 	if sites, err = s.DisableWABA(ctx, "60"); err != nil || len(sites) != 0 {
 		t.Fatalf("manual container number disabled: %v %v", sites, err)
+	}
+}
+
+func TestSignupAdoptsTheSiteNumberFromAnotherContainer(t *testing.T) {
+	ctx, s := directoryStore(t)
+	if _, err := s.DB.Exec(ctx, `INSERT INTO relay_containers(container_id,name,signup) VALUES('signup','signup',true),('manual','manual',false);
+ INSERT INTO relay_sites(site_id,origin) VALUES('shop','https://shop.invalid')`); err != nil {
+		t.Fatal(err)
+	}
+	manual := Channel{Key: "old", Channel: "WhatsApp", Container: "manual", Enabled: true, Config: map[string]any{
+		"phone_id": "50", "waba_id": "60", "app_secret": "manual-app-secret", "verify_token": "manual-verify"}}
+	if err := s.SaveChannel(ctx, manual, "token-old", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AssignChannels(ctx, "shop", []ChannelRef{{Channel: "WhatsApp", Key: "old"}}); err != nil {
+		t.Fatal(err)
+	}
+	number := Channel{Key: "wa-50", Channel: "WhatsApp", Container: "signup", Enabled: true, Config: map[string]any{"phone_id": "50", "waba_id": "60", "pin": "123456"}}
+	key, err := s.SaveSignupChannel(ctx, "shop", number, "biz-token")
+	if err != nil || key != "old" {
+		t.Fatalf("adopted key %q %v", key, err)
+	}
+	adopted, err := s.Credential(ctx, "WhatsApp", "old")
+	if err != nil || adopted.Container != "signup" || adopted.Secret != "biz-token" || adopted.Site != "shop" || adopted.Config["pin"] != "123456" {
+		t.Fatalf("adopted number %+v %v", adopted, err)
+	}
+	if adopted.Config["app_secret"] == "manual-app-secret" || adopted.Config["verify_token"] == "manual-verify" {
+		t.Fatal("the old app's webhook overrides were kept")
+	}
+	if _, err = s.GetChannel(ctx, ChannelRef{Channel: "WhatsApp", Key: "wa-50"}); err == nil {
+		t.Fatal("a second channel was made for the adopted number")
 	}
 }

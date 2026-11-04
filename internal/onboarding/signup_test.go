@@ -490,3 +490,32 @@ func TestASignupNumberShowsAsConnected(t *testing.T) {
 		t.Fatalf("signup number status %v %v", channel.Config, err)
 	}
 }
+
+func TestSignupAdoptsTheSiteNumberAndKeepsItsKey(t *testing.T) {
+	h := newHarness(t)
+	h.signupContainer()
+	site, _ := h.enrolledSite()
+	if err := h.store.SaveContainer(h.ctx, containers.Container{ID: "manual", Name: "Manual", Enabled: true}, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	manual := containers.Channel{Key: "shop-line", Channel: "WhatsApp", Container: "manual", Enabled: true, Config: map[string]any{"phone_id": "120", "waba_id": "230"}}
+	if err := h.store.SaveChannel(h.ctx, manual, "old-token", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.LinkChannel(h.ctx, site, containers.ChannelRef{Channel: "WhatsApp", Key: "shop-line"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		done := h.startSignup(site, "new").finish("FINISH", "230", "120", "code-230")
+		if done.State != "completed" || done.ChannelKey == nil || *done.ChannelKey != "shop-line" {
+			t.Fatalf("adopting signup %s %v", done.State, done.ChannelKey)
+		}
+	}
+	adopted, err := h.store.Credential(h.ctx, "WhatsApp", "shop-line")
+	if err != nil || adopted.Container != "signup" || adopted.Secret != "biz-code-230" {
+		t.Fatalf("adopted number %+v %v", adopted.Container, err)
+	}
+	if _, err = h.store.GetChannel(h.ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-120"}); err == nil {
+		t.Fatal("signup made a second channel for the number")
+	}
+}
