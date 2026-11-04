@@ -44,6 +44,12 @@ export function validateChannelForm(form, { containerToken = false } = {}) {
   return errors;
 }
 
+// After a save the typed secret is stored, so a retry of a failed check can leave it blank.
+export function savedChannelForm(form, payload) {
+  const configured = payload.secret && !form.configured.includes("secret") ? [...form.configured, "secret"] : form.configured;
+  return { ...form, key: payload.key, secret: "", configured };
+}
+
 export function channelPayload(form, takenKeys = []) {
   const config = { ...form.config };
   for (const name of OVERRIDE_KEYS) if (!form.override || !config[name]) delete config[name];

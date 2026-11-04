@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { adminApi, assignedRefs, connectionRows, channelKey, channelStatus, forwardState, hubURL, moveChannel, pickerGroups, siteChannelOptions, siteStatus, siteTokens } from '../src/composables/containers.js';
-import { channelForm, channelPayload, validateChannelForm } from '../src/composables/channelForm.js';
+import { channelForm, channelPayload, savedChannelForm, validateChannelForm } from '../src/composables/channelForm.js';
 import { parseRoute, routePath } from '../src/useViewRoute.js';
 
 const views = ['Overview', 'Containers', 'Sites'];
@@ -138,6 +138,17 @@ test('mailbox and bot checks reuse the channel rules', () => {
   const bot = channelForm('Telegram');
   Object.assign(bot, { label: 'Dealer bot', secret: 'not-a-token' });
   assert.deepEqual(Object.keys(validateChannelForm(bot)), ['secret']);
+});
+
+test('a retry after a failed check keeps the saved password', () => {
+  const mail = channelForm('Email');
+  Object.assign(mail, { label: 'Orders desk', secret: 'app-password' });
+  Object.assign(mail.config, { from: 'orders@example.test', host: 'smtp.example.test', username: 'orders@example.test' });
+  const saved = savedChannelForm(mail, channelPayload(mail));
+  assert.equal(saved.key, 'orders-desk');
+  assert.equal(saved.secret, '');
+  assert.deepEqual(validateChannelForm(saved), {});
+  assert.deepEqual(savedChannelForm(saved, channelPayload(saved)).configured, ['secret']);
 });
 
 test('site tokens show only keys for that site', async t => {

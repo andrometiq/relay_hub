@@ -190,7 +190,7 @@ Secrets are write-only. The page never shows them again. Leave a saved secret bl
 Click **Test and add** (or **Test and save** when you edit). The Hub saves the number, links it to the site you picked, then tests the number with Meta.
 
 - If the test passes, the dialog closes. The number starts to receive messages at once. If it has a site, the messages go to that site.
-- If the test fails, the number is still saved. The dialog shows "Saved. The connection test failed: …". Fix the value and save again.
+- If the test fails, the number is still saved. The dialog shows "Saved. The connection test failed: …". Fix the value and save again. Leave a saved token or password blank to keep it. A bot or mailbox that fails its test is not linked to the site until a test passes.
 - If the save worked but the site link failed, the dialog shows "Saved, but linking to the site failed: …". This happens when the number still has unfinished sends for its old site.
 
 When you open a linked number that has held messages, the dialog shows **Replay held messages (N)**. Held messages are messages that came while the number had no site. Click the button to give them to the linked site. The Hub gives each message only once.

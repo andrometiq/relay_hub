@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { Button, Dialog, ErrorMessage, FeatherIcon, FormControl } from "@relay/ui";
 import { adminApi, hubURL, moveChannel, siteHost } from "../../composables/containers";
 import ForwardTargets from "./ForwardTargets.vue";
-import { channelForm, channelPayload, validateChannelForm } from "../../composables/channelForm";
+import { channelForm, channelPayload, savedChannelForm, validateChannelForm } from "../../composables/channelForm";
 
 const props = defineProps({ modelValue: Boolean, container: Object, channelName: String, channel: Object, sites: { type: Array, default: () => [] } });
 const emit = defineEmits(["update:modelValue", "saved"]);
@@ -60,18 +60,18 @@ async function check(channel) {
 }
 
 async function save() {
+  error.value = ""; notice.value = "";
   errors.value = validateChannelForm(form.value, { containerToken: containerToken.value });
   if (Object.keys(errors.value).length) return;
   const taken = (props.container?.channels || []).filter((row) => row.channel === form.value.channel).map((row) => row.key);
   const payload = channelPayload(form.value, taken);
-  saving.value = true; error.value = ""; notice.value = "";
+  saving.value = true;
   let saved = false;
   try {
     if (stored.value) await adminApi.updateChannel(props.container.id, payload);
     else await adminApi.createChannel(props.container.id, payload);
     saved = true;
-    form.value.key = payload.key;
-    form.value.secret = "";
+    form.value = savedChannelForm(form.value, payload);
     stored.value = { ...(stored.value || {}), ...payload, site: stored.value?.site || "" };
     const result = await check(payload);
     if (result.problem) {
