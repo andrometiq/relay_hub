@@ -28,6 +28,8 @@ export async function hubApi(path, body, method = 'POST') {
       : response.status === 403 ? 'You do not have permission for this action, or your session needs refreshing.'
       : `Request failed (${response.status}). Refresh the current state before retrying.`;
     const detail = safeServerError(await response.text(), '');
+    // A 422 message already says what to fix; the generic refresh advice would mislead.
+    if (response.status === 422 && detail) throw Error(detail);
     throw Error(detail ? `${fallback} ${detail}` : fallback);
   }
   if (response.status === 204) return {};

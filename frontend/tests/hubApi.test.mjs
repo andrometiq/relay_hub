@@ -7,6 +7,10 @@ test('safe server details survive JSON and Go text responses', async t => {
     await assert.rejects(hubApi('fixture'), new RegExp(status === 400 ? 'Select an account' : body));
   }
 });
+test('a failed check shows only its own message', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ message: 'Telegram did not accept the bot token.' }, { status: 422 }));
+  await assert.rejects(hubApi('fixture', {}), { message: 'Telegram did not accept the bot token.' });
+});
 test('errors are bounded, redacted and do not expose HTML', () => {
   assert.equal(safeServerError('<html>proxy diagnostics</html>', 'Unavailable'), 'Unavailable');
   assert.equal(safeServerError('Bearer abc.secret api_secret=xyz', ''), 'Bearer [redacted] api_secret=[redacted]');
