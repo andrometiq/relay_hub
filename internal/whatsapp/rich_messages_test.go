@@ -14,7 +14,7 @@ import (
 
 func coordinate(v float64) *float64 { return &v }
 func richCard() ContactCard {
-	return ContactCard{Name: ContactName{FormattedName: "தமிழ் Support", FirstName: "தமிழ்", LastName: "Support", Prefix: "Dr.", MiddleName: "Team", Suffix: "Desk"}, Phones: []ContactPhone{{Phone: "+91 99999 99999", WhatsAppID: "919999999999", Type: "Work"}}, Emails: []ContactEmail{{Email: "support@example.invalid", Type: "Work"}}, Addresses: []ContactAddress{{Street: "1 Main Road", City: "Sampleville", State: "TN", Zip: "600001", Country: "India", CountryCode: "IN", Type: "Work"}}, URLs: []ContactURL{{URL: "https://example.invalid/help", Type: "Support"}}, Organization: &ContactOrganization{Company: "Relay", Department: "Support", Title: "Agent"}, Birthday: "2000-02-29"}
+	return ContactCard{Name: ContactName{FormattedName: "தமிழ் Support", FirstName: "தமிழ்", LastName: "Support", Prefix: "Dr.", MiddleName: "Team", Suffix: "Desk"}, Phones: []ContactPhone{{Phone: "+91 99999 99999", WhatsAppID: "919999999999", Type: "Work"}}, Emails: []ContactEmail{{Email: "support@example.invalid", Type: "Work"}}, Addresses: []ContactAddress{{Street: "1 Demo Street", City: "Sampleville", State: "Sample State", Zip: "000001", Country: "India", CountryCode: "IN", Type: "Work"}}, URLs: []ContactURL{{URL: "https://example.invalid/help", Type: "Support"}}, Organization: &ContactOrganization{Company: "Relay", Department: "Support", Title: "Agent"}, Birthday: "2000-02-29"}
 }
 func TestRichMessagePayloadSimulation(t *testing.T) {
 	contact := richCard()
