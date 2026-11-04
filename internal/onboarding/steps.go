@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/jackc/pgx/v5"
 )
 
 // stepError is a classified step failure. Transient failures are retried by
@@ -241,7 +242,10 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 		return err
 	}
 	key := "wa-" + *r.phoneID
-	_ = s.cfg.DB.QueryRow(ctx, `SELECT channel_key FROM relay_channel_credentials WHERE channel='WhatsApp' AND address=$1 AND site_id=$2`, *r.phoneID, r.site).Scan(&key)
+	err = s.cfg.DB.QueryRow(ctx, `SELECT channel_key FROM relay_channel_credentials WHERE channel='WhatsApp' AND address=$1 AND site_id=$2`, *r.phoneID, r.site).Scan(&key)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	pin := ""
 	if stored, err := s.cfg.Store.Credential(ctx, "WhatsApp", key); err == nil {
 		pin, _ = stored.Config["pin"].(string)
