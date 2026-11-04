@@ -19,7 +19,7 @@ import (
 // The fake Meta app, Embedded Signup configuration and verification code that
 // the signup container uses.
 const (
-	esAppID          = "sim-app"
+	esAppID          = "100000000000001"
 	esAppSecret      = "sim-app-secret"
 	esConfigID       = "sim-es-config"
 	esOTP            = "123456"
