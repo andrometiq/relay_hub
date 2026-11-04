@@ -15,6 +15,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/channels"
 	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/numbers"
+	"github.com/andrometiq/relay_hub/internal/onboarding"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 )
 
@@ -74,8 +75,13 @@ func newNumberFixture(t *testing.T) *numberFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := &numbers.Service{Store: f.store, WhatsApp: wa, Reload: func(context.Context) error { f.reloads++; return nil }}
-	f.handler, err = NewAuthenticatedChannelsWithOptions(db.Ping, wa, f.auth.Authenticate, &channels.Registry{}, channels.Store{DB: db}, Options{Numbers: service})
+	reload := func(context.Context) error { f.reloads++; return nil }
+	service := &numbers.Service{Store: f.store, WhatsApp: wa, Reload: reload}
+	signup, err := onboarding.New(onboarding.Config{DB: db, Store: f.store, Auth: f.auth, PublicOrigin: "https://hub.example.com", Reload: reload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.handler, err = NewAuthenticatedChannelsWithOptions(db.Ping, wa, f.auth.Authenticate, &channels.Registry{}, channels.Store{DB: db}, Options{Numbers: service, Signup: signup})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,5 +428,21 @@ func TestRemoveWaitsForOpenSendsAndKeepsASharedWABASubscribed(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(f.graphCalls(), ","), "DELETE") {
 		t.Fatal("the app left a WABA that another site still uses")
+	}
+}
+
+func TestSiteDisconnectEndsTheSiteLink(t *testing.T) {
+	f := newNumberFixture(t)
+	if ok, result, body := f.call("site-a", "site.disconnect", map[string]any{}); ok || errorCode(result) != "confirm_required" {
+		t.Fatalf("disconnect without confirm: %s", body)
+	}
+	if ok, result, body := f.call("site-a", "site.disconnect", map[string]any{"confirm": true}); !ok || result["disconnected"] != true {
+		t.Fatalf("disconnect: %s", body)
+	}
+	if ok, _, body := f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-120"}); ok || !strings.Contains(body, "unauthorized") {
+		t.Fatalf("a call after disconnect: %s", body)
+	}
+	if ok, _, body := f.call("site-b", "whatsapp.number.health", map[string]any{}); !ok {
+		t.Fatalf("another site was disconnected: %s", body)
 	}
 }

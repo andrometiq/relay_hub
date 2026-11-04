@@ -41,3 +41,9 @@ func RotateServiceToken(ctx context.Context, tx pgx.Tx, user int64, site string)
 	}
 	return token, nil
 }
+
+// RevokeSiteTokens revokes every live API token of site.
+func RevokeSiteTokens(ctx context.Context, tx pgx.Tx, site string) error {
+	_, err := tx.Exec(ctx, "UPDATE relay_api_tokens SET revoked_at=now() WHERE site_id=$1 AND revoked_at IS NULL", site)
+	return err
+}
