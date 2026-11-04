@@ -370,3 +370,57 @@ func TestPINResetKeepsTheNewPINInTheHubOnly(t *testing.T) {
 		t.Fatalf("PIN reset of a Business app number: %s", body)
 	}
 }
+
+func TestRemoveTakesTheNumberAwayAndDeregistersIt(t *testing.T) {
+	f := newNumberFixture(t)
+	if ok, result, body := f.call("site-a", "whatsapp.number.remove", map[string]any{"channel": "wa-121"}); ok || errorCode(result) != "confirm_required" {
+		t.Fatalf("remove without confirm: %s", body)
+	}
+	if ok, result, body := f.call("site-a", "whatsapp.number.remove", map[string]any{"channel": "wa-130", "confirm": true}); ok || errorCode(result) != "not_found" {
+		t.Fatalf("remove another site's number: %s", body)
+	}
+	before := f.notices("site-a")
+	ok, result, body := f.call("site-a", "whatsapp.number.remove", map[string]any{"channel": "wa-121", "confirm": true})
+	if !ok || result["removed"] != true || result["deregistered"] != true || result["unsubscribed"] != true {
+		t.Fatalf("remove: %s", body)
+	}
+	f.noSecret(body)
+	calls := strings.Join(f.graphCalls(), ",")
+	if !strings.Contains(calls, "POST 121/deregister") || !strings.Contains(calls, "DELETE 231/subscribed_apps") {
+		t.Fatalf("Meta calls: %s", calls)
+	}
+	removed, err := f.store.Credential(f.ctx, "WhatsApp", "wa-121")
+	if err != nil || removed.Site != "" || removed.Enabled || removed.Secret != "" || removed.Config["pin"] != nil || removed.Config["partner_status"] != "removed" {
+		t.Fatalf("removed number %+v %v", removed, err)
+	}
+	if f.notices("site-a") <= before || f.reloads != 1 {
+		t.Fatal("removal did not tell the site or reload the runtime")
+	}
+	ok, result, body = f.call("site-a", "channels.list", map[string]any{})
+	if channels, _ := result["channels"].([]any); !ok || len(channels) != 1 {
+		t.Fatalf("site channels after removal: %s", body)
+	}
+}
+
+func TestRemoveWaitsForOpenSendsAndKeepsASharedWABASubscribed(t *testing.T) {
+	f := newNumberFixture(t)
+	if _, err := f.auth.DB.Exec(f.ctx, `INSERT INTO relay_outbox(account,request_key,payload,site_id) VALUES('wa-120','k1','{}','site-a')`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, result, body := f.call("site-a", "whatsapp.number.remove", map[string]any{"channel": "wa-120", "confirm": true}); ok || errorCode(result) != "pending_sends" {
+		t.Fatalf("remove with an open send: %s", body)
+	}
+	if kept, _ := f.store.Credential(f.ctx, "WhatsApp", "wa-120"); kept.Site != "site-a" || kept.Secret == "" || len(f.graphCalls()) != 0 {
+		t.Fatal("a refused removal changed the number or called Meta")
+	}
+	if _, err := f.auth.DB.Exec(f.ctx, `DELETE FROM relay_outbox; UPDATE relay_channel_credentials SET config=config||'{"waba_id":"230"}' WHERE channel_key='wa-130'`); err != nil {
+		t.Fatal(err)
+	}
+	ok, result, body := f.call("site-a", "whatsapp.number.remove", map[string]any{"channel": "wa-120", "confirm": true})
+	if !ok || result["deregistered"] != true || result["unsubscribed"] != false {
+		t.Fatalf("remove from a shared WABA: %s", body)
+	}
+	if strings.Contains(strings.Join(f.graphCalls(), ","), "DELETE") {
+		t.Fatal("the app left a WABA that another site still uses")
+	}
+}

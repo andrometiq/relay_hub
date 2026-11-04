@@ -324,6 +324,10 @@ func (s *signupState) phoneRoute(r *http.Request, phone *esPhone, edge string, b
 		return 200, phone.view()
 	case r.Method == "POST" && edge == "":
 		return phone.setPIN(body)
+	case r.Method == "POST" && edge == "deregister":
+		s.call("deregister", phone.ID, "")
+		phone.Platform, phone.Status = "NOT_APPLICABLE", "DISCONNECTED"
+		return 200, map[string]any{"success": true}
 	case r.Method == "POST" && edge == "register":
 		return s.register(phone, body)
 	case r.Method == "POST" && edge == "smb_app_data":

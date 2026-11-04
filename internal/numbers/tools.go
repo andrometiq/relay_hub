@@ -15,6 +15,11 @@ type numberInput struct {
 	Channel string `json:"channel,omitempty"`
 }
 
+type removeInput struct {
+	Channel string `json:"channel,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
+}
+
 type checkInput struct {
 	Channel string `json:"channel,omitempty"`
 	Repair  bool   `json:"repair,omitempty"`
@@ -37,6 +42,10 @@ func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 	mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.number.pin_reset", Description: "Give one WhatsApp number of this site a new two-step verification PIN. The Hub keeps the PIN and never returns it."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in numberInput) (*mcp.CallToolResult, map[string]any, error) {
 			return run(ctx, siteOf, func(site string) (any, error) { return s.ResetPIN(ctx, site, in.Channel) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.number.remove", Description: "Remove one WhatsApp number from this site after confirm. The Hub wipes its credentials and deregisters it at Meta so it can move. Refused while sends from the number are open."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in removeInput) (*mcp.CallToolResult, map[string]any, error) {
+			return run(ctx, siteOf, func(site string) (any, error) { return s.Remove(ctx, site, in.Channel, in.Confirm) })
 		})
 }
 

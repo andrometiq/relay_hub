@@ -42,3 +42,15 @@ func (s *Service) SetTwoStepPIN(ctx context.Context, a Account, pin string) erro
 	_, err := s.graph(ctx, a, http.MethodPost, a.PhoneID, nil, map[string]string{"pin": pin})
 	return err
 }
+
+// Deregister takes the number off the Cloud API at Meta, so it can move to another provider or app.
+func (s *Service) Deregister(ctx context.Context, a Account) error {
+	_, err := s.graph(ctx, a, http.MethodPost, a.PhoneID+"/deregister", nil, nil)
+	return err
+}
+
+// Unsubscribe stops the number's Meta app from getting the webhooks of its WhatsApp Business Account.
+func (s *Service) Unsubscribe(ctx context.Context, a Account) error {
+	_, err := s.graph(ctx, a, http.MethodDelete, a.WABAID+"/subscribed_apps", nil, nil)
+	return err
+}
