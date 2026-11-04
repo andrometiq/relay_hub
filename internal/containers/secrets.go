@@ -20,7 +20,8 @@ var siteSecretKeys = []string{"core_api_key", "core_api_secret", "callback_secre
 
 var channelPublicKeys = map[string]map[string]bool{
 	"WhatsApp": {"phone_id": true, "waba_id": true, "display_number": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true,
-		"business_id": true, "onboarding": true, "coexistence": true, "partner_status": true, "register_attempts": true},
+		"business_id": true, "onboarding": true, "coexistence": true, "partner_status": true, "register_attempts": true,
+		"checked_at": true, "check_error": true, "webhook_subscribed": true},
 	"Telegram": {"username": true, "webhook_status": true, "checked_at": true},
 	"Email":    {"connection_status": true, "checked_at": true, "host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
 }
@@ -29,10 +30,14 @@ var channelPublicKeys = map[string]map[string]bool{
 // value unless the caller sets the key itself.
 var statusKeys = []string{"connection_status", "verified_at", "webhook_status", "checked_at"}
 
-// checkedKeys are the status keys of a channel; a Telegram check also reads the bot username.
+// checkedKeys are the status keys of a channel; a Telegram check also reads
+// the bot username, and a WhatsApp check its error and webhook subscription.
 func checkedKeys(channel string) []string {
-	if channel == "Telegram" {
+	switch channel {
+	case "Telegram":
 		return append(slices.Clone(statusKeys), "username")
+	case "WhatsApp":
+		return append(slices.Clone(statusKeys), "check_error", "webhook_subscribed")
 	}
 	return statusKeys
 }

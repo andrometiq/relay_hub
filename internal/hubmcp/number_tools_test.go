@@ -29,6 +29,7 @@ type numberFixture struct {
 	tokens  map[string]string
 	mu      sync.Mutex
 	calls   []string
+	bearers []string
 	bodies  map[string]map[string]any
 	// reply answers one Graph call by "METHOD path"; nil is a plain success.
 	reply   func(call string) (int, string)
@@ -104,6 +105,7 @@ func (f *numberFixture) graph(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	f.calls = append(f.calls, call)
+	f.bearers = append(f.bearers, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	var body map[string]any
 	if json.Unmarshal(raw, &body) == nil {
 		f.bodies[call] = body
@@ -219,5 +221,76 @@ func TestNumberToolsRefuseAMissingOrRevokedSiteLink(t *testing.T) {
 	}
 	if ok, _, body := f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-120"}); !ok {
 		t.Fatalf("another site's revocation blocked site-a: %s", body)
+	}
+}
+
+// notices counts the relay_channels events that tell a site to re-read its channels.
+func (f *numberFixture) notices(site string) int {
+	var count int
+	if err := f.auth.DB.QueryRow(f.ctx, `SELECT count(*) FROM relay_whatsapp_events WHERE site_id=$1 AND payload->>'object'='relay_channels'`, site).Scan(&count); err != nil {
+		f.t.Fatal(err)
+	}
+	return count
+}
+
+func TestNumberCheckRecordsTheResultAndRepairsTheSubscription(t *testing.T) {
+	f := newNumberFixture(t)
+	subscribed := false
+	f.reply = func(call string) (int, string) {
+		switch call {
+		case "GET 120":
+			return 200, `{"id":"120","display_phone_number":"+91 99999 99120","verified_name":"Acme Textiles","status":"CONNECTED","quality_rating":"GREEN"}`
+		case "GET 230/subscribed_apps":
+			if subscribed {
+				return 200, `{"data":[{"whatsapp_business_api_data":{"id":"333"}}]}`
+			}
+			return 200, `{"data":[]}`
+		case "POST 230/subscribed_apps":
+			subscribed = true
+		}
+		return 0, ""
+	}
+	before := f.notices("site-a")
+	ok, result, body := f.call("site-a", "whatsapp.number.check", map[string]any{"channel": "wa-120"})
+	if !ok || result["connection_status"] != "connected" || result["webhook_subscribed"] != false || result["reconnect_required"] != false {
+		t.Fatalf("check without repair: %s", body)
+	}
+	if profile, _ := result["profile"].(map[string]any); profile["verified_name"] != "Acme Textiles" {
+		t.Fatalf("check profile: %s", body)
+	}
+	f.noSecret(body)
+	if ok, result, body = f.call("site-a", "whatsapp.number.check", map[string]any{"channel": "wa-120", "repair": true}); !ok || result["webhook_subscribed"] != true {
+		t.Fatalf("check with repair: %s", body)
+	}
+	if calls := f.graphCalls(); !strings.Contains(strings.Join(calls, ","), "POST 230/subscribed_apps") {
+		t.Fatalf("repair did not subscribe: %v", calls)
+	}
+	for _, bearer := range f.bearers {
+		if bearer != numberSecrets {
+			t.Fatalf("check used another number's token: %v", f.bearers)
+		}
+	}
+	if f.notices("site-a") <= before {
+		t.Fatal("check did not tell the site to re-read its channels")
+	}
+}
+
+func TestNumberCheckAsksForReconnectWhenMetaRefusesTheToken(t *testing.T) {
+	f := newNumberFixture(t)
+	f.reply = func(call string) (int, string) {
+		return 401, `{"error":{"code":190,"message":"Error validating access token","type":"OAuthException"}}`
+	}
+	ok, result, body := f.call("site-a", "whatsapp.number.check", map[string]any{"channel": "wa-121"})
+	if !ok || result["connection_status"] != "reconnect_required" || result["reconnect_required"] != true {
+		t.Fatalf("refused token: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-121"}); !ok || result["connection_status"] != "reconnect_required" {
+		t.Fatalf("stored status: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.check", map[string]any{"channel": "wa-130", "repair": true}); ok || errorCode(result) != "not_found" {
+		t.Fatalf("check of another site's number: %s", body)
+	}
+	if calls := f.graphCalls(); len(calls) != 1 {
+		t.Fatalf("Meta calls: %v", calls)
 	}
 }

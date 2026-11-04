@@ -224,7 +224,7 @@ func TestValidateURL(t *testing.T) {
 		"https://whatsapp.example.com/webhooks/meta": true,
 		"http://127.0.0.1:8000/hook":                 true,
 		"http://localhost/hook":                      true,
-		"http://100.64.1.1/hook":                    true,
+		"http://100.64.1.1/hook":                     true,
 		"http://192.168.1.5/hook":                    true,
 		"http://example.com/hook":                    false,
 		"http://100.128.0.1/hook":                    false,

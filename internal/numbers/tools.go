@@ -15,11 +15,20 @@ type numberInput struct {
 	Channel string `json:"channel,omitempty"`
 }
 
+type checkInput struct {
+	Channel string `json:"channel,omitempty"`
+	Repair  bool   `json:"repair,omitempty"`
+}
+
 // AddTools registers the whatsapp.number tools. Each acts only on numbers of the caller's site.
 func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 	mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.number.health", Description: "Read the connection status, settings and delivery health of one WhatsApp number of this site. No credentials are returned."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in numberInput) (*mcp.CallToolResult, map[string]any, error) {
 			return run(ctx, siteOf, func(site string) (any, error) { return s.Health(ctx, site, in.Channel) })
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.number.check", Description: "Check one WhatsApp number of this site with Meta and record the result. repair subscribes the app to the account's webhooks again. reconnect_required means the number must be connected again with Embedded Signup."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in checkInput) (*mcp.CallToolResult, map[string]any, error) {
+			return run(ctx, siteOf, func(site string) (any, error) { return s.Check(ctx, site, in.Channel, in.Repair) })
 		})
 }
 

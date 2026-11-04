@@ -38,6 +38,8 @@ var (
 	errUnavailable     = &Failure{"hub_unavailable", "Relay Hub could not finish this. Try again in a few minutes."}
 )
 
+const timeFormat = time.RFC3339
+
 func (s *Service) now() time.Time {
 	if s.Now == nil {
 		return time.Now().UTC()
