@@ -203,6 +203,9 @@ type Input struct {
 	Granularity           string   `json:"granularity,omitempty"`
 	Dimensions            []string `json:"dimensions,omitempty"`
 
+	// Profile is the business profile change of profile.update.
+	Profile *BusinessProfile `json:"profile,omitempty"`
+
 	Operation  string           `json:"operation"`
 	ID         string           `json:"id,omitempty"`
 	ReplyTo    string           `json:"reply_to,omitempty"`
@@ -509,6 +512,10 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		}
 		path = a.PhoneID + "/messages"
 		body = payload
+	case "profile.get":
+		return s.readProfile(ctx, a)
+	case "profile.update":
+		return s.updateProfile(ctx, a, in, validateOnly)
 	case "account.metadata":
 		if s.Metadata == nil {
 			return map[string]any{"status": "not_synced"}, nil

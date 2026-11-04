@@ -32,30 +32,40 @@ func (s *Service) uploadTemplateSample(ctx context.Context, a Account, in Input,
 	if validateOnly {
 		return map[string]any{"valid": true}, nil
 	}
-	session, err := s.graph(ctx, a, http.MethodPost, a.AppID+"/uploads", url.Values{
-		"file_length": {strconv.Itoa(len(raw))}, "file_type": {mediaType}, "file_name": {in.Filename},
-	}, nil)
+	handle, err := s.resumableUpload(ctx, a, raw, mediaType, in.Filename)
 	if err != nil {
 		return nil, err
 	}
+	return map[string]any{"handle": handle}, nil
+}
+
+// resumableUpload sends one file through Meta's Resumable Upload API and
+// returns its handle, for a template sample or a profile photo.
+func (s *Service) resumableUpload(ctx context.Context, a Account, raw []byte, mediaType, filename string) (string, error) {
+	session, err := s.graph(ctx, a, http.MethodPost, a.AppID+"/uploads", url.Values{
+		"file_length": {strconv.Itoa(len(raw))}, "file_type": {mediaType}, "file_name": {filename},
+	}, nil)
+	if err != nil {
+		return "", err
+	}
 	id, _ := session["id"].(string)
 	if len(id) > 4096 || !uploadSession.MatchString(id) {
-		return nil, errors.New("provider returned an invalid upload session")
+		return "", errors.New("provider returned an invalid upload session")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+"/"+a.Version+"/"+id, bytes.NewReader(raw))
 	if err != nil {
-		return nil, errors.New("cannot prepare template sample upload")
+		return "", errors.New("cannot prepare the upload")
 	}
 	req.Header.Set("Authorization", "OAuth "+a.AccessToken)
 	req.Header.Set("Content-Type", mediaType)
 	req.Header.Set("file_offset", "0")
 	result, err := s.request(req)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	handle, _ := result["h"].(string)
 	if strings.TrimSpace(handle) == "" || len(handle) > 8192 || strings.ContainsAny(handle, "\r\n") {
-		return nil, errors.New("provider did not return a template sample handle")
+		return "", errors.New("provider did not return an upload handle")
 	}
-	return map[string]any{"handle": handle}, nil
+	return handle, nil
 }

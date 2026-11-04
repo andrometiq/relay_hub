@@ -53,6 +53,7 @@ type esPhone struct {
 	PIN                             string
 	Registers                       []time.Time
 	Synced                          map[string]bool
+	Profile                         map[string]any
 }
 
 type esCode struct {
@@ -327,6 +328,8 @@ func (s *signupState) phoneRoute(r *http.Request, phone *esPhone, edge string, b
 		return s.smbSync(phone, body)
 	case r.Method == "POST" && edge == "messages":
 		return s.send(phone, body)
+	case edge == "whatsapp_business_profile":
+		return phone.businessProfile(r.Method, body)
 	}
 	return 404, metaError(100, 0, "GraphMethodException", "Unsupported request - fake signup route", false)
 }
@@ -475,4 +478,27 @@ func (s *signupState) snapshot() map[string]any {
 	}
 	return map[string]any{"phones": phones, "wabas": wabas, "businesses": s.Businesses, "codes": codes, "tokens": tokens,
 		"calls": append([]map[string]any{}, s.Calls...), "webhooks": s.webhooks.snapshot()}
+}
+
+// businessProfile reads or changes the number's public WhatsApp profile.
+func (p *esPhone) businessProfile(method string, body []byte) (int, any) {
+	if p.Profile == nil {
+		p.Profile = map[string]any{"about": "Hey there! I am using WhatsApp.", "vertical": "UNDEFINED"}
+	}
+	if method == "GET" {
+		return 200, map[string]any{"data": []any{p.Profile}}
+	}
+	var in map[string]any
+	if json.Unmarshal(body, &in) != nil || in["messaging_product"] != "whatsapp" {
+		return 400, metaError(100, 0, "OAuthException", "(#100) Invalid parameter", false)
+	}
+	for _, name := range []string{"about", "address", "description", "email", "websites", "vertical"} {
+		if value, ok := in[name]; ok {
+			p.Profile[name] = value
+		}
+	}
+	if handle, ok := in["profile_picture_handle"].(string); ok && handle != "" {
+		p.Profile["profile_picture_url"] = "https://example.com/profile/" + p.ID + ".jpg"
+	}
+	return 200, map[string]any{"success": true}
 }
