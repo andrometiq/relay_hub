@@ -112,7 +112,7 @@ func (p MailboxPoller) poll(ctx context.Context, account string, client MailboxR
 		if e != nil {
 			return e
 		}
-		if _, e = tx.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=$4,last_sync=now(),last_error='' WHERE account=$1 AND mailbox=$2`, account, key, validity, uid); e != nil {
+		if _, e = tx.Exec(ctx, `UPDATE relay_mailbox_cursor SET last_uid=$4,last_sync=now(),last_error='' WHERE account=$1 AND mailbox=$2 AND uid_validity=$3`, account, key, validity, uid); e != nil {
 			return e
 		}
 		if e = tx.Commit(ctx); e == nil {
@@ -130,7 +130,7 @@ func (p MailboxPoller) poll(ctx context.Context, account string, client MailboxR
 	if next.Backlog {
 		delay = 0
 	}
-	_, err = conn.Exec(ctx, `UPDATE relay_mailbox_cursor SET uid_validity=$3,last_uid=$4,last_sync=now(),last_error='',failures=0,next_attempt=CASE WHEN next_attempt=$6 THEN now()+$5*interval '1 second' ELSE now() END WHERE account=$1 AND mailbox=$2`, account, key, next.Validity, next.UID, delay, nextAttempt)
+	_, err = conn.Exec(ctx, `UPDATE relay_mailbox_cursor SET last_uid=CASE WHEN uid_validity=$3 THEN $4 ELSE last_uid END,last_sync=now(),last_error='',failures=0,next_attempt=CASE WHEN next_attempt=$6 THEN now()+$5*interval '1 second' ELSE now() END WHERE account=$1 AND mailbox=$2`, account, key, next.Validity, next.UID, delay, nextAttempt)
 	return err
 }
 

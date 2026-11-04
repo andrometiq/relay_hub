@@ -183,6 +183,50 @@ func TestMailboxNewLinkAndRelinkStartAtUIDNext(t *testing.T) {
 		t.Fatal("re-link replayed mail", count)
 	}
 }
+
+// relinkDuringFetch saves a re-link while a poll of the same mailbox is consuming mail.
+type relinkDuringFetch struct {
+	*pagedMailbox
+	relink func()
+}
+
+func (m relinkDuringFetch) FetchMailbox(ctx context.Context, cursor relayemail.MailboxCursor, checkpoint func(relayemail.MailboxCursor) error, consume func(uint32, uint32, *relayemail.Received, string) error) (relayemail.MailboxCursor, error) {
+	return m.pagedMailbox.FetchMailbox(ctx, cursor, checkpoint, func(validity, uid uint32, message *relayemail.Received, reason string) error {
+		err := consume(validity, uid, message, reason)
+		m.relink()
+		return err
+	})
+}
+
+func TestMailboxRelinkDuringPollIsKept(t *testing.T) {
+	pool, _ := channelTestDB(t)
+	p := MailboxPoller{DB: pool}
+	m := &pagedMailbox{key: rand.Text(), epoch: 7, messages: mailboxMessages(3)}
+	linkMailbox(t, pool, "alpha", m)
+	relink := func() {
+		if _, err := pool.Exec(t.Context(), `UPDATE relay_mailbox_cursor SET uid_validity=0 WHERE account='alpha'`); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := p.Poll(t.Context(), "alpha", relinkDuringFetch{m, relink}); err != nil {
+		t.Fatal(err)
+	}
+	var validity int
+	if err := pool.QueryRow(t.Context(), `SELECT uid_validity FROM relay_mailbox_cursor WHERE account='alpha'`).Scan(&validity); err != nil || validity != 0 {
+		t.Fatal("poll overwrote the re-link reset", validity, err)
+	}
+	m.messages = append(m.messages, mailboxMessages(2)...)
+	if err := p.Poll(t.Context(), "alpha", m); err != nil {
+		t.Fatal(err)
+	}
+	m.messages = append(m.messages, mailboxMessages(1)...)
+	if err := p.Poll(t.Context(), "alpha", m); err != nil {
+		t.Fatal(err)
+	}
+	if count := mailboxEvents(t, pool, "alpha"); count != 4 {
+		t.Fatal("re-link during poll replayed or lost mail", count)
+	}
+}
 func TestMailboxSchedulerFairBacklogAndCompetingWorkers(t *testing.T) {
 	pool, _ := channelTestDB(t)
 	p := MailboxPoller{DB: pool}

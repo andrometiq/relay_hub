@@ -212,6 +212,11 @@ func (*syntheticMailbox) MailboxKey() string { return "synthetic" }
 func (s *syntheticMailbox) FetchMailbox(ctx context.Context, cursor relayemail.MailboxCursor, checkpoint func(relayemail.MailboxCursor) error, consume func(uint32, uint32, *relayemail.Received, string) error) (relayemail.MailboxCursor, error) {
 	// Deliberately replay even after a checkpoint to verify database deduplication.
 	message := &relayemail.Received{MessageID: "<fixture@example.invalid>", From: "sender@example.invalid", To: []string{"inbox@example.invalid"}, Subject: "Synthetic", Body: "Body", Attachments: []relayemail.Attachment{{Filename: "a.txt", ContentType: "text/plain", ContentBase64: base64.StdEncoding.EncodeToString([]byte("private bytes"))}}}
+	if cursor.Validity != 1 {
+		if err := checkpoint(relayemail.MailboxCursor{Validity: 1}); err != nil {
+			return cursor, err
+		}
+	}
 	if err := consume(1, 1, message, ""); err != nil {
 		return cursor, err
 	}
