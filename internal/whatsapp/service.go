@@ -232,6 +232,10 @@ var callIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.=:-]{1,512}$`)
 var templateName = regexp.MustCompile(`^[a-z0-9_]{1,512}$`)
 var language = regexp.MustCompile(`^[a-z]{2,3}(_[A-Z]{2})?$`)
 
+// messageOperations are the direct message sends every number supports. Core
+// reads this list before it sends interactive choices instead of numbered text.
+var messageOperations = []string{"messages.send", "messages.media", "messages.location", "messages.contacts", "messages.interactive", "messages.react"}
+
 // normalizeAccount keeps single-number configurations working: a number
 // without a container uses its own key, and a number with a site origin but no
 // site id belongs to the site named by its key.
@@ -406,7 +410,7 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 	case "events.latest":
 		return s.latestEvents(ctx, a)
 	case "capabilities":
-		return map[string]any{"account": a.ID, "site": a.Site, "templates": a.Templates, "flows": a.Templates, "groups": a.Groups, "calls": a.Calls, "recording": false}, nil
+		return map[string]any{"account": a.ID, "site": a.Site, "templates": a.Templates, "flows": a.Templates, "groups": a.Groups, "calls": a.Calls, "recording": false, "operations": messageOperations}, nil
 	case "messages.location", "messages.contacts", "messages.interactive":
 		if !digits.MatchString(in.To) || len(in.To) < 7 || len(in.To) > 15 {
 			return nil, errors.New("valid recipient required")

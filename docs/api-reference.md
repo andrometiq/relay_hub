@@ -68,6 +68,8 @@ A site can use several WhatsApp numbers, Telegram bots and mailboxes. Every send
 | Send | `messages.send`, `messages.media`, `messages.media_upload`, `messages.read`, `messages.react`, `messages.location`, `messages.contacts`, `messages.interactive`, `templates.send` |
 | Templates and flows | `templates.list` and template mutations; `flows.*` |
 
+`capabilities` returns the number's flags (`templates`, `flows`, `groups`, `calls`, `recording`) and `operations`, the direct message sends the number supports. Core sends flow choices as reply buttons or a list only when `operations` contains `messages.interactive`; otherwise it sends numbered text.
+
 A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
 
 ## WhatsApp messages

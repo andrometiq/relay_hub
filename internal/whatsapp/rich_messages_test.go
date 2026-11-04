@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -151,5 +152,22 @@ func TestRichMessageProviderRejectionDoesNotRetry(t *testing.T) {
 				t.Fatal("provider rejection missing, leaking or retried", err)
 			}
 		})
+	}
+}
+
+func TestCapabilitiesAdvertiseInteractiveMessages(t *testing.T) {
+	s, _ := New([]Account{testAccount()})
+	out, err := s.Execute(context.Background(), testAccount(), Input{Operation: "capabilities"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations, _ := out["operations"].([]string)
+	if !slices.Contains(operations, "messages.interactive") {
+		t.Fatalf("capabilities do not advertise interactive messages: %v", out)
+	}
+	for _, operation := range operations {
+		if err := queueable(Input{Operation: operation}, false); err != nil {
+			t.Fatalf("advertised operation %s cannot be sent: %v", operation, err)
+		}
 	}
 }
