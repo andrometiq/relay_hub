@@ -322,6 +322,8 @@ func (s *signupState) phoneRoute(r *http.Request, phone *esPhone, edge string, b
 	switch {
 	case r.Method == "GET" && edge == "":
 		return 200, phone.view()
+	case r.Method == "POST" && edge == "":
+		return phone.setPIN(body)
 	case r.Method == "POST" && edge == "register":
 		return s.register(phone, body)
 	case r.Method == "POST" && edge == "smb_app_data":
@@ -500,5 +502,17 @@ func (p *esPhone) businessProfile(method string, body []byte) (int, any) {
 	if handle, ok := in["profile_picture_handle"].(string); ok && handle != "" {
 		p.Profile["profile_picture_url"] = "https://example.com/profile/" + p.ID + ".jpg"
 	}
+	return 200, map[string]any{"success": true}
+}
+
+// setPIN changes the number's two-step verification PIN.
+func (p *esPhone) setPIN(body []byte) (int, any) {
+	var in struct {
+		PIN string `json:"pin"`
+	}
+	if json.Unmarshal(body, &in) != nil || !pinPattern.MatchString(in.PIN) {
+		return 400, metaError(100, 0, "OAuthException", "(#100) Invalid parameter", false)
+	}
+	p.PIN = in.PIN
 	return 200, map[string]any{"success": true}
 }

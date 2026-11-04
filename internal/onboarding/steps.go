@@ -2,10 +2,8 @@ package onboarding
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
 	"time"
 
@@ -249,7 +247,7 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 		pin, _ = stored.Config["pin"].(string)
 	}
 	if pin == "" {
-		if pin, err = newPIN(); err != nil {
+		if pin, err = containers.NewPIN(); err != nil {
 			return err
 		}
 	}
@@ -283,14 +281,6 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 	_ = s.cfg.Metadata.MarkTemplatesStale(ctx, *r.WABAID)
 	_ = s.cfg.Metadata.RefreshAccounts(ctx, *r.WABAID)
 	return nil
-}
-
-func newPIN() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 // subscribe subscribes the app to the WABA; an unknown outcome is checked with G6.

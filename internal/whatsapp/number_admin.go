@@ -36,3 +36,9 @@ func (s *Service) WebhookSubscription(ctx context.Context, a Account, repair boo
 	}
 	return true, nil
 }
+
+// SetTwoStepPIN sets the number's two-step verification PIN at Meta.
+func (s *Service) SetTwoStepPIN(ctx context.Context, a Account, pin string) error {
+	_, err := s.graph(ctx, a, http.MethodPost, a.PhoneID, nil, map[string]string{"pin": pin})
+	return err
+}

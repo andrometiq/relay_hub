@@ -332,3 +332,41 @@ func TestNumberSettingsChangeOnlyTheSiteNumber(t *testing.T) {
 	}
 	f.noSecret(body)
 }
+
+func TestPINResetKeepsTheNewPINInTheHubOnly(t *testing.T) {
+	f := newNumberFixture(t)
+	ok, result, body := f.call("site-a", "whatsapp.number.pin_reset", map[string]any{"channel": "wa-120"})
+	if !ok || result["pin_kept"] != true {
+		t.Fatalf("PIN reset: %s", body)
+	}
+	f.mu.Lock()
+	sent, _ := f.bodies["POST 120"]["pin"].(string)
+	f.mu.Unlock()
+	stored, err := f.store.Credential(f.ctx, "WhatsApp", "wa-120")
+	if err != nil || len(sent) != 6 || stored.Config["pin"] != sent || sent == "123456" {
+		t.Fatalf("new PIN sent %q, stored %v %v", sent, stored.Config["pin"], err)
+	}
+	if strings.Contains(body, sent) {
+		t.Fatalf("the PIN left the Hub: %s", body)
+	}
+	f.noSecret(body)
+
+	f.reply = func(string) (int, string) {
+		return 400, `{"error":{"code":100,"error_user_msg":"Invalid PIN","type":"OAuthException"}}`
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.pin_reset", map[string]any{"channel": "wa-120"}); ok || errorCode(result) != "meta_rejected" {
+		t.Fatalf("refused PIN: %s", body)
+	}
+	if kept, _ := f.store.Credential(f.ctx, "WhatsApp", "wa-120"); kept.Config["pin"] != sent {
+		t.Fatal("a refused PIN replaced the stored PIN")
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.pin_reset", map[string]any{"channel": "wa-130"}); ok || errorCode(result) != "not_found" {
+		t.Fatalf("PIN reset of another site's number: %s", body)
+	}
+	if _, err := f.auth.DB.Exec(f.ctx, `UPDATE relay_channel_credentials SET config=config||'{"coexistence":true}' WHERE channel_key='wa-121'`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.pin_reset", map[string]any{"channel": "wa-121"}); ok || errorCode(result) != "not_supported" {
+		t.Fatalf("PIN reset of a Business app number: %s", body)
+	}
+}

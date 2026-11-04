@@ -34,6 +34,10 @@ func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SettingsInput) (*mcp.CallToolResult, map[string]any, error) {
 			return run(ctx, siteOf, func(site string) (any, error) { return s.SaveSettings(ctx, site, in) })
 		})
+	mcp.AddTool(server, &mcp.Tool{Name: "whatsapp.number.pin_reset", Description: "Give one WhatsApp number of this site a new two-step verification PIN. The Hub keeps the PIN and never returns it."},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in numberInput) (*mcp.CallToolResult, map[string]any, error) {
+			return run(ctx, siteOf, func(site string) (any, error) { return s.ResetPIN(ctx, site, in.Channel) })
+		})
 }
 
 // run calls one tool for the caller's site and returns its result as an object or a coded failure.
