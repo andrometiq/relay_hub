@@ -134,3 +134,22 @@ func TestSiteAttemptsAreLimitedPerSiteAndAction(t *testing.T) {
 		t.Fatal("another tool has its own limit")
 	}
 }
+
+func TestSiteChosenMailboxStaysGuardedAfterAnAdminSave(t *testing.T) {
+	s, _ := siteChannelsStore(t)
+	ctx := t.Context()
+	mail := Channel{Channel: "Email", Config: map[string]any{"from": "sales@example.com", "host": "smtp.example.com", "port": 587, "username": "sales"}}
+	key, err := s.SaveSiteChannel(ctx, "shop", mail, "smtp-local-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := Channel{Key: key, Channel: "Email", Container: "signup", Label: "Acme sales", Enabled: true,
+		Config: map[string]any{"from": "sales@example.com", "host": "smtp.example.com", "port": 587, "username": "sales"}}
+	if err = s.SaveChannel(ctx, admin, "", false); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.GetChannel(ctx, ChannelRef{Channel: "Email", Key: key})
+	if err != nil || stored.Config["site_managed"] != true {
+		t.Fatalf("an admin save dropped the guard: %+v %v", stored.Config, err)
+	}
+}

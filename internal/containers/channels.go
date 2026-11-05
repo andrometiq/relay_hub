@@ -174,6 +174,10 @@ func (s *Store) saveChannel(ctx context.Context, tx pgx.Tx, c Channel, secret st
 			public[key] = stored[key]
 		}
 	}
+	// A site chose these servers, so the runtime keeps guarding them whoever saves the channel later.
+	if stored["site_managed"] == true {
+		public["site_managed"] = true
+	}
 	if !exists && c.Channel == "WhatsApp" {
 		for _, key := range []string{"templates", "sync_metadata"} {
 			if _, set := public[key]; !set {
