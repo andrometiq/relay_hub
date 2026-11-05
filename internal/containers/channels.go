@@ -27,6 +27,8 @@ type Channel struct {
 	WebhookPath string `json:"webhook_path,omitempty"`
 	// ClearSecrets removes stored private values, such as a number's own app secret.
 	ClearSecrets []string `json:"-"`
+	// AdminOff is a channel a Hub admin turned off; only an admin save that turns it on clears it.
+	AdminOff bool `json:"-"`
 }
 
 // ErrAddressInUse means another channel of the provider has the same phone id, bot id or mailbox address.
@@ -44,7 +46,7 @@ type ChannelFilter struct {
 
 var telegramBotID = regexp.MustCompile(`^([0-9]{1,20}):`)
 
-const channelColumns = `channel_key,channel,container_id,label,coalesce(address,''),coalesce(site_id,''),enabled,config,config_ciphertext,config_nonce,length(secret_ciphertext)>0,public_id`
+const channelColumns = `channel_key,channel,container_id,label,coalesce(address,''),coalesce(site_id,''),enabled,config,config_ciphertext,config_nonce,length(secret_ciphertext)>0,public_id,admin_off`
 
 func (s *Store) Channels(ctx context.Context, filter ChannelFilter) ([]Channel, error) {
 	rows, err := s.DB.Query(ctx, `SELECT `+channelColumns+` FROM relay_channel_credentials
@@ -72,7 +74,7 @@ func (s *Store) scanChannel(row pgx.Row) (Channel, error) {
 	var c Channel
 	var raw, cipher, nonce []byte
 	var hasSecret bool
-	if err := row.Scan(&c.Key, &c.Channel, &c.Container, &c.Label, &c.Address, &c.Site, &c.Enabled, &raw, &cipher, &nonce, &hasSecret, &c.WebhookPath); err != nil {
+	if err := row.Scan(&c.Key, &c.Channel, &c.Container, &c.Label, &c.Address, &c.Site, &c.Enabled, &raw, &cipher, &nonce, &hasSecret, &c.WebhookPath, &c.AdminOff); err != nil {
 		return c, err
 	}
 	if json.Unmarshal(raw, &c.Config) != nil {

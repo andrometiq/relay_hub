@@ -83,7 +83,7 @@ These tools let a Core site set up its own WhatsApp numbers. The Hub keeps every
 
 | Tool | What it does | Result |
 | --- | --- | --- |
-| `whatsapp.number.health` | Reads the saved state of the number. | `channel`, `label`, `display_number`, `enabled`, `connection_status` (`connected`, `unchecked`, `failed`, `reconnect_required`, `disabled`), `partner_status`, `verified_at`, `checked_at`, `check_error`, `webhook_subscribed`, `pin_kept`, `settings` (`templates`, `sync_metadata`) and `delivery` (last webhook, last Core confirmation, waiting callbacks). |
+| `whatsapp.number.health` | Reads the saved state of the number. | `channel`, `label`, `display_number`, `enabled`, `admin_off`, `connection_status` (`connected`, `unchecked`, `failed`, `reconnect_required`, `disabled`), `partner_status`, `verified_at`, `checked_at`, `check_error`, `webhook_subscribed`, `pin_kept`, `settings` (`templates`, `sync_metadata`) and `delivery` (last webhook, last Core confirmation, waiting callbacks). |
 | `whatsapp.number.check` | Asks Meta about the number and its webhook subscription. With `repair`, subscribes the app again. | The health fields, `reconnect_required` and a short `profile`. |
 | `whatsapp.number.settings` | Turns the number, templates or the hourly Meta sync on or off. Turning a number on checks it at once. A number that a Hub admin turned off stays off and returns `admin_off`. | The health fields. |
 | `whatsapp.number.pin_reset` | Sets a new two-step PIN that only the Hub knows. Not for WhatsApp Business app numbers. | The health fields. |
@@ -97,12 +97,12 @@ These tools let a Core site connect and manage its own Telegram bots and mailbox
 | Tool | What it does | Result |
 | --- | --- | --- |
 | `telegram.bot.connect` | Takes `bot_token` and an optional `label`. Checks the token with getMe, stores and links the bot, registers its webhook and tells Core. A refused token stores nothing. | The bot health fields. |
-| `telegram.bot.health` | Reads the saved state of the bot. Telegram is not called. | `channel`, `label`, `username`, `bot_id`, `enabled`, `webhook_status` (`registered`, `not_registered`, `failed`, `removed`), `checked_at`, `check_error`, `token_saved`. |
+| `telegram.bot.health` | Reads the saved state of the bot. Telegram is not called. | `channel`, `label`, `username`, `bot_id`, `enabled`, `admin_off`, `webhook_status` (`registered`, `not_registered`, `failed`, `removed`), `checked_at`, `check_error`, `token_saved`. |
 | `telegram.bot.check` | Runs getMe and reads the webhook. With `repair`, registers the webhook again. | The health fields, `webhook_missing` and `pending_updates`. |
 | `telegram.bot.settings` | Changes `label` or `enabled`, or saves a new `bot_token` of the same bot. | The health fields. |
 | `telegram.bot.remove` | Takes `confirm`. Wipes the token, unlinks the bot, turns it off and deletes its webhook. | `removed`, `webhook_deleted`. |
 | `email.mailbox.connect` | Takes `from`, `host`, `port`, `username`, `password`, the optional `imap_*` fields, `trusted_authserv_id`, `trusted_dsn_domain` and `label`. Signs in to SMTP and IMAP first and stores nothing when that fails. The IMAP reader starts at new mail. | The mailbox health fields. |
-| `email.mailbox.health` | Reads the saved state and the sync state. No mail server is called. | `channel`, `label`, `address`, `enabled`, `connection_status`, `smtp_status`, `imap_status`, `checked_at`, `check_error`, `password_saved`, `imap_password_saved`, `server` (hosts, ports, usernames, folder, trust ids), `sync` and `rejected`. |
+| `email.mailbox.health` | Reads the saved state and the sync state. No mail server is called. | `channel`, `label`, `address`, `enabled`, `admin_off`, `connection_status`, `smtp_status`, `imap_status`, `checked_at`, `check_error`, `password_saved`, `imap_password_saved`, `server` (hosts, ports, usernames, folder, trust ids), `sync` and `rejected`. |
 | `email.mailbox.check` | Signs in to SMTP and IMAP with the saved settings. No mail is sent or read. | The health fields. |
 | `email.mailbox.settings` | Changes `label` or `enabled`, or the server fields. New sign-in settings are tested before they are stored. A blank password keeps the saved one. A new host, user or folder starts the reader again at new mail. The `from` address does not change; remove the mailbox and connect it again. | The health fields. |
 | `email.mailbox.remove` | Takes `confirm`. Wipes both passwords, unlinks the mailbox, turns it off and stops the reader. | `removed`. |
@@ -114,6 +114,8 @@ The Hub reaches a site's mail servers only on public internet addresses. It reso
 Telegram sends updates only to HTTPS. Without an HTTPS `RELAY_PUBLIC_ORIGIN`, a bot connects and can send, but it gets no messages: `webhook_status` stays `not_registered` and `webhook_missing` says why. The mailbox webhook stays a Hub administrator setting, because its secret is a credential.
 
 More codes for these tools: `no_bot`, `no_mailbox`, `invalid_token`, `bot_changed`, `telegram_unavailable`, `invalid_settings`, `login_failed`, `host_refused`, `host_unknown`, `port_refused`, `in_use`, `not_available`, `rate_limited`, `channel_disabled` and `admin_off`. A bot or mailbox that a Hub admin turned off cannot be turned on, or connected again by any site.
+
+`channels.health` reads the saved health of every number, bot and mailbox of the site in one call, so a page does not call a health tool for each channel. It takes an optional `provider` (`WhatsApp`, `Telegram` or `Email`) and returns one list per provider, for example `{"WhatsApp":[...],"Telegram":[...],"Email":[...]}`. Each item has the fields of `whatsapp.number.health`, `telegram.bot.health` or `email.mailbox.health`. No provider is called and no answer contains a credential. An unknown provider returns `invalid_request`. `admin_off` is `true` when a Hub admin turned the channel off.
 
 A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
 
