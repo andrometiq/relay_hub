@@ -108,10 +108,11 @@ func (s *Service) BotHealth(ctx context.Context, site, key string) (BotHealth, e
 	if err != nil {
 		return BotHealth{}, err
 	}
-	return botHealth(c), nil
+	return BotHealthOf(c), nil
 }
 
-func botHealth(c containers.Channel) BotHealth {
+// BotHealthOf is the health of a bot that the caller already read for its site.
+func BotHealthOf(c containers.Channel) BotHealth {
 	return BotHealth{Channel: c.Key, Label: c.Label, Username: text(c.Config, "username"), BotID: c.Address, Enabled: c.Enabled, AdminOff: c.AdminOff,
 		WebhookStatus: text(c.Config, "webhook_status"), CheckedAt: text(c.Config, "checked_at"), CheckError: text(c.Config, "check_error"),
 		TokenSaved: saved(c, "secret")}

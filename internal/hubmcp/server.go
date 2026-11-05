@@ -187,6 +187,9 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 	if verify != nil && opts.Channels != nil {
 		opts.Channels.AddTools(server, siteOf)
 	}
+	if verify != nil && (opts.Numbers != nil || opts.Channels != nil) {
+		addChannelHealth(server, siteOf, opts)
+	}
 	mcp.AddTool(server, &mcp.Tool{Name: "health.get", Description: "Check Relay Hub database readiness"}, func(ctx context.Context, r *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, Health, error) {
 		c, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()

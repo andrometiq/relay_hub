@@ -174,6 +174,11 @@ func (s *Service) MailboxHealth(ctx context.Context, site, key string) (MailboxH
 	if err != nil {
 		return MailboxHealth{}, err
 	}
+	return s.MailboxHealthOf(ctx, c)
+}
+
+// MailboxHealthOf is the health of a mailbox that the caller already read for its site.
+func (s *Service) MailboxHealthOf(ctx context.Context, c containers.Channel) (MailboxHealth, error) {
 	sync, err := channels.MailboxStatus(ctx, s.Store.DB, c.Key)
 	if err != nil {
 		return MailboxHealth{}, ErrUnavailable

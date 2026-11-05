@@ -72,6 +72,11 @@ func (s *Service) Health(ctx context.Context, site, key string) (Health, error) 
 	if err != nil {
 		return Health{}, err
 	}
+	return s.HealthOf(ctx, c)
+}
+
+// HealthOf is the health of a number that the caller already read for its site.
+func (s *Service) HealthOf(ctx context.Context, c containers.Channel) (Health, error) {
 	delivery, err := whatsapp.ReadDeliveryHealth(ctx, s.Store.DB, c.Key)
 	if err != nil {
 		return Health{}, errUnavailable

@@ -115,6 +115,8 @@ Telegram sends updates only to HTTPS. Without an HTTPS `RELAY_PUBLIC_ORIGIN`, a 
 
 More codes for these tools: `no_bot`, `no_mailbox`, `invalid_token`, `bot_changed`, `telegram_unavailable`, `invalid_settings`, `login_failed`, `host_refused`, `host_unknown`, `port_refused`, `in_use`, `not_available`, `rate_limited`, `channel_disabled` and `admin_off`. A bot or mailbox that a Hub admin turned off cannot be turned on, or connected again by any site.
 
+`channels.health` reads the saved health of every number, bot and mailbox of the site in one call, so a page does not call a health tool for each channel. It takes an optional `provider` (`WhatsApp`, `Telegram` or `Email`) and returns one list per provider, for example `{"WhatsApp":[...],"Telegram":[...],"Email":[...]}`. Each item has the fields of `whatsapp.number.health`, `telegram.bot.health` or `email.mailbox.health`. No provider is called and no answer contains a credential. An unknown provider returns `invalid_request`. `admin_off` is `true` when a Hub admin turned the channel off.
+
 A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
 
 ## WhatsApp messages
