@@ -19,6 +19,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/live"
 	"github.com/andrometiq/relay_hub/internal/numbers"
 	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
+	"github.com/andrometiq/relay_hub/internal/sitechannels"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -352,7 +353,9 @@ func run() error {
 		defer signup.close()
 		wa.AccountUpdate = signup.service.AccountUpdate
 		siteNumbers := &numbers.Service{Store: accountStore, WhatsApp: wa, Reload: reloadRuntime}
-		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service, Numbers: siteNumbers})
+		siteChannels := &sitechannels.Service{Store: accountStore, Registry: channelRegistry, Clients: sitechannels.ProviderClients{}, Reload: reloadRuntime,
+			PublicURL: os.Getenv("RELAY_PUBLIC_ORIGIN") + os.Getenv("RELAY_PUBLIC_PREFIX"), TelegramMaster: os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET")}
+		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service, Numbers: siteNumbers, Channels: siteChannels})
 		if err != nil {
 			return err
 		}

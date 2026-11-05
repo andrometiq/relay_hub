@@ -29,6 +29,9 @@ type Channel struct {
 	ClearSecrets []string `json:"-"`
 }
 
+// ErrAddressInUse means another channel of the provider has the same phone id, bot id or mailbox address.
+var ErrAddressInUse = errors.New("this number, bot or mailbox is already configured in another channel")
+
 // ChannelRef names one channel. Keys are unique per provider.
 type ChannelRef struct {
 	Channel string `json:"channel"`
@@ -220,7 +223,7 @@ func (s *Store) writeChannel(ctx context.Context, tx pgx.Tx, c Channel, public m
  config_ciphertext=excluded.config_ciphertext,config_nonce=excluded.config_nonce,updated_at=now()`,
 		c.Channel, c.Key, c.Container, c.Label, address, c.Enabled, raw, secretCipher, secretNonce, configCipher, configNonce)
 	if isUniqueViolation(err, "relay_channel_credentials_address") {
-		return errors.New("this number, bot or mailbox is already configured in another channel")
+		return ErrAddressInUse
 	}
 	return err
 }

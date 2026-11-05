@@ -11,6 +11,7 @@ import (
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/numbers"
 	"github.com/andrometiq/relay_hub/internal/onboarding"
+	"github.com/andrometiq/relay_hub/internal/sitechannels"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -112,6 +113,8 @@ type Options struct {
 	Signup *onboarding.Service
 	// Numbers adds the whatsapp.number tools a site uses to manage its own numbers.
 	Numbers *numbers.Service
+	// Channels adds the telegram.bot and email.mailbox tools a site uses to manage its own bots and mailboxes.
+	Channels *sitechannels.Service
 }
 
 func NewAuthenticatedChannelsWithOptions(check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier, registry *channels.Registry, store channels.Store, opts Options) (http.Handler, error) {
@@ -180,6 +183,9 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 	}
 	if verify != nil && opts.Numbers != nil {
 		opts.Numbers.AddTools(server, siteOf)
+	}
+	if verify != nil && opts.Channels != nil {
+		opts.Channels.AddTools(server, siteOf)
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "health.get", Description: "Check Relay Hub database readiness"}, func(ctx context.Context, r *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, Health, error) {
 		c, cancel := context.WithTimeout(ctx, 3*time.Second)
