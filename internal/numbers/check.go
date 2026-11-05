@@ -83,7 +83,7 @@ func (s *Service) Check(ctx context.Context, site, key string, repair bool) (Che
 }
 
 func (s *Service) recordCheck(ctx context.Context, site, key string, values map[string]any, profile map[string]any) (Check, error) {
-	if err := s.Store.UpdateSiteNumber(ctx, site, key, nil, values); err != nil {
+	if err := s.Store.UpdateSiteValues(ctx, site, containers.ChannelRef{Channel: "WhatsApp", Key: key}, nil, values); err != nil {
 		return Check{}, errUnavailable
 	}
 	health, err := s.Health(ctx, site, key)

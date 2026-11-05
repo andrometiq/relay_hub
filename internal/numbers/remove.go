@@ -36,7 +36,7 @@ func (s *Service) Remove(ctx context.Context, site, key string, confirm bool) (R
 		return Removal{}, err
 	}
 	account, accountErr := s.account(ctx, c)
-	err = s.Store.RemoveSiteNumber(ctx, site, c.Key)
+	err = s.Store.RemoveSiteChannel(ctx, site, containers.ChannelRef{Channel: "WhatsApp", Key: c.Key})
 	if errors.Is(err, containers.ErrPendingSends) {
 		return Removal{}, errPendingSends
 	}
