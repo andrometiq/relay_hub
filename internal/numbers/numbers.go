@@ -64,6 +64,8 @@ type Health struct {
 	PINKept           bool                    `json:"pin_kept"`
 	Settings          map[string]bool         `json:"settings"`
 	Delivery          whatsapp.DeliveryHealth `json:"delivery"`
+	// Metadata is the stored Meta profile and sync state (status, last_success, last_error), without templates.
+	Metadata map[string]any `json:"metadata"`
 }
 
 // Health reads the stored status and the delivery evidence of a number. It never contacts Meta.
@@ -92,6 +94,12 @@ func (s *Service) HealthOf(ctx context.Context, c containers.Channel) (Health, e
 	}
 	for _, name := range c.ConfiguredSecrets {
 		health.PINKept = health.PINKept || name == "pin"
+	}
+	health.Metadata = map[string]any{"status": "not_synced"}
+	if s.WhatsApp != nil && s.WhatsApp.Metadata != nil {
+		if health.Metadata, err = s.WhatsApp.Metadata.Status(ctx, c.Key); err != nil {
+			return Health{}, errUnavailable
+		}
 	}
 	return health, nil
 }

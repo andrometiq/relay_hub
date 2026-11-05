@@ -141,7 +141,17 @@ func safeStrings(data map[string]any, keys []string) map[string]any {
 	return safe
 }
 
+// Read is the stored profile, sync state and templates of a number.
 func (m *MetadataSync) Read(ctx context.Context, account string) (map[string]any, error) {
+	return m.read(ctx, account, true)
+}
+
+// Status is the stored profile and sync state of a number, without its templates, for the batched channel health.
+func (m *MetadataSync) Status(ctx context.Context, account string) (map[string]any, error) {
+	return m.read(ctx, account, false)
+}
+
+func (m *MetadataSync) read(ctx context.Context, account string, withTemplates bool) (map[string]any, error) {
 	var profile []byte
 	templates := []byte(`[]`)
 	var lastAttempt, lastSuccess *time.Time
@@ -149,7 +159,7 @@ func (m *MetadataSync) Read(ctx context.Context, account string) (map[string]any
 	var truncated bool
 	err := m.DB.QueryRow(ctx, `SELECT profile,last_attempt,last_success,last_error,source_hash FROM relay_whatsapp_metadata WHERE account=$1`, account).Scan(&profile, &lastAttempt, &lastSuccess, &lastError, &source)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return map[string]any{"status": "not_synced", "profile": map[string]any{}, "templates": []any{}}, nil
+		return notSynced(withTemplates), nil
 	}
 	if err != nil {
 		return nil, errors.New("metadata unavailable")
@@ -162,11 +172,15 @@ func (m *MetadataSync) Read(ctx context.Context, account string) (map[string]any
 		}
 	}
 	if number == nil {
-		return map[string]any{"status": "not_synced", "profile": map[string]any{}, "templates": []any{}}, nil
+		return notSynced(withTemplates), nil
 	}
 	if number.Templates {
 		var templateError string
-		err = m.DB.QueryRow(ctx, `SELECT templates,truncated,last_error FROM relay_whatsapp_waba_templates WHERE waba_id=$1`, number.WABAID).Scan(&templates, &truncated, &templateError)
+		query := `SELECT templates,truncated,last_error FROM relay_whatsapp_waba_templates WHERE waba_id=$1`
+		if !withTemplates {
+			query = `SELECT '[]'::jsonb,truncated,last_error FROM relay_whatsapp_waba_templates WHERE waba_id=$1`
+		}
+		err = m.DB.QueryRow(ctx, query, number.WABAID).Scan(&templates, &truncated, &templateError)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return nil, errors.New("metadata unavailable")
 		}
@@ -185,7 +199,19 @@ func (m *MetadataSync) Read(ctx context.Context, account string) (map[string]any
 	} else if lastSuccess == nil {
 		status = "syncing"
 	}
-	return map[string]any{"status": status, "profile": p, "templates": t, "truncated": truncated, "last_attempt": lastAttempt, "last_success": lastSuccess, "last_error": lastError}, nil
+	result := map[string]any{"status": status, "profile": p, "last_attempt": lastAttempt, "last_success": lastSuccess, "last_error": lastError}
+	if withTemplates {
+		result["templates"], result["truncated"] = t, truncated
+	}
+	return result, nil
+}
+
+func notSynced(withTemplates bool) map[string]any {
+	result := map[string]any{"status": "not_synced", "profile": map[string]any{}}
+	if withTemplates {
+		result["templates"] = []any{}
+	}
+	return result
 }
 
 // syncTemplates fetches the templates of the number's WABA once while the

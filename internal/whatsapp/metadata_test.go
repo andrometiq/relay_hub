@@ -130,6 +130,13 @@ func TestMetadataDatabaseRefresh(t *testing.T) {
 	if quality := value["templates"].([]any)[1].(map[string]any)["quality_score"].(map[string]any)["score"]; quality != "RED" {
 		t.Fatalf("template quality not cached: %s", raw)
 	}
+	summary, err := m.Status(ctx, a.ID)
+	if err != nil || summary["status"] != "ready" || summary["last_success"] == nil || summary["profile"].(map[string]any)["quality_rating"] != "YELLOW" {
+		t.Fatalf("sync status: %v %v", summary, err)
+	}
+	if _, listed := summary["templates"]; listed {
+		t.Fatal("the sync status carries no templates")
+	}
 	if err = m.Sync(ctx, a); err != nil || calls.Load() != 4 {
 		t.Fatal("hourly gate failed", err)
 	}

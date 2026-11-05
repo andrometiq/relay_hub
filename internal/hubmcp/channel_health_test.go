@@ -47,6 +47,9 @@ func TestChannelHealthReadsEveryNumberOfTheSiteInOneCall(t *testing.T) {
 	if own["connection_status"] != "connected" || own["pin_kept"] != true || own["delivery"] == nil || own["admin_off"] != false {
 		t.Fatalf("number health shape: %s", body)
 	}
+	if metadata, _ := own["metadata"].(map[string]any); metadata["status"] != "not_synced" {
+		t.Fatalf("the Meta sync state is part of the number health: %s", body)
+	}
 	if locked := healthRow(result, "WhatsApp", "wa-121"); locked["admin_off"] != true || locked["enabled"] != false {
 		t.Fatalf("admin lock: %s", body)
 	}
