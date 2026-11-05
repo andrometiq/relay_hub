@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,10 +14,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type captureDuringStateRead struct{ records *recorder }
+// captureDuringStateRead fires only once armed, because Hub migrations also
+// contain callback delivery SQL.
+type captureDuringStateRead struct {
+	records *recorder
+	armed   *atomic.Bool
+}
 
 func (c captureDuringStateRead) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "FROM relay_whatsapp_callback_delivery") {
+	if c.armed.Load() && strings.Contains(data.SQL, "FROM relay_whatsapp_callback_delivery") {
 		// Reproduce a callback completing while the durable state is being read.
 		r := httptest.NewRequest("POST", "/api/method/relay_core.inbound.receive_statuses", nil)
 		c.records.record(r, "status", []byte(`{"statuses":[{}]}`), 200,
@@ -34,7 +40,8 @@ func TestStateIncludesCapturesCompletedDuringDatabaseRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := newRecorder()
-	config.ConnConfig.Tracer = captureDuringStateRead{records}
+	armed := &atomic.Bool{}
+	config.ConnConfig.Tracer = captureDuringStateRead{records, armed}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	db, err := pgxpool.NewWithConfig(ctx, config)
@@ -51,6 +58,7 @@ func TestStateIncludesCapturesCompletedDuringDatabaseRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	armed.Store(true)
 	sim := simulation{db: db, meta: &fakeMeta{records: records}, token: "local-test"}
 	req := httptest.NewRequest("GET", "/_sim/state", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer local-test")
@@ -63,6 +71,6 @@ func TestStateIncludesCapturesCompletedDuringDatabaseRead(t *testing.T) {
 		t.Fatal("could not read simulation state", response.Code)
 	}
 	if len(state.Records) != 1 || state.Records[0].Kind != "status" {
-		t.Fatal("durable callback state returned with an older capture snapshot")
+		t.Fatal("durable callback state returned with an older capture snapshot", len(state.Records))
 	}
 }
