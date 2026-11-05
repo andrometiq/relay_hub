@@ -129,6 +129,24 @@ func (r *Registry) SiteKeys(provider, site string) []string {
 	return keys
 }
 
+// EmailConfig is the client configuration of a mailbox from its stored settings and SMTP password.
+func EmailConfig(key string, config map[string]any, password string) relayemail.Config {
+	text := func(name string) string { value, _ := config[name].(string); return value }
+	number := func(name string) int {
+		if value, ok := config[name].(float64); ok {
+			return int(value)
+		}
+		if value, ok := config[name].(int); ok {
+			return value
+		}
+		value, _ := strconv.Atoi(text(name))
+		return value
+	}
+	return relayemail.Config{AccountID: key, Host: text("host"), Port: number("port"), Username: text("username"), Password: password, From: text("from"), Enabled: true,
+		TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: number("imap_port"),
+		IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")}
+}
+
 func Load(rows []containers.RuntimeCredential) (*Registry, error) {
 	r := &Registry{Telegram: map[string]*telegram.Client{}, Email: map[string]*relayemail.Client{}, Bindings: map[string]Binding{}, Paths: map[string]string{}}
 	for _, v := range rows {
@@ -144,26 +162,7 @@ func Load(rows []containers.RuntimeCredential) (*Registry, error) {
 			}
 			r.Telegram[v.Key] = c
 		case "Email":
-			port := 0
-			if n, ok := v.Config["port"].(float64); ok {
-				port = int(n)
-			}
-			if port == 0 {
-				if s, ok := v.Config["port"].(string); ok {
-					port, _ = strconv.Atoi(s)
-				}
-			}
-			from, _ := v.Config["from"].(string)
-			host, _ := v.Config["host"].(string)
-			user, _ := v.Config["username"].(string)
-			text := func(key string) string { value, _ := v.Config[key].(string); return value }
-			imapPort := 0
-			if value, ok := v.Config["imap_port"].(float64); ok {
-				imapPort = int(value)
-			} else {
-				imapPort, _ = strconv.Atoi(text("imap_port"))
-			}
-			cfg := relayemail.Config{AccountID: v.Key, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")}
+			cfg := EmailConfig(v.Key, v.Config, v.Secret)
 			c, e := relayemail.New(cfg)
 			// A site chose these servers, so the Hub reaches them only on public addresses.
 			if managed, _ := v.Config["site_managed"].(bool); managed {

@@ -3,9 +3,12 @@ package hubmcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -74,7 +77,7 @@ func newChannelFixture(t *testing.T) *channelFixture {
 		return http.DefaultTransport.RoundTrip(copy)
 	})}
 	f.mail = func(relayemail.Config) (*relayemail.Client, error) { t.Fatal("no mailbox expected"); return nil, nil }
-	service := &sitechannels.Service{Store: f.store, Registry: f.registry, Clients: f, Reload: f.reloadRuntime,
+	service := &sitechannels.Service{Store: f.store, Registry: f.registry, Clients: f, Reload: f.reloadRuntime, Hosts: relayemail.PublicHosts{Allow: []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")}},
 		PublicURL: "https://hub.example.com", TelegramMaster: telegramMain}
 	var err error
 	f.handler, err = NewAuthenticatedChannelsWithOptions(db.Ping, nil, f.auth.Authenticate, f.registry, channels.Store{DB: db}, Options{Channels: service})
@@ -315,5 +318,115 @@ func TestBotConnectIsRateLimited(t *testing.T) {
 	}
 	if ok, _, body := f.connectBot("site-b", botTokenA); !ok {
 		t.Fatalf("another site has its own limit: %s", body)
+	}
+}
+
+// mailbox is a connect request on the documentation network, which the fixture allows.
+func mailbox() map[string]any {
+	return map[string]any{"from": "sales@example.com", "label": "Acme Textiles sales", "host": "192.0.2.10", "port": 587, "username": "sales@example.com",
+		"password": "smtp-local-only", "imap_host": "192.0.2.10", "imap_port": 993, "imap_password": "imap-local-only"}
+}
+
+// refusedMail is a mail server that is never reached.
+func refusedMail(cfg relayemail.Config) (*relayemail.Client, error) {
+	return relayemail.NewWithDialer(cfg, func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("connection refused") })
+}
+
+func TestMailboxConnectStoresNothingUntilTheSignInWorks(t *testing.T) {
+	f := newChannelFixture(t)
+	dialed := 0
+	f.mail = func(cfg relayemail.Config) (*relayemail.Client, error) { dialed++; return refusedMail(cfg) }
+	cases := map[string]func(map[string]any){
+		"login_failed":     func(map[string]any) {},
+		"host_refused":     func(in map[string]any) { in["host"] = "127.0.0.1" },
+		"port_refused":     func(in map[string]any) { in["port"] = 22 },
+		"invalid_settings": func(in map[string]any) { in["from"] = "Acme <sales@example.com>" },
+	}
+	for code, change := range cases {
+		in := mailbox()
+		change(in)
+		ok, result, body := f.call("site-a", "email.mailbox.connect", in)
+		if ok || errorCode(result) != code {
+			t.Fatalf("%s: %s", code, body)
+		}
+		f.clean(body)
+	}
+	metadata := mailbox()
+	metadata["imap_host"] = "169.254.169.254"
+	if ok, result, body := f.call("site-a", "email.mailbox.connect", metadata); ok || errorCode(result) != "host_refused" {
+		t.Fatalf("metadata IMAP host: %s", body)
+	}
+	var count int
+	f.store.DB.QueryRow(f.ctx, `SELECT count(*) FROM relay_channel_credentials`).Scan(&count)
+	if count != 0 || dialed != 1 || f.reloads != 0 {
+		t.Fatalf("refused connects stored %d mailboxes after %d sign-ins", count, dialed)
+	}
+}
+
+// storedMailbox adds a mailbox of site the way a connect stores it.
+func (f *channelFixture) storedMailbox(site, from string) string {
+	config := map[string]any{"from": from, "host": "192.0.2.10", "port": 587, "username": from, "imap_host": "192.0.2.10", "imap_port": 993,
+		"imap_password": "imap-local-only", "connection_status": "connected", "smtp_status": "connected", "imap_status": "connected"}
+	key, err := f.store.SaveSiteChannel(f.ctx, site, containers.Channel{Channel: "Email", Label: "Acme Textiles", Config: config}, "smtp-local-only")
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return key
+}
+
+func TestMailboxToolsAreScopedToTheTokenSiteAndShowNoPassword(t *testing.T) {
+	f := newChannelFixture(t)
+	key := f.storedMailbox("site-a", "sales@example.com")
+	ok, result, body := f.call("site-a", "email.mailbox.health", map[string]any{})
+	server, _ := result["server"].(map[string]any)
+	if !ok || result["channel"] != key || result["address"] != "sales@example.com" || result["password_saved"] != true || result["imap_password_saved"] != true || server["imap_folder"] != nil || server["host"] != "192.0.2.10" {
+		t.Fatalf("own health: %s", body)
+	}
+	f.clean(body)
+	for tool, arguments := range map[string]map[string]any{"email.mailbox.health": {"channel": key}, "email.mailbox.check": {"channel": key},
+		"email.mailbox.settings": {"channel": key, "label": "Taken"}, "email.mailbox.remove": {"channel": key, "confirm": true}} {
+		if ok, result, body := f.call("site-b", tool, arguments); ok || errorCode(result) != "not_found" {
+			t.Fatalf("%s on another site's mailbox: %s", tool, body)
+		}
+	}
+	if ok, result, body := f.call("site-b", "email.mailbox.health", map[string]any{}); ok || errorCode(result) != "no_mailbox" {
+		t.Fatalf("site without a mailbox: %s", body)
+	}
+	in := mailbox()
+	in["from"] = "SALES@example.com"
+	f.mail = refusedMail
+	if ok, result, body := f.call("site-b", "email.mailbox.connect", in); ok || errorCode(result) != "login_failed" {
+		t.Fatalf("connect of a used mailbox with a wrong login: %s", body)
+	}
+}
+
+func TestMailboxSettingsTestNewSignInAndRemoveWipesBothPasswords(t *testing.T) {
+	f := newChannelFixture(t)
+	key := f.storedMailbox("site-a", "sales@example.com")
+	f.reloadRuntime(f.ctx)
+	ok, result, body := f.call("site-a", "email.mailbox.settings", map[string]any{"channel": key, "label": "Acme Sales", "enabled": false})
+	if !ok || result["label"] != "Acme Sales" || result["enabled"] != false {
+		t.Fatalf("rename and turn off: %s", body)
+	}
+	f.mail = refusedMail
+	if ok, result, body = f.call("site-a", "email.mailbox.settings", map[string]any{"channel": key, "imap_folder": "Support", "password": "new-local-only"}); ok || errorCode(result) != "login_failed" {
+		t.Fatalf("a new sign-in that fails: %s", body)
+	}
+	credential, err := f.store.Credential(f.ctx, "Email", key)
+	if err != nil || credential.Secret != "smtp-local-only" || credential.Config["imap_folder"] != nil {
+		t.Fatal("a failed change was stored")
+	}
+	if ok, result, body = f.call("site-a", "email.mailbox.settings", map[string]any{"channel": key, "host": "10.0.0.5"}); ok || errorCode(result) != "host_refused" {
+		t.Fatalf("private host: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "email.mailbox.remove", map[string]any{"channel": key, "confirm": true}); !ok || result["removed"] != true {
+		t.Fatalf("remove: %s", body)
+	}
+	removed, err := f.store.GetChannel(f.ctx, containers.ChannelRef{Channel: "Email", Key: key})
+	if err != nil || removed.Site != "" || len(removed.ConfiguredSecrets) != 0 || removed.Config["connection_status"] != "disabled" {
+		t.Fatalf("removed mailbox: %+v %v", removed, err)
+	}
+	if len(f.registry.SiteKeys("Email", "site-a")) != 0 {
+		t.Fatal("the runtime still reads the removed mailbox")
 	}
 }
