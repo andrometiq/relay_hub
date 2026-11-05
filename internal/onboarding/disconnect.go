@@ -10,7 +10,8 @@ import (
 )
 
 // Disconnect is the site's own end of the link: the site is turned off and its
-// tokens are revoked, so the Hub stops callbacks and refuses its calls. Its
+// Core service token is revoked, so the Hub stops callbacks and refuses its
+// calls. Tokens an operator issued for other tools stay live. Its
 // channels stay linked and keep their history; re-enrolment turns the site on
 // again with a new token. Numbers to free are removed before this call.
 func (s *Service) Disconnect(ctx context.Context, site string, confirm bool) error {
@@ -30,7 +31,7 @@ func (s *Service) Disconnect(ctx context.Context, site string, confirm bool) err
 	if err != nil {
 		return unavailable()
 	}
-	if err = auth.RevokeSiteTokens(ctx, tx, site); err != nil {
+	if err = auth.RevokeServiceTokens(ctx, tx, site); err != nil {
 		return unavailable()
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO relay_operational_audit(actor_type,account_id,action,outcome) VALUES('api_token',$1,'site.disconnect','completed')`, site); err != nil {

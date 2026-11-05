@@ -88,7 +88,7 @@ These tools let a Core site set up its own WhatsApp numbers. The Hub keeps every
 | `whatsapp.number.settings` | Turns the number, templates or the hourly Meta sync on or off. Turning a number on checks it at once. | The health fields. |
 | `whatsapp.number.pin_reset` | Sets a new two-step PIN that only the Hub knows. Not for WhatsApp Business app numbers. | The health fields. |
 | `whatsapp.number.remove` | Takes the number off the site, wipes its token, deregisters it and unsubscribes the app when no other number uses the WABA. | `removed`, `deregistered`, `unsubscribed`. |
-| `site.disconnect` | Turns the site off, revokes its tokens and writes an audit row. A new setup code or bench enrolment turns it on again; a site that the admin turned off stays off. | `disconnected`. |
+| `site.disconnect` | Turns the site off, revokes its Core service token and writes an audit row. Tokens that an operator issued for the site stay live and work again when the site is turned on. A new setup code or bench enrolment turns it on again; a site that the admin turned off stays off. | `disconnected`. |
 
 A refusal is a tool error with structured content `{"error":{"code":"...","message":"..."}}`. Codes: `not_found`, `no_number`, `channel_required`, `invalid_request`, `confirm_required`, `number_disabled`, `reconnect_required`, `pending_sends`, `not_supported`, `meta_rejected`, `meta_unavailable`, `outcome_unknown` and `hub_unavailable`. A missing, revoked or disabled site token is refused before any tool runs.
 

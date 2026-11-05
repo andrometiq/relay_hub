@@ -43,7 +43,7 @@ func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in sessionInput) (*mcp.CallToolResult, map[string]any, error) {
 			return s.sessionTool(ctx, siteOf, func(site string) (Session, error) { return s.Resume(ctx, site, in.SessionID) })
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "site.disconnect", Description: "Disconnect this site from the Hub after confirm: the site is turned off and its tokens are revoked. Its channels stay linked; enrol again to reconnect."},
+	mcp.AddTool(server, &mcp.Tool{Name: "site.disconnect", Description: "Disconnect this site from the Hub after confirm: the site is turned off and its Core service token is revoked. Its channels stay linked; enrol again to reconnect."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 			Confirm bool `json:"confirm,omitempty"`
 		}) (*mcp.CallToolResult, map[string]any, error) {
