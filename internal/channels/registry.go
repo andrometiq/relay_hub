@@ -163,7 +163,12 @@ func Load(rows []containers.RuntimeCredential) (*Registry, error) {
 			} else {
 				imapPort, _ = strconv.Atoi(text("imap_port"))
 			}
-			c, e := relayemail.New(relayemail.Config{AccountID: v.Key, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")})
+			cfg := relayemail.Config{AccountID: v.Key, Host: host, Port: port, Username: user, Password: v.Secret, From: from, Enabled: true, TrustedAuthservID: text("trusted_authserv_id"), TrustedDSNDomain: text("trusted_dsn_domain"), IMAPHost: text("imap_host"), IMAPPort: imapPort, IMAPUsername: text("imap_username"), IMAPPassword: text("imap_password"), IMAPFolder: text("imap_folder")}
+			c, e := relayemail.New(cfg)
+			// A site chose these servers, so the Hub reaches them only on public addresses.
+			if managed, _ := v.Config["site_managed"].(bool); managed {
+				c, e = relayemail.NewWithDialer(cfg, relayemail.PublicHosts{}.Dial)
+			}
 			if e != nil {
 				return nil, e
 			}

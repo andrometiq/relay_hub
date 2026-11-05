@@ -22,8 +22,9 @@ var channelPublicKeys = map[string]map[string]bool{
 	"WhatsApp": {"phone_id": true, "waba_id": true, "display_number": true, "templates": true, "groups": true, "calls": true, "messages_per_second": true, "sync_metadata": true, "connection_status": true, "verified_at": true,
 		"business_id": true, "onboarding": true, "coexistence": true, "partner_status": true, "register_attempts": true,
 		"checked_at": true, "check_error": true, "webhook_subscribed": true},
-	"Telegram": {"username": true, "webhook_status": true, "checked_at": true},
-	"Email":    {"connection_status": true, "checked_at": true, "host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true},
+	"Telegram": {"username": true, "webhook_status": true, "checked_at": true, "check_error": true, "site_managed": true},
+	"Email": {"connection_status": true, "checked_at": true, "host": true, "port": true, "username": true, "from": true, "imap_host": true, "imap_port": true, "imap_username": true, "imap_folder": true, "trusted_authserv_id": true, "trusted_dsn_domain": true,
+		"smtp_status": true, "imap_status": true, "check_error": true, "site_managed": true},
 }
 
 // statusKeys are written by the Hub after a check. A save keeps the stored

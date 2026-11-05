@@ -4,8 +4,10 @@ import (
 	"context"
 	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/email"
+	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRegistry(t *testing.T) {
@@ -70,5 +72,45 @@ func TestEmailWebhookAccountIsolationAndPayloadClaims(t *testing.T) {
 	}
 	if _, err = r.EmailWebhookSecret("alpha", "short"); err == nil {
 		t.Fatal("short master accepted")
+	}
+}
+
+func TestLoadGuardsMailboxesThatASiteSetUp(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:2525")
+	if err != nil {
+		t.Skip("port 2525 is busy")
+	}
+	defer listener.Close()
+	connected := make(chan struct{}, 4)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connected <- struct{}{}
+			conn.Close()
+		}
+	}()
+	row := func(managed bool) containers.RuntimeCredential {
+		return containers.RuntimeCredential{Key: "mail-a", Channel: "Email", Enabled: true, Secret: "local-only",
+			Config: map[string]any{"host": "127.0.0.1", "port": float64(2525), "username": "sales", "from": "sales@example.com", "site_managed": managed}}
+	}
+	for _, managed := range []bool{true, false} {
+		registry, err := Load([]containers.RuntimeCredential{row(managed)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry.Email["mail-a"].TestSMTP(context.Background())
+		select {
+		case <-connected:
+			if managed {
+				t.Fatal("a site mailbox must not reach a loopback server")
+			}
+		case <-time.After(200 * time.Millisecond):
+			if !managed {
+				t.Fatal("an admin mailbox should still reach its server")
+			}
+		}
 	}
 }
