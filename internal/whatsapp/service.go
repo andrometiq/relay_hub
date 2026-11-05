@@ -180,6 +180,7 @@ type Input struct {
 	RequestKey            string          `json:"request_key,omitempty"`
 	Location              *Location       `json:"location,omitempty"`
 	Contacts              []ContactCard   `json:"contacts,omitempty"`
+	Interactive           *Interactive    `json:"interactive,omitempty"`
 	tracking              string
 	beforeSubmit          func(context.Context) error
 	Before                string   `json:"before,omitempty"`
@@ -230,6 +231,10 @@ var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
 var callIdentifier = regexp.MustCompile(`^[A-Za-z0-9_.=:-]{1,512}$`)
 var templateName = regexp.MustCompile(`^[a-z0-9_]{1,512}$`)
 var language = regexp.MustCompile(`^[a-z]{2,3}(_[A-Z]{2})?$`)
+
+// messageOperations are the direct message sends every number supports. Core
+// reads this list before it sends interactive choices instead of numbered text.
+var messageOperations = []string{"messages.send", "messages.media", "messages.location", "messages.contacts", "messages.interactive", "messages.react"}
 
 // normalizeAccount keeps single-number configurations working: a number
 // without a container uses its own key, and a number with a site origin but no
@@ -405,24 +410,31 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 	case "events.latest":
 		return s.latestEvents(ctx, a)
 	case "capabilities":
-		return map[string]any{"account": a.ID, "site": a.Site, "templates": a.Templates, "flows": a.Templates, "groups": a.Groups, "calls": a.Calls, "recording": false}, nil
-	case "messages.location", "messages.contacts":
+		return map[string]any{"account": a.ID, "site": a.Site, "templates": a.Templates, "flows": a.Templates, "groups": a.Groups, "calls": a.Calls, "recording": false, "operations": messageOperations}, nil
+	case "messages.location", "messages.contacts", "messages.interactive":
 		if !digits.MatchString(in.To) || len(in.To) < 7 || len(in.To) > 15 {
 			return nil, errors.New("valid recipient required")
 		}
 		payload := map[string]any{"messaging_product": "whatsapp", "recipient_type": "individual", "to": in.To}
-		if in.Operation == "messages.location" {
+		switch in.Operation {
+		case "messages.location":
 			if err := in.Location.validate(); err != nil {
 				return nil, err
 			}
 			payload["type"] = "location"
 			payload["location"] = in.Location
-		} else {
+		case "messages.contacts":
 			if err := validateContacts(in.Contacts); err != nil {
 				return nil, err
 			}
 			payload["type"] = "contacts"
 			payload["contacts"] = in.Contacts
+		default:
+			if err := in.Interactive.validate(); err != nil {
+				return nil, err
+			}
+			payload["type"] = "interactive"
+			payload["interactive"] = in.Interactive
 		}
 		if err := replyContext(payload, in.ReplyTo); err != nil {
 			return nil, err

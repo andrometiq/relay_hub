@@ -145,3 +145,27 @@ func TestSharedWebhookRoutesByVerificationTokenAndPayload(t *testing.T) {
 		t.Fatalf("shared webhook: status=%d saved=%d", response.Code, store.saved)
 	}
 }
+
+// Meta sends a customer's poll as type unsupported (code 131051) with no poll
+// content, and a reply-button tap as interactive with the poll message in
+// context.id. Both reach Core unchanged on the realtime lane.
+func TestPollWebhooksKeepMetaReasonAndReplyContext(t *testing.T) {
+	body := []byte(`{"entry":[{"changes":[{"field":"messages","value":{"messaging_product":"whatsapp","messages":[
+{"from":"919999999999","id":"wamid.poll","timestamp":"1792948421","type":"unsupported","unsupported":{"type":"poll_creation"},"errors":[{"code":131051,"title":"Message type unknown","error_data":{"details":"Message type is currently not supported."}}]},
+{"from":"919999999999","id":"wamid.vote","timestamp":"1792948422","type":"interactive","context":{"from":"919876543210","id":"wamid.sent-poll"},"interactive":{"type":"button_reply","button_reply":{"id":"poll-2","title":"Blue"}}}]}}]}]}`)
+	if lane := eventLane(body); lane != "realtime" {
+		t.Fatalf("lane = %s", lane)
+	}
+	incoming := extractIncoming(body)
+	if len(incoming) != 2 {
+		t.Fatalf("got %d messages", len(incoming))
+	}
+	poll, vote := incoming[0], incoming[1]
+	if poll["type"] != "unsupported" || poll["unsupported"].(map[string]any)["type"] != "poll_creation" || poll["errors"].([]any)[0].(map[string]any)["code"] != float64(131051) {
+		t.Fatalf("poll reason lost: %#v", poll)
+	}
+	reply := vote["interactive"].(map[string]any)["button_reply"].(map[string]any)
+	if vote["context"].(map[string]any)["id"] != "wamid.sent-poll" || reply["id"] != "poll-2" {
+		t.Fatalf("vote context lost: %#v", vote)
+	}
+}

@@ -218,6 +218,7 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 			{"operation": "messages.contacts", "contacts": []any{map[string]any{"name": map[string]any{"formatted_name": "சக்தி", "first_name": "சக்தி"}, "phones": []any{map[string]any{"phone": "+919999999999"}}}}},
 			{"operation": "messages.react", "emoji": "👍"},
 			{"operation": "messages.react", "emoji": ""},
+			{"operation": "messages.interactive", "interactive": map[string]any{"type": "button", "body": map[string]any{"text": "Which colour?"}, "action": map[string]any{"buttons": []any{map[string]any{"type": "reply", "reply": map[string]any{"id": "poll-1", "title": "Red"}}, map[string]any{"type": "reply", "reply": map[string]any{"id": "poll-2", "title": "Blue"}}}}}},
 		} {
 			args["to"] = "919999999999"
 			args["reply_to"] = "wamid.original"
@@ -234,6 +235,9 @@ func TestMessageTypesAuthenticatedSimulation(t *testing.T) {
 		}
 		if wire[9].Body["reaction"].(map[string]any)["emoji"] != "" {
 			t.Fatal("WhatsApp clear reaction lost")
+		}
+		if poll := wire[10].Body; poll["type"] != "interactive" || poll["interactive"].(map[string]any)["type"] != "button" || poll["context"].(map[string]any)["message_id"] != "wamid.original" {
+			t.Fatal("WhatsApp poll buttons lost", poll)
 		}
 	})
 	t.Run("sticker-media-is-scoped-and-bytes-match", func(t *testing.T) {

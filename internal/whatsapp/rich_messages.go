@@ -156,3 +156,100 @@ func replyContext(payload map[string]any, replyTo string) error {
 	payload["context"] = map[string]string{"message_id": replyTo}
 	return nil
 }
+
+// Interactive is Meta's reply-button or list message. Core sends choices and
+// polls with it; replies come back as interactive button_reply or list_reply.
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-reply-buttons-messages
+// https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-list-messages
+type Interactive struct {
+	Type   string            `json:"type"`
+	Body   InteractiveText   `json:"body"`
+	Action InteractiveAction `json:"action"`
+}
+type InteractiveText struct {
+	Text string `json:"text"`
+}
+type InteractiveAction struct {
+	Button   string               `json:"button,omitempty"`
+	Buttons  []InteractiveButton  `json:"buttons,omitempty"`
+	Sections []InteractiveSection `json:"sections,omitempty"`
+}
+type InteractiveButton struct {
+	Type  string           `json:"type"`
+	Reply InteractiveReply `json:"reply"`
+}
+type InteractiveReply struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+type InteractiveSection struct {
+	Title string           `json:"title,omitempty"`
+	Rows  []InteractiveRow `json:"rows"`
+}
+type InteractiveRow struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+}
+
+func requiredText(value string, limit int) bool {
+	return strings.TrimSpace(value) != "" && boundedText(value, limit)
+}
+
+// uniqueOption checks one reply ID and title; IDs and titles must be unique.
+func uniqueOption(seen map[string]bool, id, title string, idLimit, titleLimit int) error {
+	if !requiredText(id, idLimit) || !requiredText(title, titleLimit) {
+		return errors.New("interactive option ID or title is empty or too long")
+	}
+	if seen[id] || seen["title:"+title] {
+		return errors.New("interactive option IDs and titles must be unique")
+	}
+	seen[id], seen["title:"+title] = true, true
+	return nil
+}
+
+func (i *Interactive) validate() error {
+	if i == nil {
+		return errors.New("interactive message is required")
+	}
+	seen := map[string]bool{}
+	switch i.Type {
+	case "button":
+		if !requiredText(i.Body.Text, 1024) || i.Action.Button != "" || len(i.Action.Sections) > 0 || len(i.Action.Buttons) < 1 || len(i.Action.Buttons) > 3 {
+			return errors.New("reply buttons need a body of up to 1024 characters and 1-3 buttons")
+		}
+		for _, button := range i.Action.Buttons {
+			if button.Type != "reply" {
+				return errors.New("reply buttons must have type reply")
+			}
+			if err := uniqueOption(seen, button.Reply.ID, button.Reply.Title, 256, 20); err != nil {
+				return err
+			}
+		}
+	case "list":
+		if !requiredText(i.Body.Text, 4096) || !requiredText(i.Action.Button, 20) || len(i.Action.Buttons) > 0 || len(i.Action.Sections) < 1 || len(i.Action.Sections) > 10 {
+			return errors.New("a list needs a body of up to 4096 characters, a button label of up to 20 and 1-10 sections")
+		}
+		rows := 0
+		for _, section := range i.Action.Sections {
+			if !boundedText(section.Title, 24) || len(i.Action.Sections) > 1 && strings.TrimSpace(section.Title) == "" {
+				return errors.New("list section titles have up to 24 characters and are required for more than one section")
+			}
+			for _, row := range section.Rows {
+				if !boundedText(row.Description, 72) {
+					return errors.New("list row description is too long")
+				}
+				if err := uniqueOption(seen, row.ID, row.Title, 200, 24); err != nil {
+					return err
+				}
+			}
+			rows += len(section.Rows)
+		}
+		if rows < 1 || rows > 10 {
+			return errors.New("a list has 1-10 rows")
+		}
+	default:
+		return errors.New("interactive type must be button or list")
+	}
+	return nil
+}

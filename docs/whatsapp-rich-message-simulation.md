@@ -8,9 +8,12 @@ The simulation sends only to local fixtures and uses synthetic records in a disp
 | --- | --- | --- |
 | `messages.location` | Typed `location` object with numeric `latitude`, `longitude`, optional `name`/`address`; optional `reply_to` | Zero coordinates, named Unicode locations, missing/nonfinite/out-of-range coordinates, exact provider JSON, quoted context, durable queue and replay |
 | `messages.contacts` | Typed `contacts` array: names, phones, emails, addresses, organisation, URLs, birthday; optional `reply_to` | All contact fields, Unicode, invalid dates/phones/emails/URLs/country codes, cardinality and payload bounds, exact JSON and queue replay |
+| `messages.interactive` | Typed `interactive` object: `button` with 1-3 reply buttons (ID up to 256, title up to 20 characters) or `list` with a button label and 1-10 rows (ID up to 200, title up to 24, description up to 72); optional `reply_to` | Exact provider JSON for buttons and lists, unique IDs and titles, length and count bounds, unknown types |
 | `messages.react` | `reply_to` target message ID and `emoji`; empty emoji removes the reaction | Set/clear bodies, target validation, size bound, provider rejection without blind retry, durable replay |
 | `messages.media` / `groups.media` | `media_type: sticker`, one `media_id` or `media_url`; optional `reply_to` | Direct/group sticker payloads and quoted context; unsupported caption/filename denied |
 | `whatsapp.media` | `media_id` received as a sticker on the authenticated account | Account evidence, scoped metadata lookup, bounded authenticated binary download, exact bytes/MIME and integrity checks |
+
+WhatsApp Cloud API cannot send native polls. Core sends a poll as `messages.interactive`. A customer's own poll arrives as type `unsupported` with `unsupported.type` `poll_creation` (a vote: `poll_update`) and error 131051, without the question, options or votes; the Hub journals it unchanged and Core shows the reason.
 
 Incoming stickers, locations, contacts, reactions and quote context retain their original structured metadata in the immutable event and message payload. Reaction removal can omit the emoji property; the simulated database round trip preserves that omission. Core separately applies the reaction to its target message instead of using it as a new AI prompt.
 
@@ -26,12 +29,15 @@ Official references inspected on 2026-09-23:
 
 - [Location messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/location-messages/)
 - [Contacts messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/contacts-messages/)
+- [Interactive reply buttons messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-reply-buttons-messages/)
+- [Interactive list messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/interactive-list-messages/)
+- [Unsupported messages webhook](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/unsupported/)
 - [Reaction messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/reaction-messages/)
 - [Reaction webhook including removal](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/messages/reaction/)
 - [Sticker messages](https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/sticker-messages/)
 - [Media retrieval](https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/media/media-api/)
 - [Media management and download](https://developers.facebook.com/documentation/business-messaging/whatsapp/business-phone-numbers/media/)
 
-Tests: `TestRichMessagePayloadSimulation`, `TestRichMessageValidationSimulation`, `TestRichMessageProviderRejectionDoesNotRetry`, `TestRichMessagesDurableDispatchAndIncomingSimulation`, `TestStickerDownloadSimulation`, and `TestStickerDownloadRequiresAccountEvidence`.
+Tests: `TestRichMessagePayloadSimulation`, `TestPollWebhooksKeepMetaReasonAndReplyContext`, `TestRichMessageValidationSimulation`, `TestRichMessageProviderRejectionDoesNotRetry`, `TestRichMessagesDurableDispatchAndIncomingSimulation`, `TestStickerDownloadSimulation`, and `TestStickerDownloadRequiresAccountEvidence`.
 
 These simulations prove the local adapter, persistence, limits and routing behavior. They do not prove live delivery, recipient-client display, Meta account eligibility or a currently valid provider media URL.
