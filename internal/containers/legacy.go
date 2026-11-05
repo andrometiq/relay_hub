@@ -219,7 +219,7 @@ func (s *Store) saveAccountChannel(ctx context.Context, tx pgx.Tx, id string, c 
 			return err
 		}
 	}
-	if err = s.saveChannel(ctx, tx, Channel{Key: id, Channel: c.Channel, Container: id, Enabled: c.Enabled, Config: config}, secret, false); err != nil {
+	if err = s.saveAdminChannel(ctx, tx, Channel{Key: id, Channel: c.Channel, Container: id, Enabled: c.Enabled, Config: config}, secret, false); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `UPDATE relay_channel_credentials SET site_id=$1,assigned_at=coalesce(assigned_at,now())

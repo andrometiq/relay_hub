@@ -85,12 +85,12 @@ These tools let a Core site set up its own WhatsApp numbers. The Hub keeps every
 | --- | --- | --- |
 | `whatsapp.number.health` | Reads the saved state of the number. | `channel`, `label`, `display_number`, `enabled`, `connection_status` (`connected`, `unchecked`, `failed`, `reconnect_required`, `disabled`), `partner_status`, `verified_at`, `checked_at`, `check_error`, `webhook_subscribed`, `pin_kept`, `settings` (`templates`, `sync_metadata`) and `delivery` (last webhook, last Core confirmation, waiting callbacks). |
 | `whatsapp.number.check` | Asks Meta about the number and its webhook subscription. With `repair`, subscribes the app again. | The health fields, `reconnect_required` and a short `profile`. |
-| `whatsapp.number.settings` | Turns the number, templates or the hourly Meta sync on or off. Turning a number on checks it at once. | The health fields. |
+| `whatsapp.number.settings` | Turns the number, templates or the hourly Meta sync on or off. Turning a number on checks it at once. A number that a Hub admin turned off stays off and returns `admin_off`. | The health fields. |
 | `whatsapp.number.pin_reset` | Sets a new two-step PIN that only the Hub knows. Not for WhatsApp Business app numbers. | The health fields. |
 | `whatsapp.number.remove` | Takes the number off the site, wipes its token, deregisters it and unsubscribes the app when no other number uses the WABA. | `removed`, `deregistered`, `unsubscribed`. |
 | `site.disconnect` | Turns the site off, revokes its Core service token and writes an audit row. Tokens that an operator issued for the site stay live and work again when the site is turned on. A new setup code or bench enrolment turns it on again; a site that the admin turned off stays off. | `disconnected`. |
 
-A refusal is a tool error with structured content `{"error":{"code":"...","message":"..."}}`. Codes: `not_found`, `no_number`, `channel_required`, `invalid_request`, `confirm_required`, `number_disabled`, `reconnect_required`, `pending_sends`, `not_supported`, `meta_rejected`, `meta_unavailable`, `outcome_unknown` and `hub_unavailable`. A missing, revoked or disabled site token is refused before any tool runs.
+A refusal is a tool error with structured content `{"error":{"code":"...","message":"..."}}`. Codes: `not_found`, `no_number`, `channel_required`, `invalid_request`, `confirm_required`, `number_disabled`, `reconnect_required`, `pending_sends`, `not_supported`, `meta_rejected`, `meta_unavailable`, `outcome_unknown`, `admin_off` and `hub_unavailable`. `admin_off` means a Hub admin turned the channel off: only an admin can turn it on again, and a site that turns its own channel off can turn it on again. A missing, revoked or disabled site token is refused before any tool runs.
 
 These tools let a Core site connect and manage its own Telegram bots and mailboxes. A token or password goes in only through `connect` or `settings`. The Hub keeps it encrypted and no answer contains it. The Hub stores bots and mailboxes in the signup container ([user guide 5.13](user-guide.md#513-let-sites-add-their-own-bots-and-mailboxes)); without one, `connect` returns `not_available`.
 
@@ -113,7 +113,7 @@ The Hub reaches a site's mail servers only on public internet addresses. It reso
 
 Telegram sends updates only to HTTPS. Without an HTTPS `RELAY_PUBLIC_ORIGIN`, a bot connects and can send, but it gets no messages: `webhook_status` stays `not_registered` and `webhook_missing` says why. The mailbox webhook stays a Hub administrator setting, because its secret is a credential.
 
-More codes for these tools: `no_bot`, `no_mailbox`, `invalid_token`, `bot_changed`, `telegram_unavailable`, `invalid_settings`, `login_failed`, `host_refused`, `host_unknown`, `port_refused`, `in_use`, `not_available`, `rate_limited` and `channel_disabled`.
+More codes for these tools: `no_bot`, `no_mailbox`, `invalid_token`, `bot_changed`, `telegram_unavailable`, `invalid_settings`, `login_failed`, `host_refused`, `host_unknown`, `port_refused`, `in_use`, `not_available`, `rate_limited`, `channel_disabled` and `admin_off`. A bot or mailbox that a Hub admin turned off cannot be turned on, or connected again by any site.
 
 A valid API token can call every tool and operation for its own site. It can never use a channel of another site. The Hub does not check business-record permissions: Core checks them with Frappe DocType permissions before it calls the Hub. Channel enablement, provider capability and provider permissions must also pass.
 

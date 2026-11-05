@@ -30,6 +30,9 @@ func (f *Failure) Error() string { return f.Code + ": " + f.Message }
 // ErrUnavailable is the failure of an unexpected error; its cause is never shown.
 var ErrUnavailable = &Failure{"hub_unavailable", "Relay Hub could not finish this. Try again in a few minutes."}
 
+// ErrAdminOff is a site turning on a channel that a Hub admin turned off.
+var ErrAdminOff = &Failure{"admin_off", "A Relay Hub admin turned this channel off. Ask your Relay provider to turn it on."}
+
 // Missing are the failures of a key lookup, in the provider's own words.
 type Missing struct {
 	// NotFound is a key that is not a channel of the site.

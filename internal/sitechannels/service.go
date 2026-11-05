@@ -113,6 +113,8 @@ func stored(err error) error {
 		return errNotAvailable
 	case errors.Is(err, containers.ErrPendingSends):
 		return errPendingSends
+	case errors.Is(err, containers.ErrAdminOff):
+		return ErrAdminOff
 	}
 	return ErrUnavailable
 }

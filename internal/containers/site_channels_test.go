@@ -202,3 +202,78 @@ func TestSiteChosenMailboxStaysGuardedAfterAnAdminSave(t *testing.T) {
 		t.Fatalf("an admin save dropped the guard: %+v %v", stored.Config, err)
 	}
 }
+
+func TestSiteCannotTurnOnAChannelAnAdminTurnedOff(t *testing.T) {
+	s, bot := siteChannelsStore(t)
+	ctx := t.Context()
+	key, err := s.SaveSiteChannel(ctx, "shop", bot("Acme Textiles"), siteBotToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := ChannelRef{Channel: "Telegram", Key: key}
+	on, off := true, false
+	adminSave := func(enabled bool) {
+		t.Helper()
+		c, err := s.GetChannel(ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Enabled = enabled
+		if err = s.SaveChannel(ctx, c, "", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	siteSave := func(enabled bool, label string) error {
+		c, err := s.GetChannel(ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Enabled, c.Label = enabled, label
+		return s.UpdateSiteChannel(ctx, "shop", c, "")
+	}
+
+	// A site's own off switch is not a lock, also after an admin edits the channel.
+	if err = s.UpdateSiteValues(ctx, "shop", ref, &off, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	adminSave(false)
+	if err = s.UpdateSiteValues(ctx, "shop", ref, &on, map[string]any{}); err != nil {
+		t.Fatalf("the site could not turn its own channel on: %v", err)
+	}
+
+	adminSave(false)
+	if err = s.UpdateSiteValues(ctx, "shop", ref, &on, map[string]any{}); !errors.Is(err, ErrAdminOff) {
+		t.Fatalf("site turned on an admin-off channel: %v", err)
+	}
+	if err = siteSave(true, "Acme Textiles"); !errors.Is(err, ErrAdminOff) {
+		t.Fatalf("site settings turned on an admin-off channel: %v", err)
+	}
+	if err = siteSave(false, "Acme Sales"); err != nil {
+		t.Fatalf("site could not rename an admin-off channel: %v", err)
+	}
+	if err = s.UpdateSiteValues(ctx, "shop", ref, nil, map[string]any{"checked_at": "2026-11-05T00:00:00Z"}); err != nil {
+		t.Fatalf("site could not record a check: %v", err)
+	}
+	if c, _ := s.GetChannel(ctx, ref); c.Enabled {
+		t.Fatal("the admin-off channel is on")
+	}
+	if err = s.RemoveSiteChannel(ctx, "shop", ref); err != nil {
+		t.Fatal(err)
+	}
+	for _, site := range []string{"shop", "other"} {
+		if _, err = s.SaveSiteChannel(ctx, site, bot("Acme Textiles"), siteBotToken); !errors.Is(err, ErrAdminOff) {
+			t.Fatalf("%s reconnected an admin-off bot: %v", site, err)
+		}
+	}
+
+	if _, err = s.DB.Exec(ctx, `UPDATE relay_channel_credentials SET site_id='shop' WHERE channel_key=$1`, key); err != nil {
+		t.Fatal(err)
+	}
+	adminSave(true)
+	if err = s.UpdateSiteValues(ctx, "shop", ref, &off, map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.UpdateSiteValues(ctx, "shop", ref, &on, map[string]any{}); err != nil {
+		t.Fatalf("an admin turned the channel on, but the lock stayed: %v", err)
+	}
+}

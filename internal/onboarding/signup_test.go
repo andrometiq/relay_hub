@@ -302,6 +302,31 @@ func TestCancelAndMetaErrorBeforeTheCode(t *testing.T) {
 	}
 }
 
+func TestSignupKeepsANumberTheAdminTurnedOffOff(t *testing.T) {
+	h := newHarness(t)
+	h.signupContainer()
+	site, _ := h.enrolledSite()
+	if done := h.startSignup(site, "new").finish("FINISH", "230", "120", "code-230"); done.State != "completed" {
+		t.Fatal(done.State)
+	}
+	ref := containers.ChannelRef{Channel: "WhatsApp", Key: "wa-120"}
+	number, err := h.store.GetChannel(h.ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	number.Enabled = false
+	if err = h.store.SaveChannel(h.ctx, number, "", false); err != nil {
+		t.Fatal(err)
+	}
+	failed := h.startSignup(site, "new").finish("FINISH", "230", "120", "code-230")
+	if failed.State != "failed" || failed.Error.Code != "admin_off" || failed.Error.Retryable {
+		t.Fatalf("signup of an admin-off number: %+v", failed.Error)
+	}
+	if number, _ = h.store.GetChannel(h.ctx, ref); number.Enabled {
+		t.Fatal("signup turned on a number the admin turned off")
+	}
+}
+
 func TestNumberOfAnotherSiteIsRefused(t *testing.T) {
 	h := newHarness(t)
 	h.signupContainer()

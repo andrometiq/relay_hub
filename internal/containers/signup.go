@@ -47,7 +47,7 @@ func (s *Store) SignupApp(ctx context.Context) (SignupApp, error) {
 // is the idempotency key: the same site updates its channel, another site gets
 // ErrNumberInUse. A number the site already uses in another container is
 // adopted: it moves to the signup container and keeps its key, so Core keeps
-// one channel and its history.
+// one channel and its history. A number that an admin turned off is ErrAdminOff.
 func (s *Store) SaveSignupChannel(ctx context.Context, site string, c Channel, secret string) (string, error) {
 	if c.Channel != "WhatsApp" {
 		return "", errors.New("signup channels are WhatsApp numbers")
@@ -71,6 +71,9 @@ func (s *Store) SaveSignupChannel(ctx context.Context, site string, c Channel, s
 	}
 	if foreign {
 		return "", ErrNumberInUse
+	}
+	if err = siteMayTurnOn(ctx, tx, ChannelRef{Channel: c.Channel, Key: c.Key}); err != nil {
+		return "", err
 	}
 	if err = s.saveChannel(ctx, tx, c, secret, false); err != nil {
 		return "", err

@@ -106,10 +106,45 @@ func (s *Store) SaveChannel(ctx context.Context, c Channel, secret string, creat
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err = s.saveChannel(ctx, tx, c, secret, create); err != nil {
+	if err = s.saveAdminChannel(ctx, tx, c, secret, create); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// ErrAdminOff means a Hub admin turned the channel off, so a site cannot turn it on.
+var ErrAdminOff = errors.New("a Hub admin turned this channel off")
+
+// saveAdminChannel saves a channel for an admin and records the admin's
+// switch: turning it off locks it against site tools, turning it on unlocks it.
+// A save that leaves a channel off keeps the lock as it is.
+func (s *Store) saveAdminChannel(ctx context.Context, tx pgx.Tx, c Channel, secret string, create bool) error {
+	wasOn := true
+	err := tx.QueryRow(ctx, `SELECT enabled FROM relay_channel_credentials WHERE channel=$1 AND channel_key=$2 FOR UPDATE`, c.Channel, c.Key).Scan(&wasOn)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if err = s.saveChannel(ctx, tx, c, secret, create); err != nil {
+		return err
+	}
+	if !c.Enabled && !wasOn {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET admin_off=$3 WHERE channel=$1 AND channel_key=$2`, c.Channel, c.Key, !c.Enabled)
+	return err
+}
+
+// siteMayTurnOn refuses a site turning on a channel that an admin turned off.
+func siteMayTurnOn(ctx context.Context, tx pgx.Tx, ref ChannelRef) error {
+	var locked bool
+	err := tx.QueryRow(ctx, `SELECT admin_off FROM relay_channel_credentials WHERE channel=$1 AND channel_key=$2`, ref.Channel, ref.Key).Scan(&locked)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if locked {
+		return ErrAdminOff
+	}
+	return nil
 }
 
 func validateChannel(c Channel) error {

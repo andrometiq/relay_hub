@@ -65,11 +65,13 @@ func (s *Store) SaveSiteChannel(ctx context.Context, site string, c Channel, sec
 // siteChannelKey is the key of a channel that site removed, with the address,
 // moved into container. A new address, or one that another site removed, gets
 // a new random key; the old row gives up the address and keeps its history.
+// A bot or mailbox that an admin turned off is ErrAdminOff for every site.
 func siteChannelKey(ctx context.Context, tx pgx.Tx, site, channel, address, container string) (string, error) {
 	var key, owner, removedFrom string
 	var live bool
-	err := tx.QueryRow(ctx, `SELECT channel_key,coalesce(site_id,''),length(secret_ciphertext)>0,coalesce(removed_from,'') FROM relay_channel_credentials
- WHERE channel=$1 AND address=$2 FOR UPDATE`, channel, address).Scan(&key, &owner, &live, &removedFrom)
+	var locked bool
+	err := tx.QueryRow(ctx, `SELECT channel_key,coalesce(site_id,''),length(secret_ciphertext)>0,coalesce(removed_from,''),admin_off FROM relay_channel_credentials
+ WHERE channel=$1 AND address=$2 FOR UPDATE`, channel, address).Scan(&key, &owner, &live, &removedFrom, &locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return newSiteChannelKey(channel)
 	}
@@ -78,6 +80,9 @@ func siteChannelKey(ctx context.Context, tx pgx.Tx, site, channel, address, cont
 	}
 	if owner != "" || live {
 		return "", ErrChannelInUse
+	}
+	if locked {
+		return "", ErrAdminOff
 	}
 	if removedFrom != site {
 		if _, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET address=NULL,updated_at=now() WHERE channel=$1 AND channel_key=$2`, channel, key); err != nil {
@@ -99,7 +104,8 @@ func newSiteChannelKey(channel string) (string, error) {
 
 // UpdateSiteChannel saves the settings of one channel of site. c carries the
 // whole public configuration; a blank secret keeps the stored one. A channel
-// of another site is pgx.ErrNoRows.
+// of another site is pgx.ErrNoRows; an enabled channel that an admin turned
+// off is ErrAdminOff.
 func (s *Store) UpdateSiteChannel(ctx context.Context, site string, c Channel, secret string) error {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -110,6 +116,11 @@ func (s *Store) UpdateSiteChannel(ctx context.Context, site string, c Channel, s
 		c.Channel, c.Key, site).Scan(&c.Container); err != nil {
 		return err
 	}
+	if c.Enabled {
+		if err = siteMayTurnOn(ctx, tx, ChannelRef{Channel: c.Channel, Key: c.Key}); err != nil {
+			return err
+		}
+	}
 	if err = s.saveChannel(ctx, tx, c, secret, false); err != nil {
 		return err
 	}
@@ -118,7 +129,8 @@ func (s *Store) UpdateSiteChannel(ctx context.Context, site string, c Channel, s
 
 // UpdateSiteValues writes public settings or check results of one channel of
 // site and tells the site. A nil enabled keeps the flag. A channel of another
-// site is pgx.ErrNoRows.
+// site is pgx.ErrNoRows; turning on a channel that an admin turned off is
+// ErrAdminOff.
 func (s *Store) UpdateSiteValues(ctx context.Context, site string, ref ChannelRef, enabled *bool, values map[string]any) error {
 	for name := range values {
 		if !channelPublicKeys[ref.Channel][name] {
@@ -134,6 +146,11 @@ func (s *Store) UpdateSiteValues(ctx context.Context, site string, ref ChannelRe
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if enabled != nil && *enabled {
+		if err = siteMayTurnOn(ctx, tx, ref); err != nil {
+			return err
+		}
+	}
 	tag, err := tx.Exec(ctx, `UPDATE relay_channel_credentials SET enabled=coalesce($4,enabled),config=config||$5::jsonb,updated_at=now()
  WHERE channel=$2 AND channel_key=$3 AND site_id=$1`, site, ref.Channel, ref.Key, enabled, raw)
 	if err != nil {

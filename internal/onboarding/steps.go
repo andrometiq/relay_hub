@@ -275,6 +275,9 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 	if errors.Is(err, containers.ErrNumberInUse) || errors.Is(err, containers.ErrConflict) {
 		return &stepError{Code: "number_in_use", Message: "This number is already connected to another Relay site."}
 	}
+	if errors.Is(err, containers.ErrAdminOff) {
+		return &stepError{Code: "admin_off", Message: "A Relay Hub admin turned this number off. Ask your Relay provider to turn it on."}
+	}
 	if err != nil {
 		return err
 	}

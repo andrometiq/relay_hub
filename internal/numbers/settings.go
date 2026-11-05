@@ -2,8 +2,10 @@ package numbers
 
 import (
 	"context"
+	"errors"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/sitechannels"
 )
 
 // SettingsInput changes the switches of one number. A nil field keeps its value.
@@ -18,7 +20,8 @@ var errNoChange = &Failure{Code: "invalid_request", Message: "Choose a setting t
 
 // SaveSettings turns a number on or off and changes its template and hourly
 // Meta sync switches. Only public settings change; a number Meta removed must
-// be connected again before it can be turned on.
+// be connected again before it can be turned on, and one a Hub admin turned
+// off stays off.
 func (s *Service) SaveSettings(ctx context.Context, site string, in SettingsInput) (Health, error) {
 	if in.Enabled == nil && in.Templates == nil && in.SyncMetadata == nil {
 		return Health{}, errNoChange
@@ -43,7 +46,11 @@ func (s *Service) SaveSettings(ctx context.Context, site string, in SettingsInpu
 	} else if in.Enabled != nil && !*in.Enabled {
 		values["connection_status"] = "disabled"
 	}
-	if err = s.Store.UpdateSiteValues(ctx, site, containers.ChannelRef{Channel: "WhatsApp", Key: c.Key}, in.Enabled, values); err != nil {
+	err = s.Store.UpdateSiteValues(ctx, site, containers.ChannelRef{Channel: "WhatsApp", Key: c.Key}, in.Enabled, values)
+	if errors.Is(err, containers.ErrAdminOff) {
+		return Health{}, sitechannels.ErrAdminOff
+	}
+	if err != nil {
 		return Health{}, errUnavailable
 	}
 	if err = s.Reload(ctx); err != nil {

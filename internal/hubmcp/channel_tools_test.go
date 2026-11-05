@@ -314,6 +314,25 @@ func TestBotRemoveWaitsForSendsWipesTheTokenAndKeepsTheKey(t *testing.T) {
 	}
 }
 
+func TestBotAnAdminTurnedOffStaysOff(t *testing.T) {
+	f := newChannelFixture(t)
+	_, result, _ := f.connectBot("site-a", botTokenA)
+	key := result["channel"].(string)
+	ref := containers.ChannelRef{Channel: "Telegram", Key: key}
+	adminTurnsOff(t, f.store, ref)
+	ok, result, body := f.call("site-a", "telegram.bot.settings", map[string]any{"channel": key, "enabled": true})
+	if ok || errorCode(result) != "admin_off" || !strings.Contains(body, "Ask your Relay provider") {
+		t.Fatalf("turn on a bot the admin turned off: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "telegram.bot.settings", map[string]any{"channel": key, "label": "Acme Sales"}); !ok || result["enabled"] != false {
+		t.Fatalf("rename an admin-off bot: %s", body)
+	}
+	f.call("site-a", "telegram.bot.remove", map[string]any{"channel": key, "confirm": true})
+	if ok, result, body = f.connectBot("site-b", botTokenA); ok || errorCode(result) != "admin_off" {
+		t.Fatalf("another site connected an admin-off bot: %s", body)
+	}
+}
+
 func TestBotConnectIsRateLimited(t *testing.T) {
 	f := newChannelFixture(t)
 	for range 10 {

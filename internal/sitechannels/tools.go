@@ -39,7 +39,7 @@ func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in checkInput) (*mcp.CallToolResult, map[string]any, error) {
 			return Run(ctx, siteOf, func(site string) (any, error) { return s.CheckBot(ctx, site, in.Channel, in.Repair) })
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "telegram.bot.settings", Description: "Rename one Telegram bot of this site, turn it on or off, or save a new token of the same bot. Omitted fields keep their values."},
+	mcp.AddTool(server, &mcp.Tool{Name: "telegram.bot.settings", Description: "Rename one Telegram bot of this site, turn it on or off, or save a new token of the same bot. Omitted fields keep their values. A bot a Hub admin turned off stays off (admin_off)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in BotSettings) (*mcp.CallToolResult, map[string]any, error) {
 			return Run(ctx, siteOf, func(site string) (any, error) { return s.SaveBotSettings(ctx, site, in) })
 		})
@@ -59,7 +59,7 @@ func (s *Service) AddTools(server *mcp.Server, siteOf SiteOf) {
 		func(ctx context.Context, _ *mcp.CallToolRequest, in channelInput) (*mcp.CallToolResult, map[string]any, error) {
 			return Run(ctx, siteOf, func(site string) (any, error) { return s.CheckMailbox(ctx, site, in.Channel) })
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: "email.mailbox.settings", Description: "Rename one mailbox of this site, turn it on or off, or change how the Hub signs in. New sign-in settings are tested before they are stored. Omitted fields keep their values."},
+	mcp.AddTool(server, &mcp.Tool{Name: "email.mailbox.settings", Description: "Rename one mailbox of this site, turn it on or off, or change how the Hub signs in. New sign-in settings are tested before they are stored. Omitted fields keep their values. A mailbox a Hub admin turned off stays off (admin_off)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in MailboxSettings) (*mcp.CallToolResult, map[string]any, error) {
 			return Run(ctx, siteOf, func(site string) (any, error) { return s.SaveMailboxSettings(ctx, site, in) })
 		})

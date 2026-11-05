@@ -342,6 +342,34 @@ func TestNumberSettingsChangeOnlyTheSiteNumber(t *testing.T) {
 	f.noSecret(body)
 }
 
+// adminTurnsOff saves a channel off the way the Hub admin directory does.
+func adminTurnsOff(t *testing.T, store *containers.Store, ref containers.ChannelRef) {
+	t.Helper()
+	c, err := store.GetChannel(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Enabled = false
+	if err = store.SaveChannel(t.Context(), c, "", false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNumberAnAdminTurnedOffStaysOff(t *testing.T) {
+	f := newNumberFixture(t)
+	adminTurnsOff(t, f.store, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-121"})
+	ok, result, body := f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-121", "enabled": true})
+	if ok || errorCode(result) != "admin_off" || !strings.Contains(body, "Relay Hub admin turned this channel off") {
+		t.Fatalf("turn on a number the admin turned off: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-121", "templates": false}); !ok || result["enabled"] != false {
+		t.Fatalf("other settings of an admin-off number: %s", body)
+	}
+	if c, _ := f.store.GetChannel(f.ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-121"}); c.Enabled {
+		t.Fatal("the number is on")
+	}
+}
+
 func TestPINResetKeepsTheNewPINInTheHubOnly(t *testing.T) {
 	f := newNumberFixture(t)
 	ok, result, body := f.call("site-a", "whatsapp.number.pin_reset", map[string]any{"channel": "wa-120"})
