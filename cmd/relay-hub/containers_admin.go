@@ -379,7 +379,7 @@ func (a directoryAdmin) checkChannel(ctx context.Context, ch *containers.Channel
 		ch.Config["connection_status"] = "connected"
 		ch.Config["verified_at"] = time.Now().UTC().Format(time.RFC3339)
 	case "Email":
-		if err := validateEmailSettings(candidate.Config, candidate.Secret); err != nil {
+		if err := channels.ValidateEmailSettings(candidate.Config, candidate.Secret); err != nil {
 			return err
 		}
 		fallthrough

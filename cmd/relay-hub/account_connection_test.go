@@ -268,7 +268,7 @@ func TestEmailHostIPv6Validation(t *testing.T) {
 		{"2001:::1", false}, {"1:2:3", false}, {"fe80::1%eth0", false}, {"::ffff:999.0.0.1", false}, {"smtp.invalid:587", false}, {"https://smtp.invalid", false},
 	} {
 		config := map[string]any{"host": tc.host, "imap_host": tc.host, "port": float64(587), "username": "local", "from": "sender@example.invalid"}
-		if err := validateEmailSettings(config, "local-only"); (err == nil) != tc.valid {
+		if err := channels.ValidateEmailSettings(config, "local-only"); (err == nil) != tc.valid {
 			t.Errorf("host %q valid=%v: %v", tc.host, tc.valid, err)
 		}
 	}

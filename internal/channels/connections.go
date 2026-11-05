@@ -33,25 +33,10 @@ func (r *Registry) TelegramUsername(ctx context.Context, account string) (string
 	return client.Username(ctx)
 }
 
-type EmailConnection struct {
-	SMTP string `json:"smtp"`
-	IMAP string `json:"imap"`
-}
-
 func (r *Registry) TestEmailConnection(ctx context.Context, account string) (EmailConnection, error) {
 	client := r.snapshot().email[account]
 	if client == nil {
 		return EmailConnection{}, errors.New("Email account is not active")
 	}
-	result := EmailConnection{SMTP: "connected", IMAP: "not_configured"}
-	if client.TestSMTP(ctx) != nil {
-		result.SMTP = "failed"
-	}
-	if client.MailboxConfigured() {
-		result.IMAP = "connected"
-		if client.TestMailbox(ctx) != nil {
-			result.IMAP = "failed"
-		}
-	}
-	return result, nil
+	return TestEmail(ctx, client), nil
 }
