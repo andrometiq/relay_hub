@@ -60,7 +60,7 @@ func TestSiteChannelWithoutSignupContainerIsRefused(t *testing.T) {
 	}
 }
 
-func TestRemovedSiteChannelIsWipedAndKeepsItsKeyWhenConnectedAgain(t *testing.T) {
+func TestRemovedSiteChannelIsWipedAndKeepsItsKeyOnlyForItsSite(t *testing.T) {
 	s, bot := siteChannelsStore(t)
 	ctx := t.Context()
 	key, err := s.SaveSiteChannel(ctx, "shop", bot("Acme Textiles"), siteBotToken)
@@ -87,9 +87,58 @@ func TestRemovedSiteChannelIsWipedAndKeepsItsKeyWhenConnectedAgain(t *testing.T)
 	if err != nil || removed.Site != "" || removed.Enabled || len(removed.ConfiguredSecrets) != 0 || removed.Config["webhook_status"] != "removed" {
 		t.Fatalf("removed %+v %v", removed, err)
 	}
-	again, err := s.SaveSiteChannel(ctx, "other", bot("Acme Textiles"), siteBotToken)
+	again, err := s.SaveSiteChannel(ctx, "shop", bot("Acme Textiles"), siteBotToken)
 	if err != nil || again != key {
-		t.Fatalf("connected again as %s: %v", again, err)
+		t.Fatalf("the same site connected again as %s: %v", again, err)
+	}
+	if err = s.RemoveSiteChannel(ctx, "shop", ref); err != nil {
+		t.Fatal(err)
+	}
+	// An update to the bot after the removal waits for its next owner.
+	if _, err = s.DB.Exec(ctx, `INSERT INTO relay_channel_events(account,channel,direction,provider_id) VALUES($1,'Telegram','inbound','update-1')`, key); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := s.SaveSiteChannel(ctx, "other", bot("Acme Textiles"), siteBotToken)
+	if err != nil || moved == key || !strings.HasPrefix(moved, "tg-") {
+		t.Fatalf("another site connected the bot as %s: %v", moved, err)
+	}
+	if held, err := s.HeldEvents(ctx, ChannelRef{Channel: "Telegram", Key: moved}); err != nil || held != 0 {
+		t.Fatalf("the new owner holds %d old events: %v", held, err)
+	}
+	var history, otherRows int
+	if err = s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM relay_channel_outbox WHERE account=$1 AND site_id='shop')
+ + (SELECT count(*) FROM relay_channel_events WHERE account=$1 AND site_id IS NULL),
+ (SELECT count(*) FROM relay_channel_outbox WHERE site_id='other') + (SELECT count(*) FROM relay_channel_events WHERE site_id='other')`, key).Scan(&history, &otherRows); err != nil || history != 2 || otherRows != 0 {
+		t.Fatalf("history of the old key %d, of the new owner %d: %v", history, otherRows, err)
+	}
+	old, err := s.GetChannel(ctx, ref)
+	if err != nil || old.Address != "" || old.Site != "" {
+		t.Fatalf("the old row kept the bot: %+v %v", old, err)
+	}
+	current, err := s.GetChannel(ctx, ChannelRef{Channel: "Telegram", Key: moved})
+	if err != nil || current.Site != "other" || current.Address != "123456" || current.WebhookPath == old.WebhookPath {
+		t.Fatalf("new owner's bot %+v %v", current, err)
+	}
+	if _, err = s.SaveSiteChannel(ctx, "shop", bot("Acme Textiles"), siteBotToken); !errors.Is(err, ErrChannelInUse) {
+		t.Fatalf("the first site took the bot back: %v", err)
+	}
+}
+
+func TestChannelRemovedBeforeOwnersWereKeptGetsANewKey(t *testing.T) {
+	s, bot := siteChannelsStore(t)
+	ctx := t.Context()
+	key, err := s.SaveSiteChannel(ctx, "shop", bot("Acme Textiles"), siteBotToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RemoveSiteChannel(ctx, "shop", ChannelRef{Channel: "Telegram", Key: key}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.DB.Exec(ctx, `UPDATE relay_channel_credentials SET removed_from=NULL WHERE channel_key=$1`, key); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.SaveSiteChannel(ctx, "shop", bot("Acme Textiles"), siteBotToken); err != nil || again == key {
+		t.Fatalf("a channel of an unknown owner kept its key %s: %v", again, err)
 	}
 }
 

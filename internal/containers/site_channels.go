@@ -27,8 +27,9 @@ var keyPrefix = map[string]string{"Telegram": "tg-", "Email": "mail-"}
 // SaveSiteChannel stores a Telegram bot or mailbox that a site connects
 // itself, in the signup container, and links it to the site in one
 // transaction. It returns the channel key. The bot id or From address is the
-// identity: a removed channel with that identity is reused, so its key and
-// history stay; a live one, of any site, is ErrChannelInUse.
+// identity: a channel that this site removed is reused, so its key and history
+// stay; a channel that another site removed gets a new key, so no history
+// moves between sites; a live one, of any site, is ErrChannelInUse.
 func (s *Store) SaveSiteChannel(ctx context.Context, site string, c Channel, secret string) (string, error) {
 	if keyPrefix[c.Channel] == "" {
 		return "", errors.New("site channels are Telegram bots or mailboxes")
@@ -47,7 +48,7 @@ func (s *Store) SaveSiteChannel(ctx context.Context, site string, c Channel, sec
 	} else if err != nil {
 		return "", err
 	}
-	if c.Key, err = siteChannelKey(ctx, tx, c.Channel, address, c.Container); err != nil {
+	if c.Key, err = siteChannelKey(ctx, tx, site, c.Channel, address, c.Container); err != nil {
 		return "", err
 	}
 	c.Enabled = true
@@ -61,19 +62,16 @@ func (s *Store) SaveSiteChannel(ctx context.Context, site string, c Channel, sec
 	return c.Key, tx.Commit(ctx)
 }
 
-// siteChannelKey is the key of a removed channel with the address, moved into
-// container, or a new random key when the address is new.
-func siteChannelKey(ctx context.Context, tx pgx.Tx, channel, address, container string) (string, error) {
-	var key, owner string
+// siteChannelKey is the key of a channel that site removed, with the address,
+// moved into container. A new address, or one that another site removed, gets
+// a new random key; the old row gives up the address and keeps its history.
+func siteChannelKey(ctx context.Context, tx pgx.Tx, site, channel, address, container string) (string, error) {
+	var key, owner, removedFrom string
 	var live bool
-	err := tx.QueryRow(ctx, `SELECT channel_key,coalesce(site_id,''),length(secret_ciphertext)>0 FROM relay_channel_credentials
- WHERE channel=$1 AND address=$2 FOR UPDATE`, channel, address).Scan(&key, &owner, &live)
+	err := tx.QueryRow(ctx, `SELECT channel_key,coalesce(site_id,''),length(secret_ciphertext)>0,coalesce(removed_from,'') FROM relay_channel_credentials
+ WHERE channel=$1 AND address=$2 FOR UPDATE`, channel, address).Scan(&key, &owner, &live, &removedFrom)
 	if errors.Is(err, pgx.ErrNoRows) {
-		random := make([]byte, 8)
-		if _, err = rand.Read(random); err != nil {
-			return "", err
-		}
-		return keyPrefix[channel] + hex.EncodeToString(random), nil
+		return newSiteChannelKey(channel)
 	}
 	if err != nil {
 		return "", err
@@ -81,8 +79,22 @@ func siteChannelKey(ctx context.Context, tx pgx.Tx, channel, address, container 
 	if owner != "" || live {
 		return "", ErrChannelInUse
 	}
-	_, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET container_id=$3,updated_at=now() WHERE channel=$1 AND channel_key=$2`, channel, key, container)
+	if removedFrom != site {
+		if _, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET address=NULL,updated_at=now() WHERE channel=$1 AND channel_key=$2`, channel, key); err != nil {
+			return "", err
+		}
+		return newSiteChannelKey(channel)
+	}
+	_, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET container_id=$3,removed_from=NULL,updated_at=now() WHERE channel=$1 AND channel_key=$2`, channel, key, container)
 	return key, err
+}
+
+func newSiteChannelKey(channel string) (string, error) {
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	return keyPrefix[channel] + hex.EncodeToString(random), nil
 }
 
 // UpdateSiteChannel saves the settings of one channel of site. c carries the
@@ -138,7 +150,8 @@ func (s *Store) UpdateSiteValues(ctx context.Context, site string, ref ChannelRe
 
 // RemoveSiteChannel takes one channel away from site. Its token, password and
 // other private values are wiped, it is turned off and unlinked, and the site
-// gets a relay_channels event. The row and its address stay for history, the
+// gets a relay_channels event. removed_from keeps the site, so only it gets
+// the key back on a reconnect. The row and its address stay for history, the
 // outbox and a later connect. It refuses while the site has open sends on it.
 func (s *Store) RemoveSiteChannel(ctx context.Context, site string, ref ChannelRef) error {
 	tx, err := s.DB.Begin(ctx)
@@ -157,10 +170,10 @@ func (s *Store) RemoveSiteChannel(ctx context.Context, site string, ref ChannelR
 	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET enabled=false,site_id=NULL,assigned_at=NULL,
+	if _, err = tx.Exec(ctx, `UPDATE relay_channel_credentials SET enabled=false,site_id=NULL,assigned_at=NULL,removed_from=$6,
  secret_ciphertext=''::bytea,secret_nonce=''::bytea,config_ciphertext=$3,config_nonce=$4,
  config=(config-'register_attempts')||$5::jsonb,updated_at=now()
- WHERE channel=$1 AND channel_key=$2`, ref.Channel, ref.Key, cipher, nonce, removedStatus[ref.Channel]); err != nil {
+ WHERE channel=$1 AND channel_key=$2`, ref.Channel, ref.Key, cipher, nonce, removedStatus[ref.Channel], site); err != nil {
 		return err
 	}
 	if err = notifyChannels(ctx, tx, site); err != nil {

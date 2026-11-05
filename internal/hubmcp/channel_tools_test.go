@@ -306,6 +306,12 @@ func TestBotRemoveWaitsForSendsWipesTheTokenAndKeepsTheKey(t *testing.T) {
 	if ok, result, body = f.connectBot("site-a", botTokenA); !ok || result["channel"] != key {
 		t.Fatalf("connect again: %s", body)
 	}
+	if ok, _, body = f.call("site-a", "telegram.bot.remove", map[string]any{"channel": key, "confirm": true}); !ok {
+		t.Fatalf("remove again: %s", body)
+	}
+	if ok, result, body = f.connectBot("site-b", botTokenA); !ok || result["channel"] == key {
+		t.Fatalf("another site got the old key and its history: %s", body)
+	}
 }
 
 func TestBotConnectIsRateLimited(t *testing.T) {
