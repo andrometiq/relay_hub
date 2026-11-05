@@ -509,7 +509,11 @@ func runSimulation(validateDatabase func(string) error) error {
 	if err != nil {
 		return err
 	}
-	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService, Numbers: siteNumbers})
+	siteChannels, err := sim.siteChannels()
+	if err != nil {
+		return err
+	}
+	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService, Numbers: siteNumbers, Channels: siteChannels})
 	if err != nil {
 		return err
 	}

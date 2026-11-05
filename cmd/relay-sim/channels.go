@@ -117,7 +117,7 @@ func (s *simulation) emitChannel(ctx context.Context, channel, key string, paylo
 }
 func (s *simulation) providerControl(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" && r.URL.Path == "/_sim/providers" {
-		writeJSON(w, map[string]any{"telegram": s.telegram.state.snapshot(), "email": s.email.state.snapshot(), "records": s.meta.records.snapshot()})
+		writeJSON(w, map[string]any{"telegram": s.telegram.state.snapshot(), "telegram_webhooks": s.telegram.webhooks(), "email": s.email.state.snapshot(), "records": s.meta.records.snapshot()})
 		return
 	}
 	if r.Method != "POST" {
@@ -138,6 +138,7 @@ func (s *simulation) providerControl(w http.ResponseWriter, r *http.Request) {
 		Webhook        bool            `json:"webhook"`
 		Invalid        bool            `json:"invalid_signature"`
 		Key            string          `json:"key"`
+		Bot            string          `json:"bot"`
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 9<<20)).Decode(&in) != nil {
 		http.Error(w, "invalid request", 400)
@@ -153,6 +154,13 @@ func (s *simulation) providerControl(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			result["status"], err = s.emitChannel(r.Context(), "telegram", in.Key, in.Payload, in.Invalid)
 		}
+	case "/_sim/telegram/deliver":
+		if in.Bot == "" {
+			in.Bot = simulationBots[simulationBotToken]
+		}
+		result["status"], err = s.deliverTelegram(r.Context(), in.Bot, in.Payload, in.Invalid)
+	case "/_sim/telegram/clear-webhook":
+		s.telegram.clearWebhook(in.Bot)
 	case "/_sim/telegram/queue":
 		err = s.telegram.queue(in.Payload)
 	case "/_sim/email/faults":
