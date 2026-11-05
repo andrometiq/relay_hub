@@ -17,6 +17,7 @@ import (
 )
 
 func TestDestinationGuards(t *testing.T) {
+	t.Setenv("RELAY_SIM_DB_PORT", "")
 	for _, raw := range []string{"http://localhost:80", "http://example.com", "https://127.0.0.1", "http://0.0.0.0:1", "http://169.254.169.254", "http://127.0.0.1:1/path", "http://user:secret@127.0.0.1", "http://127.0.0.1?next=evil", "http://127.0.0.1", "http://127.0.0.1:0", "http://127.0.0.1:65536", "http://127.0.0.1:18091/"} {
 		if _, err := localURL(raw); err == nil {
 			t.Errorf("accepted %s", raw)
@@ -34,6 +35,22 @@ func TestDestinationGuards(t *testing.T) {
 	}
 	if err := simulationDSN("postgres://u:p@127.0.0.1:18433/relay_hub_sim?sslmode=disable"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSimulationDatabasePortIsConfigurable(t *testing.T) {
+	t.Setenv("RELAY_SIM_DB_PORT", "18533")
+	if simulationDSN("postgres://u:p@127.0.0.1:18533/relay_hub_sim") != nil {
+		t.Fatal("configured port refused")
+	}
+	if simulationDSN("postgres://u:p@127.0.0.1:18433/relay_hub_sim") == nil {
+		t.Fatal("default port accepted after the port was moved")
+	}
+	for _, value := range []string{"0", "65536", "port"} {
+		t.Setenv("RELAY_SIM_DB_PORT", value)
+		if simulationDSN("postgres://u:p@127.0.0.1:18433/relay_hub_sim") == nil {
+			t.Errorf("invalid port %q accepted", value)
+		}
 	}
 }
 

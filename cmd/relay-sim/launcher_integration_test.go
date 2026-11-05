@@ -153,7 +153,8 @@ func TestLauncherPostgres(t *testing.T) {
 
 func isolatedSimulationDSN(dsn string) error {
 	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != 18433 || (cfg.Database != "relay_hub_v1_test" && cfg.Database != "relay_hub_test") || !strings.HasPrefix(cfg.RuntimeParams["search_path"], "relay_sim_test_") {
+	port, portErr := simulationDatabasePort()
+	if err != nil || portErr != nil || cfg.Host != "127.0.0.1" || cfg.Port != port || (cfg.Database != "relay_hub_v1_test" && cfg.Database != "relay_hub_test") || !strings.HasPrefix(cfg.RuntimeParams["search_path"], "relay_sim_test_") {
 		return errors.New("launcher tests require an isolated relay_hub_v1_test schema")
 	}
 	for _, f := range cfg.Fallbacks {
@@ -170,8 +171,9 @@ func isolatedLauncherDatabase(t *testing.T) string {
 		t.Skip("requires RELAY_TEST_DATABASE_URL on local relay_hub_v1_test")
 	}
 	cfg, err := pgx.ParseConfig(dsn)
-	if err != nil || cfg.Host != "127.0.0.1" || cfg.Port != 18433 || (cfg.Database != "relay_hub_v1_test" && cfg.Database != "relay_hub_test") {
-		t.Fatal("unsafe launcher test database")
+	port, portErr := simulationDatabasePort()
+	if err != nil || portErr != nil || cfg.Host != "127.0.0.1" || cfg.Port != port || (cfg.Database != "relay_hub_v1_test" && cfg.Database != "relay_hub_test") {
+		t.Fatal("unsafe launcher test database; set RELAY_SIM_DB_PORT when it is not 18433")
 	}
 	schema := fmt.Sprintf("relay_sim_test_%d", time.Now().UnixNano())
 	conn, err := pgx.Connect(context.Background(), dsn)

@@ -102,6 +102,8 @@ SMTP submission, TLS IMAP ingestion, authenticated webhooks, callback ACKs,
 restart deduplication and DSN outcome callbacks. It does not use `channel_hub`
 or `relay_hub_sim`.
 
+The launcher and its tests accept PostgreSQL only on `127.0.0.1:18433`. Set `RELAY_SIM_DB_PORT` to use another loopback port, for example a throwaway test database beside a live Hub: `RELAY_SIM_DB_PORT=18533 RELAY_TEST_DATABASE_URL=postgres://user:pass@127.0.0.1:18533/relay_hub_v1_test go test ./cmd/relay-sim/`.
+
 Provider tests additionally cover concurrent Telegram sends, before/after
 acceptance faults, media round trips, pending-fault persistence, TLS trust and
 hostname rejection, SMTP stage classifications, MIME/BCC fidelity, mailbox

@@ -36,13 +36,27 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// simulationDatabasePort is the only loopback PostgreSQL port the launcher
+// accepts. RELAY_SIM_DB_PORT moves it so tests can run beside a live Hub.
+func simulationDatabasePort() (uint16, error) {
+	port, err := strconv.ParseUint(env("RELAY_SIM_DB_PORT", "18433"), 10, 16)
+	if err != nil || port == 0 {
+		return 0, errors.New("RELAY_SIM_DB_PORT must be a TCP port")
+	}
+	return uint16(port), nil
+}
+
 func simulationDSN(dsn string) error {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return errors.New("invalid simulation database configuration")
 	}
-	if cfg.Database != "relay_hub_sim" || cfg.Host != "127.0.0.1" || cfg.Port != 18433 || len(cfg.Fallbacks) > 1 {
-		return errors.New("DATABASE_URL must select relay_hub_sim at 127.0.0.1:18433")
+	port, err := simulationDatabasePort()
+	if err != nil {
+		return err
+	}
+	if cfg.Database != "relay_hub_sim" || cfg.Host != "127.0.0.1" || cfg.Port != port || len(cfg.Fallbacks) > 1 {
+		return fmt.Errorf("DATABASE_URL must select relay_hub_sim at 127.0.0.1:%d", port)
 	}
 	for _, f := range cfg.Fallbacks {
 		if f.Host != cfg.Host || f.Port != cfg.Port {
