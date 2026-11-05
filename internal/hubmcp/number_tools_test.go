@@ -365,8 +365,14 @@ func TestNumberAnAdminTurnedOffStaysOff(t *testing.T) {
 	if ok, result, body = f.call("site-a", "whatsapp.number.settings", map[string]any{"channel": "wa-121", "templates": false}); !ok || result["enabled"] != false {
 		t.Fatalf("other settings of an admin-off number: %s", body)
 	}
-	if c, _ := f.store.GetChannel(f.ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-121"}); c.Enabled {
-		t.Fatal("the number is on")
+	if c, _ := f.store.GetChannel(f.ctx, containers.ChannelRef{Channel: "WhatsApp", Key: "wa-121"}); c.Enabled || !c.AdminOff {
+		t.Fatal("the number is on or not locked")
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-121"}); !ok || result["admin_off"] != true {
+		t.Fatalf("health of an admin-off number: %s", body)
+	}
+	if ok, result, body = f.call("site-a", "whatsapp.number.health", map[string]any{"channel": "wa-120"}); !ok || result["admin_off"] != false {
+		t.Fatalf("health of a site number: %s", body)
 	}
 }
 

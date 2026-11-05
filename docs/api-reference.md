@@ -83,7 +83,7 @@ These tools let a Core site set up its own WhatsApp numbers. The Hub keeps every
 
 | Tool | What it does | Result |
 | --- | --- | --- |
-| `whatsapp.number.health` | Reads the saved state of the number. | `channel`, `label`, `display_number`, `enabled`, `connection_status` (`connected`, `unchecked`, `failed`, `reconnect_required`, `disabled`), `partner_status`, `verified_at`, `checked_at`, `check_error`, `webhook_subscribed`, `pin_kept`, `settings` (`templates`, `sync_metadata`) and `delivery` (last webhook, last Core confirmation, waiting callbacks). |
+| `whatsapp.number.health` | Reads the saved state of the number. | `channel`, `label`, `display_number`, `enabled`, `admin_off`, `connection_status` (`connected`, `unchecked`, `failed`, `reconnect_required`, `disabled`), `partner_status`, `verified_at`, `checked_at`, `check_error`, `webhook_subscribed`, `pin_kept`, `settings` (`templates`, `sync_metadata`) and `delivery` (last webhook, last Core confirmation, waiting callbacks). |
 | `whatsapp.number.check` | Asks Meta about the number and its webhook subscription. With `repair`, subscribes the app again. | The health fields, `reconnect_required` and a short `profile`. |
 | `whatsapp.number.settings` | Turns the number, templates or the hourly Meta sync on or off. Turning a number on checks it at once. A number that a Hub admin turned off stays off and returns `admin_off`. | The health fields. |
 | `whatsapp.number.pin_reset` | Sets a new two-step PIN that only the Hub knows. Not for WhatsApp Business app numbers. | The health fields. |
@@ -97,12 +97,12 @@ These tools let a Core site connect and manage its own Telegram bots and mailbox
 | Tool | What it does | Result |
 | --- | --- | --- |
 | `telegram.bot.connect` | Takes `bot_token` and an optional `label`. Checks the token with getMe, stores and links the bot, registers its webhook and tells Core. A refused token stores nothing. | The bot health fields. |
-| `telegram.bot.health` | Reads the saved state of the bot. Telegram is not called. | `channel`, `label`, `username`, `bot_id`, `enabled`, `webhook_status` (`registered`, `not_registered`, `failed`, `removed`), `checked_at`, `check_error`, `token_saved`. |
+| `telegram.bot.health` | Reads the saved state of the bot. Telegram is not called. | `channel`, `label`, `username`, `bot_id`, `enabled`, `admin_off`, `webhook_status` (`registered`, `not_registered`, `failed`, `removed`), `checked_at`, `check_error`, `token_saved`. |
 | `telegram.bot.check` | Runs getMe and reads the webhook. With `repair`, registers the webhook again. | The health fields, `webhook_missing` and `pending_updates`. |
 | `telegram.bot.settings` | Changes `label` or `enabled`, or saves a new `bot_token` of the same bot. | The health fields. |
 | `telegram.bot.remove` | Takes `confirm`. Wipes the token, unlinks the bot, turns it off and deletes its webhook. | `removed`, `webhook_deleted`. |
 | `email.mailbox.connect` | Takes `from`, `host`, `port`, `username`, `password`, the optional `imap_*` fields, `trusted_authserv_id`, `trusted_dsn_domain` and `label`. Signs in to SMTP and IMAP first and stores nothing when that fails. The IMAP reader starts at new mail. | The mailbox health fields. |
-| `email.mailbox.health` | Reads the saved state and the sync state. No mail server is called. | `channel`, `label`, `address`, `enabled`, `connection_status`, `smtp_status`, `imap_status`, `checked_at`, `check_error`, `password_saved`, `imap_password_saved`, `server` (hosts, ports, usernames, folder, trust ids), `sync` and `rejected`. |
+| `email.mailbox.health` | Reads the saved state and the sync state. No mail server is called. | `channel`, `label`, `address`, `enabled`, `admin_off`, `connection_status`, `smtp_status`, `imap_status`, `checked_at`, `check_error`, `password_saved`, `imap_password_saved`, `server` (hosts, ports, usernames, folder, trust ids), `sync` and `rejected`. |
 | `email.mailbox.check` | Signs in to SMTP and IMAP with the saved settings. No mail is sent or read. | The health fields. |
 | `email.mailbox.settings` | Changes `label` or `enabled`, or the server fields. New sign-in settings are tested before they are stored. A blank password keeps the saved one. A new host, user or folder starts the reader again at new mail. The `from` address does not change; remove the mailbox and connect it again. | The health fields. |
 | `email.mailbox.remove` | Takes `confirm`. Wipes both passwords, unlinks the mailbox, turns it off and stops the reader. | `removed`. |

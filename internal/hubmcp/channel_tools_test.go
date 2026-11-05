@@ -324,7 +324,7 @@ func TestBotAnAdminTurnedOffStaysOff(t *testing.T) {
 	if ok || errorCode(result) != "admin_off" || !strings.Contains(body, "Ask your Relay provider") {
 		t.Fatalf("turn on a bot the admin turned off: %s", body)
 	}
-	if ok, result, body = f.call("site-a", "telegram.bot.settings", map[string]any{"channel": key, "label": "Acme Sales"}); !ok || result["enabled"] != false {
+	if ok, result, body = f.call("site-a", "telegram.bot.settings", map[string]any{"channel": key, "label": "Acme Sales"}); !ok || result["enabled"] != false || result["admin_off"] != true {
 		t.Fatalf("rename an admin-off bot: %s", body)
 	}
 	f.call("site-a", "telegram.bot.remove", map[string]any{"channel": key, "confirm": true})
@@ -422,6 +422,18 @@ func TestMailboxToolsAreScopedToTheTokenSiteAndShowNoPassword(t *testing.T) {
 	f.mail = refusedMail
 	if ok, result, body := f.call("site-b", "email.mailbox.connect", in); ok || errorCode(result) != "login_failed" {
 		t.Fatalf("connect of a used mailbox with a wrong login: %s", body)
+	}
+}
+
+func TestMailboxHealthShowsAnAdminLock(t *testing.T) {
+	f := newChannelFixture(t)
+	key := f.storedMailbox("site-a", "sales@example.com")
+	if ok, result, body := f.call("site-a", "email.mailbox.health", map[string]any{"channel": key}); !ok || result["admin_off"] != false {
+		t.Fatalf("health of a site mailbox: %s", body)
+	}
+	adminTurnsOff(t, f.store, containers.ChannelRef{Channel: "Email", Key: key})
+	if ok, result, body := f.call("site-a", "email.mailbox.health", map[string]any{"channel": key}); !ok || result["admin_off"] != true || result["enabled"] != false {
+		t.Fatalf("health of an admin-off mailbox: %s", body)
 	}
 }
 

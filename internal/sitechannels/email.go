@@ -77,6 +77,7 @@ type MailboxHealth struct {
 	Label             string                   `json:"label"`
 	Address           string                   `json:"address"`
 	Enabled           bool                     `json:"enabled"`
+	AdminOff          bool                     `json:"admin_off"`
 	ConnectionStatus  string                   `json:"connection_status"`
 	SMTPStatus        string                   `json:"smtp_status"`
 	IMAPStatus        string                   `json:"imap_status"`
@@ -177,7 +178,7 @@ func (s *Service) MailboxHealth(ctx context.Context, site, key string) (MailboxH
 	if err != nil {
 		return MailboxHealth{}, ErrUnavailable
 	}
-	health := MailboxHealth{Channel: c.Key, Label: c.Label, Address: c.Address, Enabled: c.Enabled, ConnectionStatus: text(c.Config, "connection_status"),
+	health := MailboxHealth{Channel: c.Key, Label: c.Label, Address: c.Address, Enabled: c.Enabled, AdminOff: c.AdminOff, ConnectionStatus: text(c.Config, "connection_status"),
 		SMTPStatus: text(c.Config, "smtp_status"), IMAPStatus: text(c.Config, "imap_status"), CheckedAt: text(c.Config, "checked_at"),
 		CheckError: text(c.Config, "check_error"), PasswordSaved: saved(c, "secret"), IMAPPasswordSaved: saved(c, "imap_password"),
 		Server: map[string]any{}, Sync: sync}

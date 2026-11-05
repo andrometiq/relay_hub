@@ -54,6 +54,7 @@ type Health struct {
 	Label             string                  `json:"label"`
 	DisplayNumber     string                  `json:"display_number"`
 	Enabled           bool                    `json:"enabled"`
+	AdminOff          bool                    `json:"admin_off"`
 	ConnectionStatus  string                  `json:"connection_status"`
 	PartnerStatus     string                  `json:"partner_status"`
 	VerifiedAt        string                  `json:"verified_at"`
@@ -77,7 +78,7 @@ func (s *Service) Health(ctx context.Context, site, key string) (Health, error) 
 	}
 	text := func(name string) string { value, _ := c.Config[name].(string); return value }
 	flag := func(name string) bool { value, _ := c.Config[name].(bool); return value }
-	health := Health{Channel: c.Key, Label: c.Label, DisplayNumber: text("display_number"), Enabled: c.Enabled,
+	health := Health{Channel: c.Key, Label: c.Label, DisplayNumber: text("display_number"), Enabled: c.Enabled, AdminOff: c.AdminOff,
 		ConnectionStatus: text("connection_status"), PartnerStatus: text("partner_status"), VerifiedAt: text("verified_at"),
 		CheckedAt: text("checked_at"), CheckError: text("check_error"),
 		Settings: map[string]bool{"templates": flag("templates"), "sync_metadata": flag("sync_metadata")}, Delivery: delivery}

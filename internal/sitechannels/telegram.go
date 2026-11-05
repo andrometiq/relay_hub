@@ -28,6 +28,7 @@ type BotHealth struct {
 	Username      string `json:"username"`
 	BotID         string `json:"bot_id"`
 	Enabled       bool   `json:"enabled"`
+	AdminOff      bool   `json:"admin_off"`
 	WebhookStatus string `json:"webhook_status"`
 	CheckedAt     string `json:"checked_at"`
 	CheckError    string `json:"check_error"`
@@ -111,7 +112,7 @@ func (s *Service) BotHealth(ctx context.Context, site, key string) (BotHealth, e
 }
 
 func botHealth(c containers.Channel) BotHealth {
-	return BotHealth{Channel: c.Key, Label: c.Label, Username: text(c.Config, "username"), BotID: c.Address, Enabled: c.Enabled,
+	return BotHealth{Channel: c.Key, Label: c.Label, Username: text(c.Config, "username"), BotID: c.Address, Enabled: c.Enabled, AdminOff: c.AdminOff,
 		WebhookStatus: text(c.Config, "webhook_status"), CheckedAt: text(c.Config, "checked_at"), CheckError: text(c.Config, "check_error"),
 		TokenSaved: saved(c, "secret")}
 }
