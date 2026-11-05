@@ -7,8 +7,8 @@ import (
 )
 
 var (
-	errCoexistencePIN = &Failure{"not_supported", "The WhatsApp Business app keeps the two-step PIN of this number."}
-	errPINUnknown     = &Failure{"outcome_unknown", "Relay does not know whether Meta took the new PIN. Reset the PIN again."}
+	errCoexistencePIN = &Failure{Code: "not_supported", Message: "The WhatsApp Business app keeps the two-step PIN of this number."}
+	errPINUnknown     = &Failure{Code: "outcome_unknown", Message: "Relay does not know whether Meta took the new PIN. Reset the PIN again."}
 )
 
 // ResetPIN gives the number a new two-step verification PIN. The Hub makes
@@ -41,7 +41,7 @@ func (s *Service) ResetPIN(ctx context.Context, site, key string) (Health, error
 	case "unavailable":
 		return Health{}, errPINUnknown
 	case "failed":
-		return Health{}, &Failure{"meta_rejected", metaText(err, "Meta did not take the new PIN.")}
+		return Health{}, &Failure{Code: "meta_rejected", Message: metaText(err, "Meta did not take the new PIN.")}
 	}
 	if err = s.Store.SetNumberPIN(ctx, site, c.Key, pin); err != nil {
 		return Health{}, errPINUnknown

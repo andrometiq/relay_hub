@@ -10,7 +10,7 @@ type SettingsInput struct {
 	SyncMetadata *bool  `json:"sync_metadata,omitempty"`
 }
 
-var errNoChange = &Failure{"invalid_request", "Choose a setting to change."}
+var errNoChange = &Failure{Code: "invalid_request", Message: "Choose a setting to change."}
 
 // SaveSettings turns a number on or off and changes its template and hourly
 // Meta sync switches. Only public settings change; a number Meta removed must

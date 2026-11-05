@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	errDisabled          = &Failure{"number_disabled", "Turn the number on first."}
-	errReconnectRequired = &Failure{"reconnect_required", "Meta no longer accepts Relay's access to this number. Connect it again with Facebook."}
+	errDisabled          = &Failure{Code: "number_disabled", Message: "Turn the number on first."}
+	errReconnectRequired = &Failure{Code: "reconnect_required", Message: "Meta no longer accepts Relay's access to this number. Connect it again with Facebook."}
 )
 
 // Check is the result of a connection check.
@@ -68,7 +68,7 @@ func (s *Service) Check(ctx context.Context, site, key string, repair bool) (Che
 		values["connection_status"] = "reconnect_required"
 		return s.recordCheck(ctx, site, c.Key, values, nil)
 	case "unavailable":
-		return Check{}, &Failure{"meta_unavailable", "Meta is not answering. Try again in a few minutes."}
+		return Check{}, &Failure{Code: "meta_unavailable", Message: "Meta is not answering. Try again in a few minutes."}
 	case "failed":
 		values["connection_status"], values["check_error"] = "failed", metaText(err, "Meta refused the check.")
 		return s.recordCheck(ctx, site, c.Key, values, nil)

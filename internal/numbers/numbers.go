@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/sitechannels"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
 	"github.com/jackc/pgx/v5"
 )
@@ -24,18 +25,15 @@ type Service struct {
 }
 
 // Failure is a coded tool error that Core maps to its own text.
-type Failure struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func (f *Failure) Error() string { return f.Code + ": " + f.Message }
+type Failure = sitechannels.Failure
 
 var (
-	errNotFound        = &Failure{"not_found", "This WhatsApp number is not connected to this site."}
-	errNoNumber        = &Failure{"no_number", "This site has no WhatsApp number."}
-	errChannelRequired = &Failure{"channel_required", "This site has several WhatsApp numbers; choose one."}
-	errUnavailable     = &Failure{"hub_unavailable", "Relay Hub could not finish this. Try again in a few minutes."}
+	errUnavailable = sitechannels.ErrUnavailable
+	missingNumber  = sitechannels.Missing{
+		NotFound: &Failure{Code: "not_found", Message: "This WhatsApp number is not connected to this site."},
+		None:     &Failure{Code: "no_number", Message: "This site has no WhatsApp number."},
+		Choose:   &Failure{Code: "channel_required", Message: "This site has several WhatsApp numbers; choose one."},
+	}
 )
 
 const timeFormat = time.RFC3339
@@ -47,43 +45,15 @@ func (s *Service) now() time.Time {
 	return s.Now().UTC()
 }
 
-// key resolves the number of one call: the named key when it is a number of
-// site, else the site's only number.
-func (s *Service) key(ctx context.Context, site, key string) (string, error) {
-	rows, err := s.Store.DB.Query(ctx, `SELECT channel_key FROM relay_channel_credentials WHERE channel='WhatsApp' AND site_id=$1 ORDER BY channel_key LIMIT 500`, site)
-	if err != nil {
-		return "", errUnavailable
-	}
-	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return "", errUnavailable
-	}
-	if key != "" {
-		for _, own := range keys {
-			if own == key {
-				return key, nil
-			}
-		}
-		return "", errNotFound
-	}
-	switch len(keys) {
-	case 0:
-		return "", errNoNumber
-	case 1:
-		return keys[0], nil
-	}
-	return "", errChannelRequired
-}
-
 // channel reads one number of site with its public settings only.
 func (s *Service) channel(ctx context.Context, site, key string) (containers.Channel, error) {
-	key, err := s.key(ctx, site, key)
+	key, err := sitechannels.Key(ctx, s.Store.DB, "WhatsApp", site, key, missingNumber)
 	if err != nil {
 		return containers.Channel{}, err
 	}
 	c, err := s.Store.GetChannel(ctx, containers.ChannelRef{Channel: "WhatsApp", Key: key})
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && c.Site != site) {
-		return containers.Channel{}, errNotFound
+		return containers.Channel{}, missingNumber.NotFound
 	}
 	if err != nil {
 		return containers.Channel{}, errUnavailable

@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	errConfirm      = &Failure{"confirm_required", "Confirm that the number should be removed."}
-	errPendingSends = &Failure{"pending_sends", "Messages are still being sent from this number. Cancel or resolve them, then remove the number."}
+	errConfirm      = &Failure{Code: "confirm_required", Message: "Confirm that the number should be removed."}
+	errPendingSends = &Failure{Code: "pending_sends", Message: "Messages are still being sent from this number. Cancel or resolve them, then remove the number."}
 )
 
 // Removal says what happened at Meta when a number left the site.
