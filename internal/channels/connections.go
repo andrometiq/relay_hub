@@ -40,3 +40,12 @@ func (r *Registry) TestEmailConnection(ctx context.Context, account string) (Ema
 	}
 	return TestEmail(ctx, client), nil
 }
+
+// DeleteTelegramWebhook removes the webhook of an active bot, before a reload drops its token.
+func (r *Registry) DeleteTelegramWebhook(ctx context.Context, account string) error {
+	client := r.snapshot().telegram[account]
+	if client == nil {
+		return errors.New("Telegram account is not active")
+	}
+	return client.DeleteWebhook(ctx)
+}

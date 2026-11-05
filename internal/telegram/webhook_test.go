@@ -68,3 +68,24 @@ func TestUsernameChecksTheTokenWithGetMe(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteWebhookDropsPendingUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		ok   bool
+	}{{`{"ok":true,"result":true}`, true}, {`{"ok":true,"result":false}`, false}, {`{"ok":false,"error_code":401,"description":"Unauthorized"}`, false}} {
+		client, err := NewWithHTTPClient(Config{AccountID: "local", BotToken: "123456:abcdefghijklmnopqrstuv", Enabled: true}, &http.Client{Transport: webhookTransport(func(r *http.Request) (*http.Response, error) {
+			var input map[string]any
+			if !strings.HasSuffix(r.URL.Path, "/deleteWebhook") || json.NewDecoder(r.Body).Decode(&input) != nil || input["drop_pending_updates"] != true {
+				t.Fatalf("unexpected call %s", r.URL.Path)
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+		})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = client.DeleteWebhook(context.Background()); (err == nil) != tc.ok {
+			t.Fatalf("%s: %v", tc.body, err)
+		}
+	}
+}

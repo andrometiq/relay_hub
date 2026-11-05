@@ -64,3 +64,16 @@ func (c *Client) RegisterWebhook(ctx context.Context, address, secret string) er
 	}
 	return nil
 }
+
+// DeleteWebhook stops Telegram sending the bot's updates to the Hub. Pending
+// updates are dropped, because nothing reads them once the bot is removed.
+func (c *Client) DeleteWebhook(ctx context.Context) error {
+	raw, err := c.call(ctx, "deleteWebhook", map[string]any{"drop_pending_updates": true})
+	if err != nil {
+		return err
+	}
+	if string(raw) != "true" {
+		return errors.New("webhook removal was not confirmed")
+	}
+	return nil
+}

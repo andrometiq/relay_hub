@@ -195,3 +195,37 @@ func TestChannelTransportRedactionAndDestinations(t *testing.T) {
 		t.Fatal("ingress credential leaked")
 	}
 }
+
+func TestTelegramFakeKeepsTheRegisteredWebhook(t *testing.T) {
+	fake, client, httpClient := telegramFixture(t, filepath.Join(t.TempDir(), "telegram.json"))
+	ctx := context.Background()
+	address := "https://hub.sim.invalid/webhooks/telegram/path-1"
+	if err := client.RegisterWebhook(ctx, address, "derived-secret-value"); err != nil {
+		t.Fatal(err)
+	}
+	health, err := client.WebhookHealth(ctx, address)
+	if err != nil || !health.Registered || !health.Matches {
+		t.Fatalf("webhook not kept: %+v %v", health, err)
+	}
+	if hook, _ := fake.hook("relay_sim_bot"); hook.URL != address || hook.secret != "derived-secret-value" {
+		t.Fatalf("hook: %+v", hook)
+	}
+	shown, _ := json.Marshal(fake.webhooks())
+	if strings.Contains(string(shown), "derived-secret-value") {
+		t.Fatal("the webhook secret must not be shown")
+	}
+	if err = client.DeleteWebhook(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if health, _ = client.WebhookHealth(ctx, address); health.Registered {
+		t.Fatal("webhook still registered")
+	}
+	wrong, err := telegram.NewWithHTTPClient(telegram.Config{AccountID: "sim-x", BotToken: "123458:not_a_simulation_bot_token", Enabled: true}, httpClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var provider *telegram.APIError
+	if _, err = wrong.Username(ctx); !errors.As(err, &provider) || provider.ErrorCode != 401 || provider.OutcomeUnknown {
+		t.Fatalf("an unknown token must be refused like Telegram does: %v", err)
+	}
+}

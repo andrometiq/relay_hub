@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"github.com/andrometiq/relay_hub/internal/attachment"
 	"io"
+	"maps"
 	"net/http"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,6 +48,48 @@ type telegramState struct {
 type fakeTelegram struct {
 	state   *providerState[telegramState]
 	records *recorder
+	// hooks holds the webhook each bot registered, by bot username. It stays
+	// in memory, because the secret is a credential the state file must not keep.
+	mu    sync.Mutex
+	hooks map[string]telegramHook
+}
+
+// telegramHook is one registered webhook. Only the URL is shown in /_sim/providers.
+type telegramHook struct {
+	URL    string `json:"url"`
+	secret string
+}
+
+// webhooks lists the registered webhook URLs by bot username.
+func (t *fakeTelegram) webhooks() map[string]telegramHook {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return maps.Clone(t.hooks)
+}
+
+// hook returns the webhook a bot registered.
+func (t *fakeTelegram) hook(bot string) (telegramHook, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	hook, ok := t.hooks[bot]
+	return hook, ok
+}
+
+// webhookMethod answers setWebhook, getWebhookInfo and deleteWebhook for one bot.
+func (t *fakeTelegram) webhookMethod(bot, method string, body map[string]any) any {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch method {
+	case "setWebhook":
+		address, _ := body["url"].(string)
+		secret, _ := body["secret_token"].(string)
+		t.hooks[bot] = telegramHook{URL: address, secret: secret}
+		return true
+	case "deleteWebhook":
+		delete(t.hooks, bot)
+		return true
+	}
+	return map[string]any{"url": t.hooks[bot].URL, "pending_update_count": 0}
 }
 
 func newFakeTelegram(path string, records *recorder) (*fakeTelegram, error) {
@@ -53,7 +97,7 @@ func newFakeTelegram(path string, records *recorder) (*fakeTelegram, error) {
 	if err == nil && (state.value.Files == nil || state.value.Next < 0) {
 		err = errors.New("invalid Telegram provider state")
 	}
-	return &fakeTelegram{state: state, records: records}, err
+	return &fakeTelegram{state: state, records: records, hooks: map[string]telegramHook{}}, err
 }
 func (t *fakeTelegram) faults(faults []string) error {
 	for _, f := range faults {
@@ -157,7 +201,10 @@ func (t *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	token, ok := botToken(r.URL.Path, "/bot")
 	if !ok {
-		http.Error(w, "invalid fake bot token", 401)
+		// Telegram answers an unknown or revoked token like this.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":401,"description":"Unauthorized"}`))
 		return
 	}
 	prefix := "/bot" + token + "/"
@@ -190,6 +237,8 @@ func (t *fakeTelegram) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "getMe":
 			id, _, _ := strings.Cut(token, ":")
 			result = map[string]any{"id": number(id), "is_bot": true, "first_name": "Simulation", "username": simulationBots[token]}
+		case "setWebhook", "getWebhookInfo", "deleteWebhook":
+			result = t.webhookMethod(simulationBots[token], method, body)
 		case "getUpdates":
 			offset := number(body["offset"])
 			pending := []json.RawMessage{}
