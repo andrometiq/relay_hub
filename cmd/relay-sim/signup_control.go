@@ -20,7 +20,12 @@ func (s *simulation) signupControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", 405)
 		return
 	}
+	if r.URL.Path == "/_sim/es/media" {
+		es.mediaControl(w, r)
+		return
+	}
 	var in struct {
+		ID      string `json:"id"`
 		WABAID  string `json:"waba_id"`
 		PhoneID string `json:"phone_id"`
 		Ready   bool   `json:"ready"`
@@ -30,6 +35,10 @@ func (s *simulation) signupControl(w http.ResponseWriter, r *http.Request) {
 	}
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in) != nil {
 		http.Error(w, "invalid request", 400)
+		return
+	}
+	if r.URL.Path == "/_sim/es/template" {
+		s.templateControl(w, r, in.ID, in.Status)
 		return
 	}
 	payload, status, problem := es.control(r.URL.Path, in.WABAID, in.PhoneID, in.Ready, in.To, in.Text, in.Status)
@@ -85,4 +94,29 @@ func (es *signupState) control(path, waba, phone string, ready bool, to, text, s
 		return nil, 503, "simulation state unavailable"
 	}
 	return payload, 200, ""
+}
+
+var esTemplateStatuses = map[string]bool{"APPROVED": true, "REJECTED": true, "PAUSED": true, "DISABLED": true}
+
+// templateControl sets the review result of a signup template and sends
+// Meta's status webhook for it.
+func (s *simulation) templateControl(w http.ResponseWriter, r *http.Request, id, status string) {
+	es := s.meta.signup
+	if !esTemplateStatuses[status] {
+		http.Error(w, "template status needs a Meta review status", 400)
+		return
+	}
+	es.mu.Lock()
+	payload, ok := es.templateStatus(id, status)
+	saved := ok && es.save() == nil
+	es.mu.Unlock()
+	if !ok {
+		http.Error(w, "unknown template", 404)
+		return
+	}
+	if !saved {
+		http.Error(w, "simulation state unavailable", 503)
+		return
+	}
+	s.emit(w, r, payload, false)
 }

@@ -514,6 +514,8 @@ Do this one time per Hub. After it, a Core site connects to the Hub and adds its
 5. On the bench, put `relay_hub_origin` (the Hub address) and `relay_enrolment_token` (the token) in `common_site_config.json`. For one site only, use that site's `site_config.json`, or send a **Setup code** to the site owner instead.
 6. On a Core site, open Relay. Relay connects the site to the Hub and opens the WhatsApp setup. The owner clicks **Continue with Facebook** and follows Meta.
 
+After this, the operator's only job for a new customer is to link its site: give the bench the enrolment token, or send the site owner a setup code. The site owner does the rest from Relay Core: add, check and repair numbers, connect a number again, turn numbers, templates and the hourly Meta sync on or off, edit the WhatsApp profile, reset the two-step PIN, remove a number and disconnect the site. Core's user guide explains these steps. The Hub pages still show every number and site, and an administrator can still change them here.
+
 The Hub makes the site, its service user and its auth key. It proves that the caller serves the site origin before it saves anything. The new number goes into the signup container with the key `wa-<phone number ID>` and is linked to the site. Open the site page to see each signup and its error. If the business removes the Hub app in Meta, the Hub disables the numbers of that WhatsApp Business account.
 
 | Signup error | Meaning | Fix |
@@ -578,3 +580,11 @@ These tasks need an operator with the admin API in the [API reference](api-refer
 - **Replay messages for a number that was not in the Hub.** When Meta sends a message for a phone number ID that no container has, the Hub keeps it without an account. After you add and link the number, `POST /api/unassigned-events/replay` gives it to the number's site.
 - **Delete** containers, accounts or sites.
 - **Change a Site ID** or a channel key.
+
+These tasks stay with the operator or with Meta, also for a site that sets itself up:
+
+- **The Meta app, the webhook and Embedded Signup** ([recipe 5.12](#512-let-sites-add-their-own-whatsapp-numbers) steps 1 to 3). They are shared by all sites, so one operator sets them up one time.
+- **A number in an admin-made container.** A site can remove it, but only an administrator can link it to another site.
+- **Display name changes.** The business changes the name in Meta WhatsApp Manager, and Meta reviews it.
+- **WhatsApp groups and calls.** They stay off in this version.
+- **Email and Telegram.** Sites cannot set them up by themselves yet; use the container tabs.

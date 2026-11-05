@@ -71,7 +71,7 @@ func (h *esHarness) signupNumber(in esDialogInput) (string, map[string]any) {
 	if code == "" {
 		h.t.Fatalf("no code: %v", finish)
 	}
-	token := h.graph("GET", "/v25.0/oauth/access_token?client_id=sim-app&client_secret=sim-app-secret&code="+code, "", "", 200)["access_token"].(string)
+	token := h.graph("GET", "/v25.0/oauth/access_token?client_id="+esAppID+"&client_secret=sim-app-secret&code="+code, "", "", 200)["access_token"].(string)
 	return token, finish["data"].(map[string]any)
 }
 
@@ -150,8 +150,8 @@ func TestSignupCodeExchangeAndTokenCheck(t *testing.T) {
 	h := newESHarness(t)
 	finish := h.dialog("/es/dialog/finish", esDialogInput{Scenario: "new", Number: "919876500001", OTP: esOTP, DisplayName: "Acme"}, 200)
 	code := finish["code"].(string)
-	exchange := "/v25.0/oauth/access_token?client_id=sim-app&client_secret=sim-app-secret&code="
-	if c, _ := errorCode(h.graph("GET", "/v25.0/oauth/access_token?client_id=sim-app&client_secret=wrong&code="+code, "", "", 400)); c != 101 {
+	exchange := "/v25.0/oauth/access_token?client_id=" + esAppID + "&client_secret=sim-app-secret&code="
+	if c, _ := errorCode(h.graph("GET", "/v25.0/oauth/access_token?client_id="+esAppID+"&client_secret=wrong&code="+code, "", "", 400)); c != 101 {
 		t.Fatal("wrong app secret accepted")
 	}
 	token := h.graph("GET", exchange+code, "", "", 200)["access_token"].(string)
@@ -176,16 +176,16 @@ func TestSignupCodeExchangeAndTokenCheck(t *testing.T) {
 	}
 
 	h.graph("GET", "/v25.0/debug_token?input_token="+token, "sim-provider-token", "", 400)
-	debug := h.graph("GET", "/v25.0/debug_token?input_token="+token, "sim-app|sim-app-secret", "", 200)["data"].(map[string]any)
+	debug := h.graph("GET", "/v25.0/debug_token?input_token="+token, esAppID+"|"+esAppSecret, "", 200)["data"].(map[string]any)
 	scopes := debug["granular_scopes"].([]any)
 	if debug["is_valid"] != true || debug["app_id"] != esAppID || len(scopes) != 2 || scopes[1].(map[string]any)["target_ids"].([]any)[0] != "230" {
 		t.Fatal(debug)
 	}
-	if v := h.graph("GET", "/v25.0/debug_token?input_token=sim-biz-404", "sim-app|sim-app-secret", "", 200)["data"].(map[string]any); v["is_valid"] != false {
+	if v := h.graph("GET", "/v25.0/debug_token?input_token=sim-biz-404", esAppID+"|"+esAppSecret, "", 200)["data"].(map[string]any); v["is_valid"] != false {
 		t.Fatal(v)
 	}
 	h.signup.records.faults["signup"] = []string{"debug_token_no_scope"}
-	if v := h.graph("GET", "/v25.0/debug_token?input_token="+token, "sim-app|sim-app-secret", "", 200)["data"].(map[string]any); len(v["granular_scopes"].([]any)) != 1 {
+	if v := h.graph("GET", "/v25.0/debug_token?input_token="+token, esAppID+"|"+esAppSecret, "", 200)["data"].(map[string]any); len(v["granular_scopes"].([]any)) != 1 {
 		t.Fatal("debug_token_no_scope kept the messaging scope", v)
 	}
 

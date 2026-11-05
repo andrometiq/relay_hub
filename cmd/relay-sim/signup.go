@@ -19,7 +19,7 @@ import (
 // The fake Meta app, Embedded Signup configuration and verification code that
 // the signup container uses.
 const (
-	esAppID          = "sim-app"
+	esAppID          = "100000000000001"
 	esAppSecret      = "sim-app-secret"
 	esConfigID       = "sim-es-config"
 	esOTP            = "123456"
@@ -53,6 +53,7 @@ type esPhone struct {
 	PIN                             string
 	Registers                       []time.Time
 	Synced                          map[string]bool
+	Profile                         map[string]any
 }
 
 type esCode struct {
@@ -85,11 +86,12 @@ type signupState struct {
 	now      func() time.Time
 	path     string
 	webhooks *signupWebhooks
+	media    map[string]*esMedia
 	esData
 }
 
 func newSignupState(records *recorder) *signupState {
-	return &signupState{records: records, now: time.Now, webhooks: newSignupWebhooks(), esData: esData{Businesses: map[string]string{}, WABAs: map[string]*esWABA{},
+	return &signupState{records: records, now: time.Now, webhooks: newSignupWebhooks(), media: map[string]*esMedia{}, esData: esData{Businesses: map[string]string{}, WABAs: map[string]*esWABA{},
 		Phones: map[string]*esPhone{}, Codes: map[string]*esCode{}, Tokens: map[string]*esToken{}, Calls: []map[string]any{},
 		Next: map[string]int{"phone": 120, "waba": 230, "business": 330, "code": 1, "token": 1, "session": 1}}}
 }
@@ -149,8 +151,13 @@ func (s *signupState) sequence(kind string) int {
 	return n
 }
 
+// bearer is the access token of a Graph call; the Resumable Upload API sends it as OAuth.
 func bearer(r *http.Request) string {
-	return strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	value := r.Header.Get("Authorization")
+	if token, ok := strings.CutPrefix(value, "OAuth "); ok {
+		return token
+	}
+	return strings.TrimPrefix(value, "Bearer ")
 }
 
 // owns reports whether a Graph request belongs to Embedded Signup.
@@ -188,6 +195,9 @@ func (s *signupState) route(r *http.Request, node, edge string, body []byte) (in
 	}
 	if node == "debug_token" && edge == "" && r.Method == "GET" {
 		return s.debugToken(r)
+	}
+	if status, result, ok := s.mediaRoute(r, node, edge, body); ok {
+		return status, result
 	}
 	token := s.Tokens[bearer(r)]
 	if token == nil && bearer(r) != "sim-provider-token" {
@@ -321,12 +331,22 @@ func (s *signupState) phoneRoute(r *http.Request, phone *esPhone, edge string, b
 	switch {
 	case r.Method == "GET" && edge == "":
 		return 200, phone.view()
+	case r.Method == "POST" && edge == "":
+		return phone.setPIN(body)
+	case r.Method == "POST" && edge == "deregister":
+		s.call("deregister", phone.ID, "")
+		phone.Platform, phone.Status = "NOT_APPLICABLE", "DISCONNECTED"
+		return 200, map[string]any{"success": true}
 	case r.Method == "POST" && edge == "register":
 		return s.register(phone, body)
 	case r.Method == "POST" && edge == "smb_app_data":
 		return s.smbSync(phone, body)
 	case r.Method == "POST" && edge == "messages":
 		return s.send(phone, body)
+	case r.Method == "POST" && edge == "media":
+		return s.upload(r, phone, body)
+	case edge == "whatsapp_business_profile":
+		return phone.businessProfile(r.Method, body)
 	}
 	return 404, metaError(100, 0, "GraphMethodException", "Unsupported request - fake signup route", false)
 }
@@ -395,16 +415,26 @@ func (s *signupState) smbSync(phone *esPhone, body []byte) (int, any) {
 // delivered through the signed webhook.
 func (s *signupState) send(phone *esPhone, body []byte) (int, any) {
 	var in struct {
-		To       string `json:"to"`
-		Type     string `json:"type"`
-		Template struct {
+		To        string `json:"to"`
+		Type      string `json:"type"`
+		Status    string `json:"status"`
+		MessageID string `json:"message_id"`
+		Template  struct {
 			Name     string `json:"name"`
 			Language struct {
 				Code string `json:"code"`
 			} `json:"language"`
 		} `json:"template"`
 	}
-	if json.Unmarshal(body, &in) != nil || in.To == "" {
+	if json.Unmarshal(body, &in) != nil {
+		return 400, metaError(100, 0, "OAuthException", "(#100) Invalid parameter", false)
+	}
+	// A read receipt (with or without the typing indicator) marks an incoming message read.
+	if in.Status == "read" && in.MessageID != "" {
+		s.call("read", phone.ID, in.MessageID)
+		return 200, map[string]any{"success": true}
+	}
+	if in.To == "" {
 		return 400, metaError(100, 0, "OAuthException", "(#100) Invalid parameter", false)
 	}
 	if phone.Status != "CONNECTED" {
@@ -475,4 +505,39 @@ func (s *signupState) snapshot() map[string]any {
 	}
 	return map[string]any{"phones": phones, "wabas": wabas, "businesses": s.Businesses, "codes": codes, "tokens": tokens,
 		"calls": append([]map[string]any{}, s.Calls...), "webhooks": s.webhooks.snapshot()}
+}
+
+// businessProfile reads or changes the number's public WhatsApp profile.
+func (p *esPhone) businessProfile(method string, body []byte) (int, any) {
+	if p.Profile == nil {
+		p.Profile = map[string]any{"about": "Hey there! I am using WhatsApp.", "vertical": "UNDEFINED"}
+	}
+	if method == "GET" {
+		return 200, map[string]any{"data": []any{p.Profile}}
+	}
+	var in map[string]any
+	if json.Unmarshal(body, &in) != nil || in["messaging_product"] != "whatsapp" {
+		return 400, metaError(100, 0, "OAuthException", "(#100) Invalid parameter", false)
+	}
+	for _, name := range []string{"about", "address", "description", "email", "websites", "vertical"} {
+		if value, ok := in[name]; ok {
+			p.Profile[name] = value
+		}
+	}
+	if handle, ok := in["profile_picture_handle"].(string); ok && handle != "" {
+		p.Profile["profile_picture_url"] = "https://example.com/profile/" + p.ID + ".jpg"
+	}
+	return 200, map[string]any{"success": true}
+}
+
+// setPIN changes the number's two-step verification PIN.
+func (p *esPhone) setPIN(body []byte) (int, any) {
+	var in struct {
+		PIN string `json:"pin"`
+	}
+	if json.Unmarshal(body, &in) != nil || !pinPattern.MatchString(in.PIN) {
+		return 400, metaError(100, 0, "OAuthException", "(#100) Invalid parameter", false)
+	}
+	p.PIN = in.PIN
+	return 200, map[string]any{"success": true}
 }

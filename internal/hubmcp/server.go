@@ -9,6 +9,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/channels"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
+	"github.com/andrometiq/relay_hub/internal/numbers"
 	"github.com/andrometiq/relay_hub/internal/onboarding"
 	"github.com/andrometiq/relay_hub/internal/telegram"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
@@ -109,6 +110,8 @@ func NewAuthenticatedChannels(check func(context.Context) error, wa *whatsapp.Se
 type Options struct {
 	// Signup adds the whatsapp.signup tools for self-service onboarding.
 	Signup *onboarding.Service
+	// Numbers adds the whatsapp.number tools a site uses to manage its own numbers.
+	Numbers *numbers.Service
 }
 
 func NewAuthenticatedChannelsWithOptions(check func(context.Context) error, wa *whatsapp.Service, verify TokenVerifier, registry *channels.Registry, store channels.Store, opts Options) (http.Handler, error) {
@@ -168,11 +171,15 @@ func newServerChannels(token string, check func(context.Context) error, wa *what
 			return nil, map[string]any{"channels": list}, nil
 		})
 	}
+	siteOf := func(ctx context.Context) (string, bool) {
+		principal, ok := ctx.Value(principalKey{}).(auth.Principal)
+		return principal.Site, ok && principal.Site != ""
+	}
 	if verify != nil && opts.Signup != nil {
-		opts.Signup.AddTools(server, func(ctx context.Context) (string, bool) {
-			principal, ok := ctx.Value(principalKey{}).(auth.Principal)
-			return principal.Site, ok && principal.Site != ""
-		})
+		opts.Signup.AddTools(server, siteOf)
+	}
+	if verify != nil && opts.Numbers != nil {
+		opts.Numbers.AddTools(server, siteOf)
 	}
 	mcp.AddTool(server, &mcp.Tool{Name: "health.get", Description: "Check Relay Hub database readiness"}, func(ctx context.Context, r *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, Health, error) {
 		c, cancel := context.WithTimeout(ctx, 3*time.Second)

@@ -257,9 +257,10 @@ func (s *Service) proveOrigin(ctx context.Context, origin string, in EnrolReques
 
 func (s *Service) saveEnrolment(ctx context.Context, tx pgx.Tx, token enrolmentToken, origin string, in EnrolRequest, ip string) (EnrolResult, error) {
 	var siteID string
-	var enabled bool
+	var enabled, disconnected bool
 	var previous *int64
-	err := tx.QueryRow(ctx, `SELECT site_id,enabled,enrolled_by FROM relay_sites WHERE rtrim(lower(origin),'/')=$1 ORDER BY id LIMIT 1 FOR UPDATE`, origin).Scan(&siteID, &enabled, &previous)
+	err := tx.QueryRow(ctx, `SELECT site_id,enabled OR disconnected_at IS NOT NULL,disconnected_at IS NOT NULL,enrolled_by FROM relay_sites
+ WHERE rtrim(lower(origin),'/')=$1 ORDER BY id LIMIT 1 FOR UPDATE`, origin).Scan(&siteID, &enabled, &disconnected, &previous)
 	existing := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return EnrolResult{}, unavailable()
@@ -289,14 +290,15 @@ func (s *Service) saveEnrolment(ctx context.Context, tx pgx.Tx, token enrolmentT
 	if err != nil {
 		return EnrolResult{}, unavailable()
 	}
-	if _, err = tx.Exec(ctx, `UPDATE relay_sites SET enrolled_by=$2,enrolled_at=$3,service_user_id=$4 WHERE site_id=$1`, siteID, token.id, s.now(), user); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE relay_sites SET enrolled_by=$2,enrolled_at=$3,service_user_id=$4,disconnected_at=NULL WHERE site_id=$1`, siteID, token.id, s.now(), user); err != nil {
 		return EnrolResult{}, unavailable()
 	}
 	action := "site.enrol"
 	if existing {
 		action = "site.re_enrol"
 	}
-	metadata, _ := json.Marshal(map[string]any{"token_id": token.id, "token_kind": token.kind, "origin": origin, "was_manual": existing && previous == nil, "relay_core_version": in.CoreVersion})
+	metadata, _ := json.Marshal(map[string]any{"token_id": token.id, "token_kind": token.kind, "origin": origin, "was_manual": existing && previous == nil,
+		"was_disconnected": disconnected, "relay_core_version": in.CoreVersion})
 	if _, err = tx.Exec(ctx, `INSERT INTO relay_operational_audit(actor_type,actor_id,account_id,action,outcome,metadata,source_ip)
  VALUES('system',$1,$2,$3,'completed',$4,nullif($5,'')::inet)`, token.createdBy, siteID, action, metadata, validIP(ip)); err != nil {
 		return EnrolResult{}, unavailable()

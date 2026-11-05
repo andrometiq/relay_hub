@@ -43,36 +43,60 @@ func (s *Store) SignupApp(ctx context.Context) (SignupApp, error) {
 }
 
 // SaveSignupChannel creates or updates a self-service number and links it to
-// site in one transaction. The phone id is the idempotency key: the same site
-// updates its channel, another site or container gets ErrNumberInUse.
-func (s *Store) SaveSignupChannel(ctx context.Context, site string, c Channel, secret string) error {
+// site in one transaction, and returns the channel key it saved. The phone id
+// is the idempotency key: the same site updates its channel, another site gets
+// ErrNumberInUse. A number the site already uses in another container is
+// adopted: it moves to the signup container and keeps its key, so Core keeps
+// one channel and its history.
+func (s *Store) SaveSignupChannel(ctx context.Context, site string, c Channel, secret string) (string, error) {
 	if c.Channel != "WhatsApp" {
-		return errors.New("signup channels are WhatsApp numbers")
+		return "", errors.New("signup channels are WhatsApp numbers")
 	}
 	phone, _ := c.Config["phone_id"].(string)
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback(ctx)
 	if _, err = tx.Exec(ctx, `SELECT 1 FROM relay_channel_credentials WHERE channel='WhatsApp' AND (address=$1 OR channel_key=$2) ORDER BY id FOR UPDATE`, phone, c.Key); err != nil {
-		return err
+		return "", err
+	}
+	if c, err = adoptNumber(ctx, tx, site, c, phone); err != nil {
+		return "", err
 	}
 	var foreign bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM relay_channel_credentials WHERE channel='WhatsApp' AND (address=$1 OR channel_key=$2)
  AND (channel_key<>$2 OR container_id<>$3 OR (site_id IS NOT NULL AND site_id<>$4)))`, phone, c.Key, c.Container, site).Scan(&foreign); err != nil {
-		return err
+		return "", err
 	}
 	if foreign {
-		return ErrNumberInUse
+		return "", ErrNumberInUse
 	}
 	if err = s.saveChannel(ctx, tx, c, secret, false); err != nil {
-		return err
+		return "", err
 	}
 	if err = linkChannel(ctx, tx, site, ChannelRef{Channel: c.Channel, Key: c.Key}); err != nil {
-		return err
+		return "", err
 	}
-	return tx.Commit(ctx)
+	return c.Key, tx.Commit(ctx)
+}
+
+// adoptNumber moves the site's own number from another container into the
+// signup container and returns c with that number's key. The number's own
+// webhook app overrides belong to the old app, so they are cleared.
+func adoptNumber(ctx context.Context, tx pgx.Tx, site string, c Channel, phone string) (Channel, error) {
+	var key string
+	err := tx.QueryRow(ctx, `UPDATE relay_channel_credentials SET container_id=$3,updated_at=now()
+ WHERE channel='WhatsApp' AND address=$1 AND site_id=$2 AND container_id<>$3 RETURNING channel_key`, phone, site, c.Container).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c, nil
+	}
+	if err != nil {
+		return c, err
+	}
+	c.Key = key
+	c.ClearSecrets = append(c.ClearSecrets, "app_secret", "verify_token")
+	return c, nil
 }
 
 // LinkChannel adds one channel to a site and keeps its other channels. A

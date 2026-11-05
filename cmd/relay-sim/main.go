@@ -454,6 +454,8 @@ func runSimulation(validateDatabase func(string) error) error {
 		return err
 	}
 	defer wa.Outbox.Close()
+	// Signup numbers sync their quality, limit and templates as on the Hub; sim-v1 keeps sync off.
+	wa.Metadata = &whatsapp.MetadataSync{DB: pool, Service: wa}
 	authStore := &auth.Store{DB: pool}
 	registry, err := channels.Load(nil)
 	if err != nil {
@@ -503,7 +505,11 @@ func runSimulation(validateDatabase func(string) error) error {
 	}
 	signupService.Register(mux)
 	wa.AccountUpdate = signupService.AccountUpdate
-	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService})
+	siteNumbers, err := sim.numbers()
+	if err != nil {
+		return err
+	}
+	handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(pool.Ping, wa, authStore.Authenticate, registry, channels.Store{DB: pool, Wake: channelWake}, hubmcp.Options{Signup: signupService, Numbers: siteNumbers})
 	if err != nil {
 		return err
 	}
@@ -519,6 +525,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	esBrowser := signup.browser()
 	mm.Handle("GET /sdk.js", esBrowser)
 	mm.Handle("/es/", esBrowser)
+	mm.HandleFunc("GET /whatsapp_business/attachments/", signup.attachment)
 	mm.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/bot") || strings.HasPrefix(r.URL.Path, "/file/bot") {
 			fakeTelegram.ServeHTTP(w, r)
@@ -550,6 +557,7 @@ func runSimulation(validateDatabase func(string) error) error {
 	channels.Outbox{DB: pool, Registry: registry}.Run(ctx)
 	channels.MailboxPoller{DB: mailboxPool, Registry: registry, Wake: channelWake}.Run(ctx)
 	wa.Outbox.Run(ctx)
+	wa.Metadata.Run(ctx)
 	bulkWindow, err := whatsapp.ParseBulkWindow(os.Getenv("RELAY_BULK_UPDATE_WINDOW"))
 	if err != nil {
 		return err

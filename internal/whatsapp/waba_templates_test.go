@@ -61,6 +61,8 @@ func TestNumbersOfOneWABASyncTemplatesOnce(t *testing.T) {
 	first, second := testAccount(), testAccount()
 	first.SyncMetadata, second.SyncMetadata = true, true
 	second.ID, second.PhoneID, second.CoreToken = "site-a-second", "333", strings.Repeat("b", 64)
+	// Both numbers belong to one site, so the site may change the WABA's templates.
+	first.SiteID, second.SiteID = "site-a", "site-a"
 	s, err := New([]Account{first, second})
 	if err != nil {
 		t.Fatal(err)

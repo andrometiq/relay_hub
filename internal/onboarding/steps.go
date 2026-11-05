@@ -2,14 +2,13 @@ package onboarding
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"slices"
 	"time"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/jackc/pgx/v5"
 )
 
 // stepError is a classified step failure. Transient failures are retried by
@@ -235,19 +234,24 @@ func (s *Service) decideFlow(r *record, status map[string]any) {
 	}
 }
 
-// channel creates or updates wa-<phone id> in the signup container and links it to the site.
+// channel creates or updates wa-<phone id> in the signup container and links
+// it to the site. A number the site already has keeps its key and its PIN.
 func (s *Service) channel(ctx context.Context, r *record) error {
 	token, err := s.token(ctx, r)
 	if err != nil {
 		return err
 	}
 	key := "wa-" + *r.phoneID
+	err = s.cfg.DB.QueryRow(ctx, `SELECT channel_key FROM relay_channel_credentials WHERE channel='WhatsApp' AND address=$1 AND site_id=$2`, *r.phoneID, r.site).Scan(&key)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
 	pin := ""
 	if stored, err := s.cfg.Store.Credential(ctx, "WhatsApp", key); err == nil {
 		pin, _ = stored.Config["pin"].(string)
 	}
 	if pin == "" {
-		if pin, err = newPIN(); err != nil {
+		if pin, err = containers.NewPIN(); err != nil {
 			return err
 		}
 	}
@@ -267,7 +271,7 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 		label = text(r.Phone["display_phone_number"])
 	}
 	channel := containers.Channel{Key: key, Channel: "WhatsApp", Container: r.container, Label: label, Enabled: true, Config: config}
-	err = s.cfg.Store.SaveSignupChannel(ctx, r.site, channel, token)
+	key, err = s.cfg.Store.SaveSignupChannel(ctx, r.site, channel, token)
 	if errors.Is(err, containers.ErrNumberInUse) || errors.Is(err, containers.ErrConflict) {
 		return &stepError{Code: "number_in_use", Message: "This number is already connected to another Relay site."}
 	}
@@ -281,14 +285,6 @@ func (s *Service) channel(ctx context.Context, r *record) error {
 	_ = s.cfg.Metadata.MarkTemplatesStale(ctx, *r.WABAID)
 	_ = s.cfg.Metadata.RefreshAccounts(ctx, *r.WABAID)
 	return nil
-}
-
-func newPIN() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%06d", n.Int64()), nil
 }
 
 // subscribe subscribes the app to the WABA; an unknown outcome is checked with G6.

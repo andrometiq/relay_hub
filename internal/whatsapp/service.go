@@ -204,6 +204,9 @@ type Input struct {
 	Granularity           string   `json:"granularity,omitempty"`
 	Dimensions            []string `json:"dimensions,omitempty"`
 
+	// Profile is the business profile change of profile.update.
+	Profile *BusinessProfile `json:"profile,omitempty"`
+
 	Operation  string           `json:"operation"`
 	ID         string           `json:"id,omitempty"`
 	ReplyTo    string           `json:"reply_to,omitempty"`
@@ -222,6 +225,20 @@ type Input struct {
 }
 
 var ErrBusy = errors.New("Hub is busy; operation was not submitted")
+
+// ErrSharedWABA means another site has a number on the same WhatsApp Business
+// Account, so one site may not change what both sites use.
+var ErrSharedWABA = errors.New("this WhatsApp Business Account is shared with another site; ask the Hub administrator to change it")
+
+// wabaMutation reports an operation that changes the whole WhatsApp Business Account.
+func wabaMutation(op string) bool {
+	switch op {
+	case "templates.create", "templates.update", "templates.delete",
+		"flows.create", "flows.update", "flows.upload", "flows.publish", "flows.deprecate", "flows.delete":
+		return true
+	}
+	return false
+}
 
 // ErrGroupNotFound means ownership was not established and no mutation was sent.
 var ErrGroupNotFound = errors.New("group not found in this account")
@@ -390,6 +407,11 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 			}
 		}
 	}
+	if wabaMutation(in.Operation) {
+		if _, shared := s.wabaNumbers(a); shared {
+			return nil, ErrSharedWABA
+		}
+	}
 	if in.Operation == "messages.flow" {
 		return s.sendFlow(ctx, a, in, validateOnly, before)
 	}
@@ -502,6 +524,10 @@ func (s *Service) execute(ctx context.Context, a Account, in Input, validateOnly
 		}
 		path = a.PhoneID + "/messages"
 		body = payload
+	case "profile.get":
+		return s.readProfile(ctx, a)
+	case "profile.update":
+		return s.updateProfile(ctx, a, in, validateOnly)
 	case "account.metadata":
 		if s.Metadata == nil {
 			return map[string]any{"status": "not_synced"}, nil
