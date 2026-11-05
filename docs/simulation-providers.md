@@ -31,6 +31,17 @@ location/contact sends, reactions, chat actions, `getFile`, file downloads and
   delivers it to `/webhooks/telegram/sim-v1` using the Hub's derived secret.
   `invalid_signature: true` exercises rejection. Repeating an identical update
   exercises Hub deduplication; a conflicting update ID is rejected.
+- POST `/_sim/telegram/deliver` with `{"payload": <update>, "bot": "relay_sim_bot"}`
+  posts the update to the webhook that the bot registered with `setWebhook`,
+  with the secret it registered. `invalid_signature: true` sends a wrong
+  secret. The sim gives Telegram the public address `https://hub.sim.invalid`
+  and maps it to its own listener. GET `/_sim/providers` shows each bot's
+  webhook URL under `telegram_webhooks`, never its secret.
+- POST `/_sim/telegram/clear-webhook` with `{"bot": "relay_sim_bot"}` drops
+  the bot's webhook, as when another system changed it.
+- The fake answers `setWebhook`, `getWebhookInfo` and `deleteWebhook`. A token
+  that is not a simulation token gets Telegram's 401 answer, so a site's
+  `telegram.bot.connect` with a wrong token returns `invalid_token`.
 - POST `/_sim/telegram/queue` with the same shape queues without delivering.
   `getUpdates` supports offset acknowledgement and a limit of up to 100.
 - POST `/_sim/telegram/faults` with `{"faults": ["429", "503"]}` replaces the
@@ -100,3 +111,12 @@ These are local provider/Hub integration tests. The connected Telegram/email
 Core and Socket.IO drivers are documented in [Connected channel simulations](connected-channel-simulations.md),
 including their current Core defects. Browser rendering and the 12,000-event
 latency acceptance remain separate release proofs.
+
+## Site bots and mailboxes
+
+The sim serves the `telegram.bot.*` and `email.mailbox.*` site tools. Set
+`RELAY_SIM_MAIL_ALLOW=127.0.0.1/32` so that a site may connect a mailbox on the
+fake mail servers: host `127.0.0.1`, SMTP port 587, IMAP port 993, username
+`sim-mail`. A wrong password fails the sign-in and stores nothing. Without the
+variable, a loopback host is refused, as in the Hub. Only the sim reads it.
+

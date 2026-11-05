@@ -525,6 +525,21 @@ The Hub makes the site, its service user and its auth key. It proves that the ca
 | `sync_window_passed` | The chat history import of an app number must start within 24 hours. | The number works. Old chats are not imported. |
 | `partner_removed` | The business removed the Hub app in Meta. | The owner signs up again from Relay. |
 
+### 5.13 Let sites add their own bots and mailboxes
+
+Do [recipe 5.12](#512-let-sites-add-their-own-whatsapp-numbers) steps 2, 4 and 5 first: the Hub stores a site's bots and mailboxes in the signup container. For Telegram, set `RELAY_PUBLIC_ORIGIN` to the public HTTPS address of the Hub. Telegram does not send messages to an HTTP address.
+
+After this, the site owner connects bots and mailboxes from Relay Core: **Settings** → **Telegram** or **Email**. Relay sends the token or password to the Hub one time. The Hub tests it, keeps it encrypted, links the bot or mailbox to the site and, for a bot, registers the webhook. The site can check, rename, turn off, change and remove its own bots and mailboxes. It never sees a token, a password or a webhook secret.
+
+The Hub refuses mail servers on private or local addresses for these mailboxes. A mailbox on your own private mail server must be added here by an administrator. The mailbox webhook and its secret also stay on the Hub pages.
+
+| Site error | Meaning | Fix |
+| --- | --- | --- |
+| `in_use` | The bot or mailbox is live on a site. | Remove it from that site first. |
+| `not_available` | The Hub has no signup container. | Do step 2 of recipe 5.12. |
+| `host_refused` | The mail server is on a private or local address. | Use the public mail server name, or add the mailbox here. |
+| `rate_limited` | The site tried too often in one hour. | Wait one hour. |
+
 ## 6. Status labels
 
 | Where | Label | Meaning |
