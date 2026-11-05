@@ -10,7 +10,6 @@ import (
 	"github.com/andrometiq/relay_hub/internal/containers"
 	relayemail "github.com/andrometiq/relay_hub/internal/email"
 	"github.com/andrometiq/relay_hub/internal/telegram"
-	"github.com/jackc/pgx/v5"
 )
 
 // Clients builds provider clients for credentials a site sends, before they are stored.
@@ -101,22 +100,6 @@ func (s *Service) reload(ctx context.Context, site, key string) {
 	if err := s.Reload(ctx); err != nil {
 		log.Printf("channel %s of %s: runtime reload failed: %v", key, site, err)
 	}
-}
-
-// channel reads one channel of provider that belongs to site.
-func (s *Service) channel(ctx context.Context, provider, site, key string, missing Missing) (containers.Channel, error) {
-	key, err := Key(ctx, s.Store.DB, provider, site, key, missing)
-	if err != nil {
-		return containers.Channel{}, err
-	}
-	c, err := s.Store.GetChannel(ctx, containers.ChannelRef{Channel: provider, Key: key})
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && c.Site != site) {
-		return containers.Channel{}, missing.NotFound
-	}
-	if err != nil {
-		return containers.Channel{}, ErrUnavailable
-	}
-	return c, nil
 }
 
 // stored maps a store error of a connect or a change to its failure.

@@ -6,13 +6,11 @@ package numbers
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/andrometiq/relay_hub/internal/sitechannels"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
-	"github.com/jackc/pgx/v5"
 )
 
 // Service runs the site number tools.
@@ -47,18 +45,7 @@ func (s *Service) now() time.Time {
 
 // channel reads one number of site with its public settings only.
 func (s *Service) channel(ctx context.Context, site, key string) (containers.Channel, error) {
-	key, err := sitechannels.Key(ctx, s.Store.DB, "WhatsApp", site, key, missingNumber)
-	if err != nil {
-		return containers.Channel{}, err
-	}
-	c, err := s.Store.GetChannel(ctx, containers.ChannelRef{Channel: "WhatsApp", Key: key})
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && c.Site != site) {
-		return containers.Channel{}, missingNumber.NotFound
-	}
-	if err != nil {
-		return containers.Channel{}, errUnavailable
-	}
-	return c, nil
+	return sitechannels.Channel(ctx, s.Store, "WhatsApp", site, key, missingNumber)
 }
 
 // Health is what a site may see about one of its numbers.

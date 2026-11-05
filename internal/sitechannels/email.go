@@ -169,7 +169,7 @@ func (s *Service) connectMailbox(ctx context.Context, site string, in MailboxInp
 
 // MailboxHealth reads the stored state and the sync state of one mailbox. It never contacts a mail server.
 func (s *Service) MailboxHealth(ctx context.Context, site, key string) (MailboxHealth, error) {
-	c, err := s.channel(ctx, "Email", site, key, missingMailbox)
+	c, err := Channel(ctx, s.Store, "Email", site, key, missingMailbox)
 	if err != nil {
 		return MailboxHealth{}, err
 	}
@@ -194,7 +194,7 @@ func (s *Service) MailboxHealth(ctx context.Context, site, key string) (MailboxH
 
 // CheckMailbox signs in to SMTP and IMAP with the mailbox the runtime uses and records the result.
 func (s *Service) CheckMailbox(ctx context.Context, site, key string) (MailboxHealth, error) {
-	c, err := s.channel(ctx, "Email", site, key, missingMailbox)
+	c, err := Channel(ctx, s.Store, "Email", site, key, missingMailbox)
 	if err != nil {
 		return MailboxHealth{}, err
 	}
@@ -224,7 +224,7 @@ func (s *Service) SaveMailboxSettings(ctx context.Context, site string, in Mailb
 	if in.Enabled == nil && in.Label == nil && in.MailboxServer == (MailboxServer{}) {
 		return MailboxHealth{}, errNoChange
 	}
-	c, err := s.channel(ctx, "Email", site, in.Channel, missingMailbox)
+	c, err := Channel(ctx, s.Store, "Email", site, in.Channel, missingMailbox)
 	if err != nil {
 		return MailboxHealth{}, err
 	}
@@ -279,7 +279,7 @@ func (s *Service) RemoveMailbox(ctx context.Context, site, key string, confirm b
 	if !confirm {
 		return MailboxRemoval{}, errConfirm
 	}
-	c, err := s.channel(ctx, "Email", site, key, missingMailbox)
+	c, err := Channel(ctx, s.Store, "Email", site, key, missingMailbox)
 	if err != nil {
 		return MailboxRemoval{}, err
 	}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/andrometiq/relay_hub/internal/containers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -66,6 +67,22 @@ func Key(ctx context.Context, db *pgxpool.Pool, provider, site, key string, miss
 		return keys[0], nil
 	}
 	return "", missing.Choose
+}
+
+// Channel reads one channel of provider that belongs to site.
+func Channel(ctx context.Context, store *containers.Store, provider, site, key string, missing Missing) (containers.Channel, error) {
+	key, err := Key(ctx, store.DB, provider, site, key, missing)
+	if err != nil {
+		return containers.Channel{}, err
+	}
+	c, err := store.GetChannel(ctx, containers.ChannelRef{Channel: provider, Key: key})
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && c.Site != site) {
+		return containers.Channel{}, missing.NotFound
+	}
+	if err != nil {
+		return containers.Channel{}, ErrUnavailable
+	}
+	return c, nil
 }
 
 // Run calls one tool for the caller's site and returns its result as an object or a coded failure.

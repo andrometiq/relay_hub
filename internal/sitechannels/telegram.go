@@ -103,7 +103,7 @@ func (s *Service) connectBot(ctx context.Context, site, token, label string, ref
 
 // BotHealth reads the stored state of one bot. It never contacts Telegram.
 func (s *Service) BotHealth(ctx context.Context, site, key string) (BotHealth, error) {
-	c, err := s.channel(ctx, "Telegram", site, key, missingBot)
+	c, err := Channel(ctx, s.Store, "Telegram", site, key, missingBot)
 	if err != nil {
 		return BotHealth{}, err
 	}
@@ -118,7 +118,7 @@ func botHealth(c containers.Channel) BotHealth {
 
 // CheckBot checks the token with getMe and reads the webhook; repair registers the webhook again.
 func (s *Service) CheckBot(ctx context.Context, site, key string, repair bool) (BotCheck, error) {
-	c, err := s.channel(ctx, "Telegram", site, key, missingBot)
+	c, err := Channel(ctx, s.Store, "Telegram", site, key, missingBot)
 	if err != nil {
 		return BotCheck{}, err
 	}
@@ -156,7 +156,7 @@ func (s *Service) SaveBotSettings(ctx context.Context, site string, in BotSettin
 	if in.Enabled == nil && in.Label == nil && strings.TrimSpace(in.BotToken) == "" {
 		return BotHealth{}, errNoChange
 	}
-	c, err := s.channel(ctx, "Telegram", site, in.Channel, missingBot)
+	c, err := Channel(ctx, s.Store, "Telegram", site, in.Channel, missingBot)
 	if err != nil {
 		return BotHealth{}, err
 	}
@@ -208,7 +208,7 @@ func (s *Service) RemoveBot(ctx context.Context, site, key string, confirm bool)
 	if !confirm {
 		return BotRemoval{}, errConfirm
 	}
-	c, err := s.channel(ctx, "Telegram", site, key, missingBot)
+	c, err := Channel(ctx, s.Store, "Telegram", site, key, missingBot)
 	if err != nil {
 		return BotRemoval{}, err
 	}
