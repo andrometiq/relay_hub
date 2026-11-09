@@ -44,6 +44,15 @@ prune_releases(){
  while IFS= read -r old; do
   [[ "releases/${old##*/}" == "$current" ]] || rm -rf -- "$old"
  done < <(find "$RUNTIME/releases" -maxdepth 1 -name 'release-*' -type d | sort -r | tail -n +4)
+ prune_binaries
+}
+# Single-binary builds (doctor, migrate, unmanaged restart): keep the newest 3 and the running one.
+prune_binaries(){
+ local running='' old
+ [[ -f "$RUNTIME/hub.pid" ]] && running=$(readlink "/proc/$(<"$RUNTIME/hub.pid")/exe" 2>/dev/null || true)
+ while IFS= read -r old; do
+  [[ "$old" == "$running" ]] || rm -rf -- "$old" "$old.ui"
+ done < <(find "$RUNTIME/releases" -maxdepth 1 -name 'relay-hub-*' -type f | sort -r | tail -n +4)
 }
 # Ready means this start of the unit (no automatic restart since) runs the current release and answers /readyz.
 wait_ready(){

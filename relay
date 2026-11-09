@@ -69,7 +69,7 @@ start_db(){
  fi
 }
 build_ui(){ (cd frontend && npm ci --ignore-scripts --no-audit --no-fund && npm run build); }
-compile(){ mkdir -p "$RUNTIME/releases"; CANDIDATE="$RUNTIME/releases/relay-hub-$(date +%s%N)"; go build -o "$CANDIDATE" ./cmd/relay-hub; }
+compile(){ mkdir -p "$RUNTIME/releases"; CANDIDATE="$RUNTIME/releases/relay-hub-$(date +%s%N)"; go build -o "$CANDIDATE" ./cmd/relay-hub; prune_binaries; }
 owned_pid(){
  [[ -f "$RUNTIME/hub.pid" ]] || return 1
  read -r PID <"$RUNTIME/hub.pid"
