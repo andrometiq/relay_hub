@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -54,48 +52,20 @@ func (s *Service) resumableUpload(ctx context.Context, a Account, raw []byte, me
 	if len(id) > 4096 || !uploadSession.MatchString(id) {
 		return "", errors.New("provider returned an invalid upload session")
 	}
-	// Meta may take part of the file and answer with the file_offset to resume from instead of a handle.
-	offset := 0
-	for attempt := 0; attempt < 8; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+"/"+a.Version+"/"+id, bytes.NewReader(raw[offset:]))
-		if err != nil {
-			return "", errors.New("cannot prepare the upload")
-		}
-		req.Header.Set("Authorization", "OAuth "+a.AccessToken)
-		req.Header.Set("Content-Type", mediaType)
-		req.Header.Set("file_offset", strconv.Itoa(offset))
-		result, err := s.request(req)
-		if err != nil {
-			return "", err
-		}
-		if handle, _ := result["h"].(string); strings.TrimSpace(handle) != "" {
-			if len(handle) > 8192 || strings.ContainsAny(handle, "\r\n") {
-				return "", errors.New("provider returned an invalid upload handle")
-			}
-			return handle, nil
-		}
-		next, ok := uploadOffset(result["file_offset"])
-		if !ok || next <= offset || next >= len(raw) {
-			keys := make([]string, 0, len(result))
-			for key := range result {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			return "", fmt.Errorf("provider did not return an upload handle (fields %v, file_offset %v of %d bytes)", keys, result["file_offset"], len(raw))
-		}
-		offset = next
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.base+"/"+a.Version+"/"+id, bytes.NewReader(raw))
+	if err != nil {
+		return "", errors.New("cannot prepare the upload")
 	}
-	return "", errors.New("provider did not finish the upload")
-}
-
-// uploadOffset reads Meta's file_offset, which arrives as a JSON number or a numeric string.
-func uploadOffset(value any) (int, bool) {
-	switch v := value.(type) {
-	case float64:
-		return int(v), v >= 0
-	case string:
-		n, err := strconv.Atoi(v)
-		return n, err == nil && n >= 0
+	req.Header.Set("Authorization", "OAuth "+a.AccessToken)
+	req.Header.Set("Content-Type", mediaType)
+	req.Header.Set("file_offset", "0")
+	result, err := s.request(req)
+	if err != nil {
+		return "", err
 	}
-	return 0, false
+	handle, _ := result["h"].(string)
+	if strings.TrimSpace(handle) == "" || len(handle) > 8192 || strings.ContainsAny(handle, "\r\n") {
+		return "", errors.New("provider did not return an upload handle")
+	}
+	return handle, nil
 }

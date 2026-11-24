@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -55,55 +54,5 @@ func TestTemplateSampleUpload(t *testing.T) {
 				t.Fatal("disabled templates were accepted")
 			}
 		})
-	}
-}
-
-func TestTemplateSampleUploadResumesFromProviderOffset(t *testing.T) {
-	raw := "%PDF-1.7\n" + strings.Repeat("x", 30)
-	var bodies, offsets []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v25.0/333/uploads" {
-			io.WriteString(w, `{"id":"upload:fixture=="}`)
-			return
-		}
-		body, _ := io.ReadAll(r.Body)
-		bodies, offsets = append(bodies, string(body)), append(offsets, r.Header.Get("file_offset"))
-		if len(bodies) == 1 {
-			io.WriteString(w, `{"id":"upload:fixture==","file_offset":12}`)
-			return
-		}
-		io.WriteString(w, `{"h":"4:sample-handle"}`)
-	}))
-	defer server.Close()
-	a := testAccount()
-	a.AppID = "333"
-	s, _ := New([]Account{a})
-	s.base = server.URL
-	in := Input{Operation: "templates.media_upload", MediaType: "document", MIMEType: "application/pdf", Filename: "sample.pdf", ContentBase64: base64.StdEncoding.EncodeToString([]byte(raw))}
-	result, err := s.Execute(context.Background(), a, in)
-	if err != nil || result["handle"] != "4:sample-handle" {
-		t.Fatalf("upload failed: %v %v", result, err)
-	}
-	if len(bodies) != 2 || bodies[0] != raw || bodies[1] != raw[12:] || offsets[0] != "0" || offsets[1] != "12" {
-		t.Fatalf("upload did not resume at the provider offset: %q %q", offsets, bodies)
-	}
-}
-
-func TestTemplateSampleUploadNamesTheProviderAnswerWithoutHandle(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v25.0/333/uploads" {
-			io.WriteString(w, `{"id":"upload:fixture=="}`)
-			return
-		}
-		io.WriteString(w, `{"id":"upload:fixture==","file_offset":0}`)
-	}))
-	defer server.Close()
-	a := testAccount()
-	a.AppID = "333"
-	s, _ := New([]Account{a})
-	s.base = server.URL
-	in := Input{Operation: "templates.media_upload", MediaType: "document", MIMEType: "application/pdf", Filename: "sample.pdf", ContentBase64: base64.StdEncoding.EncodeToString([]byte("%PDF-1.7\nfixture"))}
-	if _, err := s.Execute(context.Background(), a, in); err == nil || !strings.Contains(err.Error(), "file_offset 0 of 16 bytes") {
-		t.Fatalf("stalled upload was not reported: %v", err)
 	}
 }
