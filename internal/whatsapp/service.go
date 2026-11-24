@@ -295,7 +295,7 @@ func New(accounts []Account) (*Service, error) {
 		seen[a.ID] = true
 		tokens[a.CoreToken] = true
 	}
-	return &Service{webhookSlots: make(chan struct{}, 4), callbackWake: make(chan struct{}, 1), Accounts: accounts, slots: make(chan struct{}, 4), base: "https://graph.facebook.com", client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("provider redirects refused") }}}, nil
+	return &Service{webhookSlots: make(chan struct{}, 32), callbackWake: make(chan struct{}, 1), Accounts: accounts, slots: make(chan struct{}, 4), base: "https://graph.facebook.com", client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("provider redirects refused") }}}, nil
 }
 
 // NewWithHTTPClient installs a caller-owned transport for instrumentation or
