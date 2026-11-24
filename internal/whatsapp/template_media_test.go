@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,5 +55,25 @@ func TestTemplateSampleUpload(t *testing.T) {
 				t.Fatal("disabled templates were accepted")
 			}
 		})
+	}
+}
+
+func TestTemplateSampleUploadKeepsAMultiPartHandle(t *testing.T) {
+	handle := "4:c2FtcGxl:YXBwbGljYXRpb24vcGRm:part-one\n4:c2FtcGxl:YXBwbGljYXRpb24vcGRm:part-two"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v25.0/333/uploads" {
+			io.WriteString(w, `{"id":"upload:fixture=="}`)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"h": handle})
+	}))
+	defer server.Close()
+	a := testAccount()
+	a.AppID = "333"
+	s, _ := New([]Account{a})
+	s.base = server.URL
+	in := Input{Operation: "templates.media_upload", MediaType: "document", MIMEType: "application/pdf", Filename: "sample.pdf", ContentBase64: base64.StdEncoding.EncodeToString([]byte("%PDF-1.7\nfixture"))}
+	if result, err := s.Execute(context.Background(), a, in); err != nil || result["handle"] != handle {
+		t.Fatalf("multi-part handle was not kept: %v %v", result, err)
 	}
 }

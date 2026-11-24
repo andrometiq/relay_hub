@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Session IDs are provider-issued paths, never arbitrary URLs. Preserve the
@@ -64,8 +65,12 @@ func (s *Service) resumableUpload(ctx context.Context, a Account, raw []byte, me
 		return "", err
 	}
 	handle, _ := result["h"].(string)
-	if strings.TrimSpace(handle) == "" || len(handle) > 8192 || strings.ContainsAny(handle, "\r\n") {
+	if strings.TrimSpace(handle) == "" {
 		return "", errors.New("provider did not return an upload handle")
+	}
+	// A larger file's handle is several "4:..." parts joined by newlines; it goes back to Meta unchanged.
+	if len(handle) > 65536 || strings.ContainsFunc(handle, func(r rune) bool { return r != '\n' && unicode.IsControl(r) }) {
+		return "", errors.New("provider returned an invalid upload handle")
 	}
 	return handle, nil
 }
