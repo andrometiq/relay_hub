@@ -422,6 +422,7 @@ func run() error {
 			return errors.New("unsupported channel")
 		}}.register(mux, browserAuth.Protect, directory.admin)
 		forwardsAdmin{store: forwards}.register(mux, browserAuth.Protect, directory.admin)
+		requestLogAdmin{db: authPool}.register(mux, browserAuth.Protect, directory.admin)
 		enrolmentAdmin{backend: signup.service, session: browserAuth.Session}.register(mux, browserAuth.Protect, directory.admin)
 		mux.Handle("GET /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("POST /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))

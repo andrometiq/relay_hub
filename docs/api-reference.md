@@ -358,6 +358,7 @@ The administration routes are browser-session APIs, not a second public messagin
 | `GET /api/accounts/{key}/telegram/webhook`, `GET /api/accounts/{key}/email/webhook` | Derived ingress secret and path of a bot or mailbox |
 | `GET /api/channels`, `/api/channel-events`, `/api/deliveries` | Runtime and channel state, and bounded history |
 | `GET /api/audit` | Administrator operational audit |
+| `GET /api/request-log` | Administrator HTTP request log, newest first: `{entries, more}`. Filters: `status`, `site`, `from` and `to` (RFC 3339), `before={id}` for older rows, `limit` (default 50, maximum 200) |
 | `GET /api/ready` | Authenticated readiness view |
 
 Source contracts: [MCP registration](../internal/hubmcp/server.go), [WhatsApp inputs](../internal/whatsapp/service.go), [Telegram messages](../internal/telegram/messages.go), [Telegram groups](../internal/telegram/groups.go), [route handlers](../cmd/relay-hub/main.go). Use the [support matrix](provider-support.md) to distinguish implemented paths from unimplemented provider features.
