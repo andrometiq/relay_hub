@@ -10,16 +10,21 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// memoryCopier stores copied rows; block holds each copy until it is closed.
+// memoryCopier stores copied rows; started gets a signal as each copy starts
+// and block holds the copy until it is closed.
 type memoryCopier struct {
 	mu      sync.Mutex
 	batches []int
 	rows    [][]any
+	started chan struct{}
 	block   chan struct{}
 	err     error
 }
 
 func (m *memoryCopier) CopyFrom(ctx context.Context, table pgx.Identifier, cols []string, source pgx.CopyFromSource) (int64, error) {
+	if m.started != nil {
+		m.started <- struct{}{}
+	}
 	if m.block != nil {
 		<-m.block
 	}
@@ -158,5 +163,42 @@ func TestWriterCloseHonoursDeadline(t *testing.T) {
 	defer cancel()
 	if err := w.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// idleWriter has no run goroutine, so a test drives drain itself.
+func idleWriter(db Copier, buffer, batch int) *Writer {
+	return &Writer{db: db, entries: make(chan Entry, buffer), batchSize: batch, stopCtx: context.Background()}
+}
+
+func TestWriterDrainStopsAfterFailedBatch(t *testing.T) {
+	w := idleWriter(&memoryCopier{err: errors.New("database down")}, 20, 5)
+	for range 12 {
+		w.entries <- Entry{}
+	}
+	w.drain(nil)
+	if w.failed.Load() != 5 || w.dropped.Load() != 7 || len(w.entries) != 0 {
+		t.Fatalf("failed %d dropped %d left %d", w.failed.Load(), w.dropped.Load(), len(w.entries))
+	}
+}
+
+func TestWriterDrainCountsLateEntries(t *testing.T) {
+	db := &memoryCopier{started: make(chan struct{}), block: make(chan struct{})}
+	w := idleWriter(db, 20, 5)
+	w.entries <- Entry{}
+	w.entries <- Entry{}
+	drained := make(chan struct{})
+	go func() {
+		w.drain(nil)
+		close(drained)
+	}()
+	<-db.started
+	for range 3 {
+		w.entries <- Entry{}
+	}
+	close(db.block)
+	<-drained
+	if n, _ := db.stored(); n != 2 || w.dropped.Load() != 3 || len(w.entries) != 0 {
+		t.Fatalf("stored %d dropped %d left %d", n, w.dropped.Load(), len(w.entries))
 	}
 }

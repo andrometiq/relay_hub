@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -26,6 +27,8 @@ type requestLogRow struct {
 	RequestID     string    `json:"request_id"`
 	Error         *string   `json:"error"`
 }
+
+const requestLogReadTimeout = 5 * time.Second
 
 // requestLogAdmin pages the Hub request log for admins, newest first.
 type requestLogAdmin struct{ db *pgxpool.Pool }
@@ -67,7 +70,9 @@ func (a requestLogAdmin) list(w http.ResponseWriter, r *http.Request) {
 	if limit == 0 {
 		limit = 50
 	}
-	rows, err := a.db.Query(r.Context(), `SELECT id,occurred_at,method,path,route,status,duration_ms,request_bytes,response_bytes,host(remote_ip),user_agent,site_id,account,request_id,error
+	ctx, cancel := context.WithTimeout(r.Context(), requestLogReadTimeout)
+	defer cancel()
+	rows, err := a.db.Query(ctx, `SELECT id,occurred_at,method,path,route,status,duration_ms,request_bytes,response_bytes,host(remote_ip),user_agent,site_id,account,request_id,error
  FROM relay_request_log WHERE ($1::bigint=0 OR id<$1) AND ($2::int=0 OR status=$2) AND ($3='' OR site_id=$3)
  AND ($4::timestamptz IS NULL OR occurred_at>=$4) AND ($5::timestamptz IS NULL OR occurred_at<$5) ORDER BY id DESC LIMIT $6`,
 		before, status, site, from, to, limit+1)

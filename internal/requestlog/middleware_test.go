@@ -150,3 +150,23 @@ func TestCleanKeepsValidText(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestMiddlewareFlushReachesServerWriter(t *testing.T) {
+	recorder := &memoryRecorder{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: one\n\n"))
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			t.Errorf("flush: %v", err)
+		}
+	})
+	w := httptest.NewRecorder()
+	Middleware(recorder, handler).ServeHTTP(w, httptest.NewRequest("GET", "/api/events", nil))
+
+	if !w.Flushed {
+		t.Fatal("flush did not reach the server writer")
+	}
+	if e := recorder.only(t); e.Status != 200 || e.ResponseBytes != 11 {
+		t.Fatalf("status %d bytes %d", e.Status, e.ResponseBytes)
+	}
+}

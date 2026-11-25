@@ -36,17 +36,18 @@ type Writer struct {
 	batchSize int
 	interval  time.Duration
 	stopping  chan struct{}
+	stopCtx   context.Context
 	done      chan struct{}
 	stopOnce  sync.Once
 	dropped   atomic.Int64
 	failed    atomic.Int64
 }
 
-// NewPool opens the writer's own single connection, so request log writes
-// never wait for, or hold, a connection of the auth and admin pool.
+// NewPool opens the request log's own pool: one connection for the writer and
+// one for admin reads, so neither waits for, or holds, an auth pool connection.
 func NewPool(ctx context.Context, config *pgxpool.Config) (*pgxpool.Pool, error) {
 	config = config.Copy()
-	config.MaxConns, config.MinConns = 1, 0
+	config.MaxConns, config.MinConns = 2, 0
 	return pgxpool.NewWithConfig(ctx, config)
 }
 
@@ -74,9 +75,13 @@ func (w *Writer) Record(entry Entry) {
 	}
 }
 
-// Close stops new entries, writes the buffered ones and waits for that or ctx.
+// Close stops new entries, writes the buffered ones within ctx and waits for
+// that or ctx.
 func (w *Writer) Close(ctx context.Context) error {
-	w.stopOnce.Do(func() { close(w.stopping) })
+	w.stopOnce.Do(func() {
+		w.stopCtx = ctx
+		close(w.stopping)
+	})
 	select {
 	case <-w.done:
 		return nil
@@ -91,44 +96,64 @@ func (w *Writer) run() {
 	defer ticker.Stop()
 	batch := make([]Entry, 0, w.batchSize)
 	reported := time.Now()
-	add := func(entry Entry) {
-		if batch = append(batch, entry); len(batch) >= w.batchSize {
-			batch = w.flush(batch)
-		}
-	}
 	for {
 		select {
 		case entry := <-w.entries:
-			add(entry)
+			if batch = append(batch, entry); len(batch) >= w.batchSize {
+				w.flush(context.Background(), batch)
+				batch = batch[:0]
+			}
 		case <-ticker.C:
-			batch = w.flush(batch)
+			w.flush(context.Background(), batch)
+			batch = batch[:0]
 			if time.Since(reported) >= reportEvery {
 				w.report()
 				reported = time.Now()
 			}
 		case <-w.stopping:
-			for {
-				select {
-				case entry := <-w.entries:
-					add(entry)
-				default:
-					w.flush(batch)
-					w.report()
-					return
-				}
-			}
+			w.drain(batch)
+			w.report()
+			return
 		}
 	}
 }
 
-// flush writes one batch with COPY. A failed batch is counted, not retried, so
-// a database outage cannot grow memory or delay requests. Only the first error
-// of a report period is logged.
-func (w *Writer) flush(batch []Entry) []Entry {
-	if len(batch) == 0 {
-		return batch
+// drain writes the buffered entries within the Close deadline. After a failed
+// batch it stops writing and counts the rest as dropped, so a database outage
+// cannot hold up shutdown.
+func (w *Writer) drain(batch []Entry) {
+	stored := true
+	for stored {
+		select {
+		case entry := <-w.entries:
+			if batch = append(batch, entry); len(batch) >= w.batchSize {
+				stored = w.flush(w.stopCtx, batch)
+				batch = batch[:0]
+			}
+		default:
+			w.flush(w.stopCtx, batch)
+			stored = false
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	// Record can still send an entry that passed its stopping check.
+	for {
+		select {
+		case <-w.entries:
+			w.dropped.Add(1)
+		default:
+			return
+		}
+	}
+}
+
+// flush writes one batch with COPY and reports whether it was stored. A failed
+// batch is counted, not retried, so a database outage cannot grow memory or
+// delay requests. Only the first error of a report period is logged.
+func (w *Writer) flush(parent context.Context, batch []Entry) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(parent, writeTimeout)
 	defer cancel()
 	if _, err := w.db.CopyFrom(ctx, pgx.Identifier{"relay_request_log"}, columns, pgx.CopyFromSlice(len(batch), func(i int) ([]any, error) {
 		e := batch[i]
@@ -142,8 +167,9 @@ func (w *Writer) flush(batch []Entry) []Entry {
 		if w.failed.Add(int64(len(batch))) == int64(len(batch)) {
 			log.Printf("request log: cannot store entries: %v", err)
 		}
+		return false
 	}
-	return batch[:0]
+	return true
 }
 
 // report logs one line for the entries lost since the last report.

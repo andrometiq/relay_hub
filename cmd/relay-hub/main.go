@@ -422,7 +422,12 @@ func run() error {
 			return errors.New("unsupported channel")
 		}}.register(mux, browserAuth.Protect, directory.admin)
 		forwardsAdmin{store: forwards}.register(mux, browserAuth.Protect, directory.admin)
-		requestLogAdmin{db: authPool}.register(mux, browserAuth.Protect, directory.admin)
+		requestLogPool, err := requestlog.NewPool(context.Background(), authPool.Config())
+		if err != nil {
+			return err
+		}
+		defer requestLogPool.Close()
+		requestLogAdmin{db: requestLogPool}.register(mux, browserAuth.Protect, directory.admin)
 		enrolmentAdmin{backend: signup.service, session: browserAuth.Session}.register(mux, browserAuth.Protect, directory.admin)
 		mux.Handle("GET /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
 		mux.Handle("POST /api/channels/{channel}/{account}/connection", browserAuth.Protect(connections))
@@ -761,11 +766,6 @@ func run() error {
 		defer liveUpdates.Close()
 		mux.Handle("GET /socket.io/", liveUpdates)
 		mux.Handle("GET /", browserAuth.Protect(http.FileServer(http.Dir(ui))))
-		requestLogPool, err := requestlog.NewPool(context.Background(), authPool.Config())
-		if err != nil {
-			return err
-		}
-		defer requestLogPool.Close()
 		requestLog := requestlog.NewWriter(requestLogPool)
 		server := &http.Server{Addr: addr, Handler: requestlog.Middleware(requestLog, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
 		mailboxPool, err := channels.NewMailboxPool(context.Background(), authPool.Config())
@@ -809,7 +809,7 @@ func run() error {
 			return drain.Err()
 		}
 		if e := requestLog.Close(drain); e != nil {
-			return e
+			log.Printf("request log: shutdown flush stopped: %v", e)
 		}
 		if e := runtimeWorkers.Wait(drain); e != nil {
 			return e
