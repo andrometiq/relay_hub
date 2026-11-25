@@ -20,6 +20,7 @@ import (
 
 	"github.com/andrometiq/relay_hub/internal/auth"
 	"github.com/andrometiq/relay_hub/internal/containers"
+	"github.com/andrometiq/relay_hub/internal/requestlog"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -80,7 +81,7 @@ func (s *Service) enrol(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, fail(401, "token_invalid", "The enrolment token or setup code is not valid."))
 		return
 	}
-	if ok, wait := s.limiter.allow(s.now(), "token:"+auth.Hash(token), "ip:"+clientIP(r)); !ok {
+	if ok, wait := s.limiter.allow(s.now(), "token:"+auth.Hash(token), "ip:"+requestlog.ClientIP(r)); !ok {
 		failure := fail(429, "rate_limited", "Too many enrolment attempts. Try again later.")
 		failure.RetryAfter = int(wait.Seconds()) + 1
 		writeFailure(w, failure)
@@ -91,7 +92,7 @@ func (s *Service) enrol(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, fail(422, "invalid_request", "The enrolment request is not valid."))
 		return
 	}
-	result, err := s.Enrol(r.Context(), token, in, clientIP(r))
+	result, err := s.Enrol(r.Context(), token, in, requestlog.ClientIP(r))
 	if err != nil {
 		writeFailure(w, asFailure(err))
 		return

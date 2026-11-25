@@ -41,6 +41,8 @@ The private `.runtime/` directory contains release snapshots, process metadata a
 
 `/healthz` checks the process. `/readyz` checks database access and migration readiness. The authenticated `GET /api/audit` provides bounded, cursor-based operational history; delivery and channel-event APIs are account-filtered. A healthy probe does not establish successful provider delivery.
 
+The `relay_request_log` table keeps one row for each HTTP request: time, method, path without the query string, matched route, status, duration, request and response bytes, client IP, short user agent, site and channel account when the handler knows them, request ID, and the first 200 characters of a plain-text 5xx message. It keeps no query string, header value, body or credential. The Hub does not log `/assets/`, `/socket.io/`, `/healthz` or `/readyz`. Responses carry `X-Request-ID`; the Hub keeps a valid proxy `X-Request-ID` (8 to 64 letters, digits, `-` or `_`), so `proxy_set_header X-Request-ID $request_id;` in nginx links both logs. Writes go in batches (up to 500 rows each second) from a buffer of 10,000 rows and never delay a request. When the buffer is full or the database fails, the Hub drops the rows and logs one count each minute. The Hub does not delete rows; plan disk space for about 250 bytes for each request. Search with SQL, for example `SELECT * FROM relay_request_log WHERE status>=500 AND occurred_at>now()-interval '1 day' ORDER BY id DESC`, or with `GET /api/request-log`.
+
 | Symptom | Check |
 | --- | --- |
 | Service refuses startup | `./relay config`, PostgreSQL 18 availability, explicit Docker DSN, required credential key and HTTPS origin. |

@@ -1,9 +1,6 @@
 package onboarding
 
 import (
-	"net"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -54,22 +51,4 @@ func (l *limiter) recent(key string, now time.Time) []time.Time {
 	}
 	l.events[key] = kept
 	return kept
-}
-
-// clientIP is the caller's address. The Hub binds loopback behind a TLS proxy,
-// so a loopback peer's last X-Forwarded-For entry is the client.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			parts := strings.Split(forwarded, ",")
-			if candidate := net.ParseIP(strings.TrimSpace(parts[len(parts)-1])); candidate != nil {
-				return candidate.String()
-			}
-		}
-	}
-	return host
 }

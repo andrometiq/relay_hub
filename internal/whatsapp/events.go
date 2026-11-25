@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/andrometiq/relay_hub/internal/requestlog"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
@@ -252,6 +253,11 @@ func (s *Service) Webhook(w http.ResponseWriter, r *http.Request) {
 	byKey := map[string]Account{}
 	for _, a := range authenticated {
 		byKey[a.ID] = a
+	}
+	if len(routed) == 1 {
+		for key := range routed {
+			requestlog.Tag(r.Context(), byKey[key].SiteID, key)
+		}
 	}
 	for key, envelope := range routed {
 		a := byKey[key]

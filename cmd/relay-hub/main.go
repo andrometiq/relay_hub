@@ -18,6 +18,7 @@ import (
 	"github.com/andrometiq/relay_hub/internal/lifecycle"
 	"github.com/andrometiq/relay_hub/internal/live"
 	"github.com/andrometiq/relay_hub/internal/numbers"
+	"github.com/andrometiq/relay_hub/internal/requestlog"
 	relayruntime "github.com/andrometiq/relay_hub/internal/runtime"
 	"github.com/andrometiq/relay_hub/internal/sitechannels"
 	"github.com/andrometiq/relay_hub/internal/whatsapp"
@@ -355,7 +356,12 @@ func run() error {
 		siteNumbers := &numbers.Service{Store: accountStore, WhatsApp: wa, Reload: reloadRuntime}
 		siteChannels := &sitechannels.Service{Store: accountStore, Registry: channelRegistry, Clients: sitechannels.ProviderClients{}, Reload: reloadRuntime,
 			PublicURL: os.Getenv("RELAY_PUBLIC_ORIGIN") + os.Getenv("RELAY_PUBLIC_PREFIX"), TelegramMaster: os.Getenv("RELAY_TELEGRAM_WEBHOOK_SECRET")}
-		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authStore.Authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service, Numbers: siteNumbers, Channels: siteChannels})
+		authenticate := func(ctx context.Context, token string) (auth.Principal, error) {
+			principal, e := authStore.Authenticate(ctx, token)
+			requestlog.Tag(ctx, principal.Site, "")
+			return principal, e
+		}
+		handler, err := hubmcp.NewAuthenticatedChannelsWithOptions(func(c context.Context) error { return check(c, true) }, wa, authenticate, channelRegistry, channelEvents, hubmcp.Options{Signup: signup.service, Numbers: siteNumbers, Channels: siteChannels})
 		if err != nil {
 			return err
 		}
@@ -694,6 +700,7 @@ func run() error {
 				http.NotFound(w, r)
 				return
 			}
+			requestlog.Tag(r.Context(), channelRegistry.Binding("Telegram", account).Site, account)
 			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 			if readErr != nil {
 				http.Error(w, "invalid body", 413)
@@ -714,6 +721,7 @@ func run() error {
 				http.NotFound(w, r)
 				return
 			}
+			requestlog.Tag(r.Context(), channelRegistry.Binding("Email", account).Site, account)
 			raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, relayemail.MaxMessageBytes+2<<20))
 			if readErr != nil {
 				http.Error(w, "invalid body", 413)
@@ -752,7 +760,13 @@ func run() error {
 		defer liveUpdates.Close()
 		mux.Handle("GET /socket.io/", liveUpdates)
 		mux.Handle("GET /", browserAuth.Protect(http.FileServer(http.Dir(ui))))
-		server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
+		requestLogPool, err := requestlog.NewPool(context.Background(), authPool.Config())
+		if err != nil {
+			return err
+		}
+		defer requestLogPool.Close()
+		requestLog := requestlog.NewWriter(requestLogPool)
+		server := &http.Server{Addr: addr, Handler: requestlog.Middleware(requestLog, mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: httpWriteTimeout, IdleTimeout: 60 * time.Second}
 		mailboxPool, err := channels.NewMailboxPool(context.Background(), authPool.Config())
 		if err != nil {
 			return err
@@ -792,6 +806,9 @@ func run() error {
 			}
 		case <-drain.Done():
 			return drain.Err()
+		}
+		if e := requestLog.Close(drain); e != nil {
+			return e
 		}
 		if e := runtimeWorkers.Wait(drain); e != nil {
 			return e
