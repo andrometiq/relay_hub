@@ -58,8 +58,10 @@ validation errors reject explicitly. A durable submission checkpoint distinguish
 safe crash recovery from a request that may have reached Meta.
 
 Claims rotate between accounts, exclude paced accounts, and keep each account's
-recipient queue in ID order. Queued, in-flight and uncertain predecessors block
-that recipient until resolved; other recipients and accounts can proceed.
+recipient queue in ID order. Queued and in-flight predecessors block that
+recipient until they finish. An uncertain predecessor blocks it for 10 minutes,
+so a Meta receipt can confirm it first; it is never sent again. Other recipients
+and accounts can proceed.
 
 ## Callback lanes and recovery
 

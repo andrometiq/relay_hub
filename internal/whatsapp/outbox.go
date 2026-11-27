@@ -376,9 +376,10 @@ func (o *Outbox) send(ctx context.Context) (bool, error) {
  LEFT JOIN relay_outbox_account_claim turn ON turn.account=o.account
  WHERE o.state='queued' AND o.next_attempt<=now() AND (r.next_at IS NULL OR r.next_at<=clock_timestamp()+$1::interval)
  AND (SELECT 1 FROM relay_outbox earlier WHERE earlier.account=o.account
- AND earlier.payload->>'to'=o.payload->>'to' AND earlier.id<o.id AND earlier.state IN ('queued','submitting','uncertain') LIMIT 1) IS NULL
+ AND earlier.payload->>'to'=o.payload->>'to' AND earlier.id<o.id AND earlier.state IN ('queued','submitting','uncertain')
+ AND (earlier.state<>'uncertain' OR earlier.updated_at>now()-$2::interval) LIMIT 1) IS NULL
  ORDER BY coalesce(turn.claimed_at,'epoch'::timestamptz),o.bulk,o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1)
- RETURNING id,account,payload,attempts`, slotAhead.String()).Scan(&id, &account, &raw, &attempts)
+ RETURNING id,account,payload,attempts`, slotAhead.String(), uncertainHold.String()).Scan(&id, &account, &raw, &attempts)
 	var a Account
 	found := false
 	if err == nil {
@@ -516,6 +517,11 @@ func permit(ctx context.Context, c *pgx.Conn, a Account) (bool, error) {
 	}
 	return err == nil, err
 }
+
+// uncertainHold is how long an uncertain send holds later sends to its
+// recipient, so Meta's receipt can confirm it first. Without a receipt it is
+// never resent, so it must not block that recipient for good.
+const uncertainHold = 10 * time.Minute
 
 // slotAhead is how far ahead a worker may reserve an account send slot.
 const slotAhead = 50 * time.Millisecond
